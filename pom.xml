@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Aggregator only: it declares the two modules and nothing else. Reactor order is derived from
+  toolkit's GAV dependency on netex-model, not from the <module> order below.
+
+      mvn -B -ntp verify      # build both modules, then run the script test suite
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>noi.spike</groupId>
+  <artifactId>netex-toolkit-aggregator</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+  <name>netex-toolkit (aggregator)</name>
+
+  <modules>
+    <module>model</module>
+    <module>toolkit</module>
+  </modules>
+
+</project>

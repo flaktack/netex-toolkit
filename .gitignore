@@ -1,0 +1,57 @@
+# ---- build output ----------------------------------------------------------
+target/
+deps/
+*.class
+*.jar
+
+# ---- store and pipeline artifacts (never committable at any size) -----------
+*.lmdb/
+*.mdb
+*.dump
+*.obj
+*.dat
+*.frags
+*.zip
+*.gz
+*.jfr
+*.geojson
+*.osm.pbf
+*.tif
+
+# ---- run detritus ----------------------------------------------------------
+.work/
+*.log
+hs_err_pid*.log
+*.done
+*.part
+*.err
+*.out
+*.status
+*.time
+.idea/
+.vscode/
+.DS_Store
+
+# ---- bulk text -------------------------------------------------------------
+# Default-deny, re-include by path: .tsv and .txt are the formats feed dumps arrive in, and a
+# stray `git add -A` must not commit gigabytes of them.
+*.tsv
+*.txt
+!/toolkit/src/main/resources/toolkit/sets/*.txt
+!/toolkit/src/main/resources/toolkit/sets/*.tsv
+# ModelGate's committed baselines — small, and the gate is vacuous without them.
+!/tools/model/base/*.tsv
+
+# ---- working directories, if they are ever created in place ----------------
+/scratch/
+/data/
+/input/
+/state/
+/report/
+
+# Agent worktrees (harness metadata, never part of the source tree)
+.claude/
+
+# Python bytecode from running the tools/diff/*.py instruments
+__pycache__/
+*.pyc

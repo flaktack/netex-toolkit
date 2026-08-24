@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Console output goes to stdout, not stderr: the drivers' log and the test transcript are read as
+  one stream, and splitting them would tear the transcript in half.
+
+  toolkit.util.Log.toFile() attaches a second, file appender to the root logger at runtime; it is
+  not declared here because its path comes from the log-file command-line option.
+-->
+<configuration>
+  <appender name="console" class="ch.qos.logback.core.ConsoleAppender">
+    <target>System.out</target>
+    <encoder>
+      <pattern>%d{ISO8601} %-5level %msg%n</pattern>
+      <charset>UTF-8</charset>
+    </encoder>
+  </appender>
+
+  <root level="INFO">
+    <appender-ref ref="console"/>
+  </root>
+</configuration>

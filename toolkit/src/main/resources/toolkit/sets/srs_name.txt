@@ -1,0 +1,16 @@
+AbstractCurve
+AbstractGMLType
+AbstractGeometricAggregate
+AbstractGeometricPrimitive
+AbstractGeometry
+AbstractSurface
+Envelope
+LineString
+LocationStructure
+MultiSurface
+Point
+Polygon
+ServiceDelivery
+pos
+posList
+vector

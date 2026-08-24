@@ -1,0 +1,58 @@
+# Build both modules and run the test suites.
+#
+# `mvn verify` is the whole build: netex-model codegen + its JUnit tests, then the toolkit jar,
+# target/deps, netex-toolkit-shaded.jar, and the surefire suite under toolkit/src/test/java.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      # Offline-buildable once dependencies are cached: every dependency is on Maven Central and
+      # the schemas are committed.
+      - name: Build and test
+        run: mvn -B -ntp verify
+
+      # The artefact to download. One file, every dependency inside it:
+      #   java <the six JVM flags> -cp netex-toolkit-shaded.jar conv/SomeDriver.java
+      # ../noi-pipeline consumes this, dropped next to its otp-shaded.jar.
+      #
+      # Its shape is gated at `package` by assert-shaded-jar-is-complete, so a jar that built but
+      # lost a META-INF/services entry fails the build rather than being published.
+      - name: Upload netex-toolkit-shaded.jar
+        uses: actions/upload-artifact@v7
+        with:
+          archive: false
+          if-no-files-found: error
+          path: toolkit/target/netex-toolkit-shaded.jar
+
+      # The split form, for anything that wants the toolkit's own jar on its own. The jar alone is
+      # not runnable: every driver invocation here is
+      #   java -cp "netex-toolkit.jar:deps/*" scripts/SomeDriver.java
+      # and deps/ exists only because copy-dependencies populates it at `package`.
+      - name: Upload netex-toolkit.jar + deps/
+        uses: actions/upload-artifact@v7
+        with:
+          name: netex-toolkit
+          if-no-files-found: error
+          path: |
+            toolkit/target/netex-toolkit.jar
+            toolkit/target/deps/

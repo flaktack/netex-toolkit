@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Version-independent global bindings. -->
+<jxb:bindings version="3.0"
+              xmlns:jxb="https://jakarta.ee/xml/ns/jaxb"
+              xmlns:xjc="http://java.sun.com/xml/ns/jaxb/xjc"
+              xmlns:xs="http://www.w3.org/2001/XMLSchema"
+              xmlns:netex="http://www.netex.org.uk/netex"
+              xmlns:gml="http://www.opengis.net/gml/3.2"
+              xmlns:siri="http://www.siri.org.uk/siri"
+              jxb:extensionBindingPrefixes="xjc">
+
+  <jxb:globalBindings underscoreBinding="asCharInWord">
+    <xjc:javaType name="noi.netex.time.XmlDateTime" xmlType="xs:dateTime"
+                  adapter="noi.netex.xml.XmlDateTimeAdapter"/>
+    <xjc:javaType name="noi.netex.time.XmlTime" xmlType="xs:time"
+                  adapter="noi.netex.xml.XmlTimeAdapter"/>
+    <xjc:javaType name="noi.netex.time.XmlDateTime" xmlType="xs:date"
+                  adapter="noi.netex.xml.XmlDateAdapter"/>
+    <xjc:javaType name="noi.netex.time.XmlDuration" xmlType="xs:duration"
+                  adapter="noi.netex.xml.XmlDurationAdapter"/>
+    <xjc:javaType name="java.lang.String" xmlType="xs:normalizedString"
+                  adapter="noi.netex.xml.VerbatimStringAdapter"/>
+  </jxb:globalBindings>
+
+  <jxb:bindings scd="x-schema::netex">
+    <jxb:schemaBindings>
+      <jxb:package name="noi.netex.model"/>
+    </jxb:schemaBindings>
+  </jxb:bindings>
+
+  <jxb:bindings scd="x-schema::gml">
+    <jxb:schemaBindings>
+      <jxb:package name="noi.netex.gml"/>
+    </jxb:schemaBindings>
+  </jxb:bindings>
+
+  <jxb:bindings scd="x-schema::siri">
+    <jxb:schemaBindings>
+      <jxb:package name="noi.netex.siri"/>
+    </jxb:schemaBindings>
+  </jxb:bindings>
+
+</jxb:bindings>

@@ -1,0 +1,17 @@
+CommonFrame
+CompositeFrame
+DriverScheduleFrame
+FareFrame
+FarePriceFrame
+GeneralFrame
+InfrastructureFrame
+MobilityJourneyFrame
+MobilityServiceFrame
+ResourceFrame
+SalesTransactionFrame
+ServiceCalendarFrame
+ServiceFrame
+SiteFrame
+TimetableFrame
+VehicleScheduleFrame
+VersionFrame
