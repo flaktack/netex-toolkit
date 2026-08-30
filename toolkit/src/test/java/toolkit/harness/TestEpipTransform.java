@@ -4,13 +4,15 @@ package toolkit.harness;
 // transform runs through the REAL phase composition (InPlace.runInPlace x5, resolve=false
 // everywhere), and the reopened database is asserted phase by phase:
 //
-//   A1 de-embed ......... the ServiceCalendar-embedded DayType/UicOperatingPeriod/
+//   A de-embed .......... the ServiceCalendar-embedded DayType/UicOperatingPeriod/
 //                         DayTypeAssignment appear as first-class rows. This arm alone cannot fail
-//                         if A1 is skipped, because the loader already materializes embedded
+//                         if A is skipped, because the loader already materializes embedded
 //                         children as rows; the REAL gate is
 //                         testDeembedGatedByEmbeddedOnlyCalendar;
-//   A2 PSA backfill ..... psaA2 (QuayRef only) gains its quay's parent StopPlaceRef;
-//   B sanitize .......... the coordinate-less placeholder quay qA0 is stripped from spA;
+//   NOT done here ....... psaA3 (QuayRef only) keeps NO StopPlaceRef and the coordinate-less
+//                         placeholder quay qA0 stays in spA. Both repairs left for noi-pipeline's
+//                         per-feed sanitize-stop-assignments step; asserted negatively below so
+//                         that re-adding them here fails loudly rather than silently;
 //   B calendar .......... the regrouped calendar objects survive under their ids;
 //   B interchange ....... the JourneyMeeting becomes a stay-seated ServiceJourneyInterchange
 //                         (to-side falls back to AtStopPointRef: sj2 has no pattern yet);
@@ -31,7 +33,7 @@ package toolkit.harness;
 //                         the G1-G6 guard armed over the whole run. The unit behaviour and both
 //                         negative tests of the guard are TestEpipLevelRefs.
 //
-// Each method builds a fresh CLOSED db file (buildDbFile — or, for the A1 gate, a direct store-API
+// Each method builds a fresh CLOSED db file (buildDbFile — or, for the A gate, a direct store-API
 // insert that bypasses the loader) and runs the exact production path EpipToDb.inPlace on it.
 
 import jakarta.xml.bind.JAXBElement;
@@ -79,7 +81,18 @@ public class TestEpipTransform {
     // plain WGS84), two lines (line1 carries the branding/operator/authority trio, line2 an
     // operator only), a pattern journey (sj1, with an embedded AvailabilityCondition) and a
     // calls journey (sj2), a JourneyMeeting coupling them at station spA, a Trenitalia-style
-    // ServiceCalendar with embedded children, and PSAs of which psaA2 lacks its StopPlaceRef.
+    // ServiceCalendar with embedded children, and four PassengerStopAssignments.
+    //
+    // The assignments are a corpus that has ALREADY been through noi-pipeline's per-feed
+    // sanitize-stop-assignments step, which is this transform's documented precondition: every one
+    // that resolves to a station carries its StopPlaceRef explicitly. That matters for psaA2 in
+    // particular — the phase-C interchange repair maps ssp -> station through
+    // EpipInterchange.epipRepairInterchangePoints' sspToStop index, which is built ONLY from
+    // assignments carrying a StopPlaceRef, so a quay-only psaA2 would put sspA2 in no station and
+    // the to-point remap below could not find it. psaA3 is the deliberate exception, quay-only and
+    // referenced by nothing else, so the "this transform backfills nothing" assertion has a
+    // subject.
+    //
     // spA deliberately has NO centroid: the location inference must fall back to quay qA1's
     // projected-CRS location for sspA (the PSA's StopPlaceRef arm finds no mapping entry).
     static final String NETEX = """
@@ -122,6 +135,7 @@ public class TestEpipTransform {
           <scheduledStopPoints>
             <ScheduledStopPoint id="sspA" version="1"><Name>Alpha</Name></ScheduledStopPoint>
             <ScheduledStopPoint id="sspA2" version="1"><Name>Alpha 2</Name></ScheduledStopPoint>
+            <ScheduledStopPoint id="sspA3" version="1"><Name>Alpha 3</Name></ScheduledStopPoint>
             <ScheduledStopPoint id="sspB" version="1"><Name>Beta</Name><Location><Latitude>46.50010</Latitude><Longitude>11.30010</Longitude></Location></ScheduledStopPoint>
           </scheduledStopPoints>
           <journeyPatterns>
@@ -135,8 +149,9 @@ public class TestEpipTransform {
           </journeyPatterns>
           <stopAssignments>
             <PassengerStopAssignment id="psaA" version="1" order="1"><ScheduledStopPointRef ref="sspA"/><StopPlaceRef ref="spA"/><QuayRef ref="qA1"/></PassengerStopAssignment>
-            <PassengerStopAssignment id="psaA2" version="1" order="2"><ScheduledStopPointRef ref="sspA2"/><QuayRef ref="qA1"/></PassengerStopAssignment>
-            <PassengerStopAssignment id="psaB" version="1" order="3"><ScheduledStopPointRef ref="sspB"/><StopPlaceRef ref="spB"/><QuayRef ref="qB1"/></PassengerStopAssignment>
+            <PassengerStopAssignment id="psaA2" version="1" order="2"><ScheduledStopPointRef ref="sspA2"/><StopPlaceRef ref="spA"/><QuayRef ref="qA1"/></PassengerStopAssignment>
+            <PassengerStopAssignment id="psaA3" version="1" order="3"><ScheduledStopPointRef ref="sspA3"/><QuayRef ref="qA1"/></PassengerStopAssignment>
+            <PassengerStopAssignment id="psaB" version="1" order="4"><ScheduledStopPointRef ref="sspB"/><StopPlaceRef ref="spB"/><QuayRef ref="qB1"/></PassengerStopAssignment>
           </stopAssignments>
         </ServiceFrame>
         <ServiceCalendarFrame id="scf" version="1">
@@ -201,12 +216,21 @@ public class TestEpipTransform {
         return out;
     }
 
+    /// The embedded Quay of that id, or null. By id, not by position: the placeholder quay is no
+    /// longer stripped, so the list order is the source's.
+    private static Quay quayById(List<JAXBElement<?>> quays, String id) {
+        for (JAXBElement<?> el : quays) {
+            if (el.getValue() instanceof Quay q && id.equals(q.getId())) return q;
+        }
+        return null;
+    }
+
     // ----------------------------------------------------- phase A + the calendar/daytype path
 
     @Test
     void testPrepareAndCalendarPhases(TestStore ts) throws Exception {
         try (Store db = transformed(ts, "epip-a.lmdb"); Txn txn = db.roTxn()) {
-            // A1: the ServiceCalendar's embedded children are now FIRST-CLASS rows.
+            // A: the ServiceCalendar's embedded children are now FIRST-CLASS rows.
             Map<String, DayType> dayTypes = byId(db, txn, DayType.class);
             Map<String, UicOperatingPeriod> uops = byId(db, txn, UicOperatingPeriod.class);
             Map<String, DayTypeAssignment> dtas = byId(db, txn, DayTypeAssignment.class);
@@ -214,16 +238,16 @@ public class TestEpipTransform {
             Check.that(uops.containsKey("uop1"), "calendar-embedded UicOperatingPeriod de-embedded to a row");
             Check.that(dtas.containsKey("dta1"), "calendar-embedded DayTypeAssignment de-embedded to a row");
 
-            // A2: psaA2 had only a QuayRef — the quay's parent StopPlaceRef is backfilled.
+            // psaA3 has only a QuayRef and KEEPS only a QuayRef: the StopPlaceRef backfill is
+            // noi-pipeline's per-feed sanitize-stop-assignments step, not a phase here. Asserted
+            // negatively so that re-adding it to this transform fails rather than passing quietly.
             Map<String, PassengerStopAssignment> psas = byId(db, txn, PassengerStopAssignment.class);
-            PassengerStopAssignment psaA2 = psas.get("psaA2");
-            Check.that(psaA2.getStopPlaceRef() != null, "psaA2 StopPlaceRef backfilled");
-            Check.equals("spA", psaA2.getStopPlaceRef().getValue().getRef(),
-                    "psaA2 backfilled from quay qA1's parent StopPlace");
-            // A2 SKIPS a PSA whose stop-place union is already populated, so psaA is never
-            // re-inserted and its stored fragment is the source-faithful original.
+            PassengerStopAssignment psaA3 = psas.get("psaA3");
+            Check.isNull(psaA3.getStopPlaceRef(), "psaA3 StopPlaceRef NOT backfilled by this transform");
+            Check.equals("qA1", psaA3.getQuayRef().getValue().getRef(), "psaA3's QuayRef intact");
+            // Every PSA's stored fragment is the source-faithful original — none is re-inserted.
             Check.equals("spA", psas.get("psaA").getStopPlaceRef().getValue().getRef(),
-                    "psaA keeps its explicit StopPlaceRef (A2 skipped it — never re-inserted)");
+                    "psaA keeps its explicit StopPlaceRef");
             Check.equals("qA1", psas.get("psaA").getQuayRef().getValue().getRef(),
                     "psaA's QuayRef intact (the untouched stored fragment)");
 
@@ -256,13 +280,13 @@ public class TestEpipTransform {
         }
     }
 
-    /// The A1 de-embed gate PROPER: calendar children that exist ONLY embedded. The XML loader
+    /// The A de-embed gate PROPER: calendar children that exist ONLY embedded. The XML loader
     /// already materializes ServiceCalendar-embedded children as first-class rows, so the
-    /// NeTEx-built arm above cannot fail when A1 is skipped. Here the ServiceCalendar bean is
+    /// NeTEx-built arm above cannot fail when A is skipped. Here the ServiceCalendar bean is
     /// inserted DIRECTLY through the store API, so dtE/uopE/dtaE live ONLY inside the calendar's
     /// embedded lists. dtaE's DayTypeRef deliberately dangles (ref="nope"), so the phase-B calendar
     /// generator SKIPS its group and never re-yields any of the three: the ONLY producer of the
-    /// asserted rows is phase A1.
+    /// asserted rows is phase A.
     @Test
     void testDeembedGatedByEmbeddedOnlyCalendar(TestStore ts) throws Exception {
         ObjectFactory factory = new ObjectFactory();
@@ -304,11 +328,11 @@ public class TestEpipTransform {
 
         try (Store after = Stores.open(db, true); Txn txn = after.roTxn()) {
             Check.that(byId(after, txn, DayType.class).containsKey("dtE"),
-                    "A1 de-embedded the calendar's DayType to a first-class row");
+                    "A de-embedded the calendar's DayType to a first-class row");
             Check.that(byId(after, txn, UicOperatingPeriod.class).containsKey("uopE"),
-                    "A1 de-embedded the calendar's UicOperatingPeriod to a first-class row");
+                    "A de-embedded the calendar's UicOperatingPeriod to a first-class row");
             Check.that(byId(after, txn, DayTypeAssignment.class).containsKey("dtaE"),
-                    "A1 de-embedded the calendar's DayTypeAssignment to a first-class row");
+                    "A de-embedded the calendar's DayTypeAssignment to a first-class row");
         }
     }
 
@@ -317,12 +341,14 @@ public class TestEpipTransform {
     @Test
     void testSitesLinesLocationsAndEnsemble(TestStore ts) throws Exception {
         try (Store db = transformed(ts, "epip-b.lmdb"); Txn txn = db.roTxn()) {
-            // B sanitize: the coordinate-less placeholder qA0 is stripped; qA1 survives.
+            // The coordinate-less placeholder qA0 is NOT stripped: that is noi-pipeline's per-feed
+            // sanitize-stop-assignments step, run before this transform ever sees a corpus.
+            // Asserted negatively so that re-adding the strip here fails rather than passing.
             Map<String, StopPlace> stops = byId(db, txn, StopPlace.class);
             List<JAXBElement<?>> quays = stops.get("spA").getQuays().getQuayRefOrQuay();
-            Check.equals(1, quays.size(), "placeholder quay stripped from spA");
-            Quay qA1 = (Quay) quays.get(0).getValue();
-            Check.equals("qA1", qA1.getId(), "the located platform survives");
+            Check.equals(2, quays.size(), "spA keeps both quays — this transform strips none");
+            Quay qA1 = quayById(quays, "qA1");
+            Check.that(quayById(quays, "qA0") != null, "the placeholder quay is still there");
 
             // C ensemble (quayNameOp): the nameless platform inherits the stop's name.
             Check.equals("Alpha", Mls.text(qA1.getName()), "quay name backfilled from the StopPlace");
@@ -371,7 +397,7 @@ public class TestEpipTransform {
             Check.that(pos.get(0) > 47.0 && pos.get(0) < 48.5,
                     "sspA latitude in the UTM33/5300000 band, got " + pos.get(0));
             // ... and sspA2 the same way: psaA2's QuayRef also resolves to qA1, and its
-            // A2-backfilled StopPlaceRef (spA) finds NO mapping entry — spA has no centroid —
+            // StopPlaceRef (spA) finds NO mapping entry — spA has no centroid —
             // so the last-wins StopPlaceRef arm does not overwrite the quay hit.
             LocationStructure a2Loc = ssps.get("sspA2").getLocation();
             Check.that(a2Loc != null, "sspA2 location inferred from its quay");

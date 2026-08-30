@@ -5,16 +5,12 @@ package toolkit.harness;
 // split and fused paths produce identical output by construction.
 //
 // Phases, one runInPlace (= one transaction) each:
-//   A1. de-embed the ServiceCalendar children — every id-carrying registrable entity embedded in
+//   A.  de-embed the ServiceCalendar children — every id-carrying registrable entity embedded in
 //       a ServiceCalendar is re-inserted as a first-class row; the calendar keeps its copy.
-//   A2. PassengerStopAssignment StopPlaceRef backfill. A PSA whose stop-place union is already
-//       populated is skipped entirely, so it keeps its source-faithful stored fragment.
-//   B.  the six EPIP generators IN ORDER: sanitize, calendar, interchange, lines, locations,
-//       journeys. Calendar and interchange must see the PRE-transform corpus — the interchange
-//       resolves JourneyMeeting points against the journeys' original patterns, and the calendar
-//       regroups only the feeds' own calendar objects, never the journey transform's generated
-//       DayTypes. Sanitize is first so every later stage sees repaired quays and no dangling
-//       assignment quay refs.
+//   B.  the five EPIP generators IN ORDER: calendar, interchange, lines, locations, journeys.
+//       Calendar and interchange must see the PRE-transform corpus — the interchange resolves
+//       JourneyMeeting points against the journeys' original patterns, and the calendar regroups
+//       only the feeds' own calendar objects, never the journey transform's generated DayTypes.
 //   C.  repair interchange points against the patterns consumers will see, then one streaming
 //       ensemble pass fusing reprojection, the ServiceJourneyPattern direction inference (its
 //       synthesized Directions drain AFTER the pass) and the profile backfills.
@@ -23,43 +19,55 @@ package toolkit.harness;
 //       LevelRef to resolve in the same document; LevelRef is minOccurs="0", so absence is
 //       conformant.
 //
-// No resolve() or resolveEmbeddings() anywhere, deliberately: every runInPlace passes
-// resolve=false. The export does not require the re-inserted rows' forward edges to be re-wired.
+// REPAIRED QUAYS ARE A PRECONDITION, not something this does. A phase A2 here used to backfill a
+// quay-only PassengerStopAssignment's StopPlaceRef, and generator #1 used to strip the
+// coordinate-less placeholder quays and clear the assignment quay refs the strip left dangling.
+// Both were input repairs rather than profile conversion, and both are noi-pipeline's per-feed
+// `sanitize-stop-assignments` step now (transformers.feedfix.StopAssignments), run on each feed db
+// before it reaches this stage. EpipLocations reads assignments expecting them repaired, and C2 is
+// a conformance pass over the sites the strip leaves behind.
+//
+//   E.  resolve() + resolveEmbeddings(), ONCE, over the finished store.
+//
+// Phase E is new, and it replaces the opposite rule: every runInPlace used to pass resolve=false, on
+// the reasoning that "the export does not require the re-inserted rows' forward edges to be re-wired".
+// That is true of the EXPORT and false of everything else downstream. The conversion gives every
+// TimetabledPassingTime a PointInJourneyPatternRef naming a StopPointInJourneyPattern EMBEDDED in its
+// pattern; an embedded child owns no row, so the id index cannot answer it and each one became an
+// unresolved row. At ~20 per journey the national store reached XbDbToDb with 83,894,176 of them and
+// that stage could not afford resolveEmbeddings at all. resolve() alone cannot clear them — it probes
+// the id index — so the pass has to be resolveEmbeddings, and it belongs here, where the store is
+// complete and the heap is the one this stage already asked for. inPlace then checks that the count
+// did not grow across its own run.
 //
 // A non-empty target is refused, and --format must equal the source's sniffed format: the clone
 // is a raw byte copy, so a cross-format clone would corrupt the target.
 
-import jakarta.xml.bind.JAXBElement;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import noi.netex.model.EntityStructure;
-import noi.netex.model.ObjectFactory;
-import noi.netex.model.PassengerStopAssignment;
-import noi.netex.model.QuayRefStructure;
 import noi.netex.model.ServiceCalendar;
 import noi.netex.model.ServiceJourney;
 import noi.netex.model.ServiceJourneyPattern;
+import noi.netex.model.ServiceLink;
 import noi.netex.model.StopPlace;
-import noi.netex.model.StopPlaceRefStructure;
-import noi.netex.model.TaxiStandRefStructure;
 import noi.netex.model.VehicleType;
 import toolkit.geo.Projection;
 import toolkit.model.GeoClasses;
 import toolkit.model.ModelRegistry;
-import toolkit.model.NetexUtils;
 import toolkit.model.RecursiveAttributes;
 import toolkit.store.Store;
 import toolkit.store.Stores;
 import toolkit.store.Txn;
 import toolkit.transform.epip.Backfills;
 import toolkit.transform.epip.Direction;
+import toolkit.transform.feedfix.AxisOrder;
 import toolkit.transform.epip.EpipCalendar;
 import toolkit.transform.epip.EpipInterchange;
 import toolkit.transform.epip.EpipJourneys;
@@ -69,10 +77,9 @@ import toolkit.transform.epip.EpipSanitize;
 import toolkit.transform.epip.GeneratorDefaults;
 import toolkit.transform.feedfix.DayOffsetRewrite;
 import toolkit.util.Log;
+import toolkit.util.Strictness;
 
 public final class EpipToDb {
-
-    private static final ObjectFactory FACTORY = new ObjectFactory();
 
     private EpipToDb() {}
 
@@ -99,12 +106,11 @@ public final class EpipToDb {
     /// database that already holds the full corpus; every phase reads and overwrites it.
     public static void inPlace(Path database, GeneratorDefaults generatorDefaults)
             throws Exception {
-        // Phase A — prepare the source: two write transactions, in order.
+        long unresolvedBefore = countUnresolved(database);
+        // Phase A — prepare the source.
         InPlace.runInPlace(EpipToDb::deembedServiceCalendarChildren,
                 database, "epip-deembed-calendars", /*resolve=*/false);
-        InPlace.runInPlace(EpipToDb::backfillPsaStopPlaceRefs,
-                database, "epip-psa-backfill", /*resolve=*/false);
-        // Phase B — the six generators, ONE write transaction.
+        // Phase B — the five generators, ONE write transaction.
         InPlace.runInPlace((db, txn) -> runGenerators(db, txn, generatorDefaults),
                 database, "epip-generators", /*resolve=*/false);
         // Phase C — interchange repair + the ensemble, ONE write transaction.
@@ -128,9 +134,43 @@ public final class EpipToDb {
             InPlace.runInPlace(DayOffsetRewrite::apply,
                     database, "epip-day-offset-rewrite", /*resolve=*/false);
         }
+        // Phase E — wire what this stage's own generators left dangling, so the store handed on is
+        // coherent. No fix function: the pair is the phase, and it runs outside a transaction of its
+        // own making (resolveEmbeddings opens and commits one, so it cannot run inside another).
+        //
+        // This is the phase the header used to say did not exist, and the reasoning it replaces was
+        // "the export does not require the re-inserted rows' forward edges to be re-wired". True,
+        // and beside the point: the conversion gives every TimetabledPassingTime a
+        // PointInJourneyPatternRef naming a StopPointInJourneyPattern EMBEDDED in its pattern, which
+        // the id index cannot answer, so ~20 unresolved rows per journey were being handed to every
+        // later stage. XbDbToDb inherited 83,894,176 of them and could not afford the pass at all.
+        // resolve() cannot clear them either — it probes the id index, and an embedded child has no
+        // row there — so this has to be resolveEmbeddings, and it has to be here, where the store is
+        // complete and the heap is the one the EPIP stage already asked for.
+        InPlace.resolveOnly(database, "epip-resolve");
+
+        long unresolvedAfter = countUnresolved(database);
+        Log.info("[epip] unresolved rows %,d -> %,d over the whole transform", unresolvedBefore,
+                unresolvedAfter);
+        // The claim this stage now makes, checked rather than asserted. It is deliberately "did not
+        // GROW" and not "is zero": a corpus references ids outside its own export, and those rows
+        // arrive with the feeds and are nobody's defect to fix here.
+        Strictness.require(Strictness.UNRESOLVED_REFS, "unresolvedRefs",
+                Math.max(0, unresolvedAfter - unresolvedBefore), "epip",
+                "unresolved references were ADDED by the EPIP transform and not wired by phase E");
     }
 
-    // ------------------------------------------------------------- phase A1: de-embed calendars
+    /// Live unresolved rows, streamed. `scanUnresolved` is the O(1)-heap reader — one block
+    /// resident — so this costs a pass over `_edge_blocks` and no allocation proportional to it.
+    private static long countUnresolved(Path database) throws Exception {
+        long n = 0;
+        try (Store db = Stores.open(database, true); Txn txn = db.roTxn()) {
+            for (toolkit.store.UnresolvedRow ignored : db.scanUnresolved(txn)) n++;
+        }
+        return n;
+    }
+
+    // -------------------------------------------------------------- phase A: de-embed calendars
 
     /// Every id-carrying registrable entity embedded in a ServiceCalendar is re-inserted
     /// first-class. Lazy: the calendar cursor and each calendar's embedded-entity walk advance
@@ -160,74 +200,10 @@ public final class EpipToDb {
         db.insertAnyObjects(txn, embedded);
     }
 
-    // ------------------------------------------------------------- phase A2: PSA StopPlaceRef
-
-    /// Map every entity embedded in a StopPlace (in practice its Quays) to a ref of that StopPlace,
-    /// then re-emit only the PSAs whose stop-place union is EMPTY, so a PSA already carrying a
-    /// TaxiRankRef/StopPlaceRef/StopPlace keeps its stored fragment untouched. A yielded PSA whose
-    /// quay union holds a plain QuayRef (not a TaxiStandRef) gains its quay's parent StopPlaceRef;
-    /// the rest are re-inserted unchanged.
-    public static void backfillPsaStopPlaceRefs(Store db, Txn txn) {
-        Iterator<Object> psas = new Iterator<>() {
-            Map<String, StopPlaceRefStructure> quaySp;
-            Iterator<Object> source;
-            PassengerStopAssignment pending;
-
-            private void init() {
-                // embedded quay id -> its StopPlace's ref; drained fully before the PSA cursor
-                // opens (one live cursor at a time).
-                quaySp = new HashMap<>();
-                for (Object o : db.iterOnlyObjects(txn, StopPlace.class)) {
-                    StopPlace sp = (StopPlace) o;
-                    // One ref per StopPlace: it is re-marshalled per referencing PSA on insert.
-                    StopPlaceRefStructure ref = NetexUtils.getRef(sp, StopPlaceRefStructure.class);
-                    for (EntityStructure emb : RecursiveAttributes.embeddedEntities(
-                            sp, c -> ModelRegistry.isRegistered(c.getSimpleName()))) {
-                        quaySp.put(emb.getId(), ref);
-                    }
-                }
-                source = db.iterOnlyObjects(txn, PassengerStopAssignment.class).iterator();
-            }
-
-            @Override
-            public boolean hasNext() {
-                if (source == null) init();
-                while (pending == null && source.hasNext()) {
-                    PassengerStopAssignment psa = (PassengerStopAssignment) source.next();
-                    // Already carries a rank/stop-place ref or an embedded StopPlace -> NOT
-                    // re-inserted. The binding splits the union into stopPlaceRef + stopPlace, and
-                    // a TaxiRankRef arrives through the same stopPlaceRef slot
-                    // (TaxiRankRefStructure extends StopPlaceRefStructure), so these two getters
-                    // cover all three union arms.
-                    if (psa.getStopPlaceRef() != null || psa.getStopPlace() != null) continue;
-                    JAXBElement<? extends QuayRefStructure> quayEl = psa.getQuayRef();
-                    if (quayEl != null && !(quayEl.getValue() instanceof TaxiStandRefStructure)) {
-                        StopPlaceRefStructure spRef = quaySp.get(quayEl.getValue().getRef());
-                        if (spRef != null) {
-                            psa.setStopPlaceRef(FACTORY.createStopPlaceRef(spRef));
-                        }
-                    }
-                    pending = psa; // emitted changed or not; the stop-place-less ones only
-                }
-                return pending != null;
-            }
-
-            @Override
-            public Object next() {
-                if (!hasNext()) throw new NoSuchElementException();
-                PassengerStopAssignment psa = pending;
-                pending = null;
-                return psa;
-            }
-        };
-        db.insertAnyObjects(txn, psas);
-    }
-
     // ---------------------------------------------------------------- phase B: the generators
 
-    /// The six EPIP generators, in order, each piped to insertAnyObjects.
+    /// The five EPIP generators, in order, each piped to insertAnyObjects.
     public static void runGenerators(Store db, Txn txn, GeneratorDefaults gd) {
-        db.insertAnyObjects(txn, EpipSanitize.epipSanitizeStopAssignments(db, txn, gd));
         db.insertAnyObjects(txn, EpipCalendar.epipServiceCalendar(db, txn, gd));
         db.insertAnyObjects(txn, EpipInterchange.epipServiceJourneyInterchange(db, txn, gd));
         db.insertAnyObjects(txn, EpipLines.epipLineGenerator(db, txn, gd));
@@ -264,6 +240,10 @@ public final class EpipToDb {
                 ops.computeIfAbsent(geoClazz, k -> new ArrayList<>()).add(reprojection);
             }
         }
+        // AHEAD of the reprojection on the same class: a link that does take a real transform must
+        // be in the authority's own axis convention before Projection swaps it symmetrically.
+        ops.computeIfAbsent(ServiceLink.class, k -> new ArrayList<>())
+                .add(0, AxisOrder.axisOrderOp(db, txn));
         Direction.InferDirections directions = Direction.inferDirectionsOp(gd);
         ops.computeIfAbsent(ServiceJourneyPattern.class, k -> new ArrayList<>()).add(directions.op());
         ops.computeIfAbsent(ServiceJourney.class, k -> new ArrayList<>())
@@ -277,5 +257,6 @@ public final class EpipToDb {
         // Projection is an Ensemble.Operation body and owns no pass, so this is the only place that
         // knows the reprojection is finished.
         Projection.reportDropped("epip-db-to-db");
+        AxisOrder.reportSwapped("epip-db-to-db");
     }
 }

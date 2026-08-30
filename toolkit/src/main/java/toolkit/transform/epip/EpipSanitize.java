@@ -1,31 +1,20 @@
 package toolkit.transform.epip;
 
-// Sanitizes stop assignments for the EPIP export.
+// Sanitizes the sites an EPIP export emits: the orphaned-LevelRef strip, and nothing else.
 //
-// Binding decisions (choice groups):
-//  - a StopPlace's quays are a mixed list of embedded quays and refs; the ref entries keep their
-//    JAXBElement wrappers so the element names survive re-marshalling;
-//  - an assignment's quay union splits into a ref half and an embedded half. A taxi-stand ref
-//    EXTENDS the quay ref, so "is a real quay ref" is: present AND not a taxi-stand ref. Clearing
-//    the union nulls BOTH halves;
-//  - a quay is LOCATED by latitude/longitude, else by a gml:pos fallback.
+// The coordinate-less placeholder-quay strip and the stop-assignment quay-ref clear that follows
+// from it run per feed, on each feed db before this stage sees it. EpipLocations and the LevelRef
+// strip below both assume they have run.
 
-import jakarta.xml.bind.JAXBElement;
 import noi.netex.model.Level;
 import noi.netex.model.LevelInStructure_VersionStructure;
 import noi.netex.model.LevelRefStructure;
 import noi.netex.model.Levels_RelStructure;
-import noi.netex.model.LocationStructure;
-import noi.netex.model.PassengerStopAssignment;
-import noi.netex.model.Quay;
-import noi.netex.model.QuayRefStructure;
-import noi.netex.model.SimplePoint_VersionStructure;
 import noi.netex.model.SiteComponent_VersionStructure;
 import noi.netex.model.SitePathLink_VersionStructure;
 import noi.netex.model.SiteStructure_VersionStructure;
 import noi.netex.model.Site_VersionStructure;
 import noi.netex.model.StopPlace;
-import noi.netex.model.TaxiStandRefStructure;
 import noi.netex.sites.PathLinkEnds;
 import toolkit.codec.FragmentCodec;
 import toolkit.model.RecursiveAttributes;
@@ -50,166 +39,24 @@ public final class EpipSanitize {
 
     private EpipSanitize() {}
 
-    /// Repair the site and assignment defects that make consumers drop whole journeys:
-    ///
-    /// 1. an embedded Quay WITHOUT a coordinate is stripped from its StopPlace — such quays are
-    ///    whole-stop placeholders, never locatable platforms;
-    /// 2. an assignment whose quay ref no StopPlace embeds — after the strip — loses that ref and
-    ///    becomes station-level. This converts placeholder-quay assignments and genuinely dangling
-    ///    refs alike.
-    ///
-    /// Yield order: the changed StopPlaces in class-map order, then the cleared assignments, then
-    /// the summary line. The assignment cursor opens only after the StopPlace cursor is drained —
-    /// one live cursor at a time.
-    public static Iterator<Object> epipSanitizeStopAssignments(
-            Store dbRead, Txn txn, GeneratorDefaults generatorDefaults) {
-        return new Iterator<>() {
-            final Set<String> embedded = new HashSet<>();
-            long stripped = 0;
-            long parentRefsCleared = 0;
-            long stops = 0;
-            long cleared = 0;
-            Iterator<Object> stopPlaces;
-            Iterator<Object> psas;
-            Object ready;
-            boolean logged;
-
-            private void pump() {
-                if (stopPlaces == null) {
-                    stopPlaces = dbRead.iterOnlyObjects(txn, StopPlace.class).iterator();
-                }
-                while (ready == null && stopPlaces.hasNext()) {
-                    StopPlace sp = (StopPlace) stopPlaces.next();
-                    List<JAXBElement<?>> quays = sp.getQuays() != null
-                            ? sp.getQuays().getQuayRefOrQuay() : List.of();
-
-                    List<JAXBElement<?>> real = new ArrayList<>();
-                    Set<String> removedHere = new HashSet<>();
-                    for (JAXBElement<?> el : quays) {
-                        if (located(el)) real.add(el);
-                        else removedHere.add(((Quay) el.getValue()).getId());
-                    }
-                    boolean changed = real.size() != quays.size();
-                    for (JAXBElement<?> el : real) {
-                        if (!(el.getValue() instanceof Quay q)) continue;   // keep refs untouched
-                        embedded.add(q.getId());
-                        // A surviving quay whose parent quay was just stripped reparents to the
-                        // StopPlace implicitly.
-                        QuayRefStructure pr = q.getParentQuayRef();
-                        if (pr != null && removedHere.contains(pr.getRef())) {
-                            q.setParentQuayRef(null);
-                            parentRefsCleared++;
-                            changed = true;
-                        }
-                    }
-                    if (changed) {
-                        stripped += quays.size() - real.size();
-                        // Getter-only list: clear and refill.
-                        List<JAXBElement<?>> live = sp.getQuays().getQuayRefOrQuay();
-                        live.clear();
-                        live.addAll(real);
-                        stops++;
-                        ready = sp;
-                    }
-                }
-                if (ready == null) {
-                    if (psas == null) {
-                        psas = dbRead.iterOnlyObjects(txn, PassengerStopAssignment.class).iterator();
-                    }
-                    while (ready == null && psas.hasNext()) {
-                        PassengerStopAssignment psa = (PassengerStopAssignment) psas.next();
-                        // The ref half of the split union, minus the taxi-stand substitute.
-                        JAXBElement<? extends QuayRefStructure> qrEl = psa.getQuayRef();
-                        QuayRefStructure quayRef = qrEl == null ? null : qrEl.getValue();
-                        if (quayRef != null && !(quayRef instanceof TaxiStandRefStructure)
-                                && !embedded.contains(quayRef.getRef())) {
-                            psa.setQuayRef(null);   // whole-union clear
-                            psa.setQuay(null);
-                            cleared++;
-                            ready = psa;
-                        }
-                    }
-                }
-                if (ready == null && !logged) {
-                    logged = true;
-                    Log.info("[epip] sanitize_stop_assignments: stripped %d "
-                            + "coordinate-less placeholder quays from %d StopPlaces "
-                            + "(%d ParentQuayRefs reparented to the stop), "
-                            + "cleared %d placeholder/dangling PSA quay refs",
-                            stripped, stops, parentRefsCleared, cleared);
-                }
-            }
-
-            @Override
-            public boolean hasNext() {
-                pump();
-                return ready != null;
-            }
-
-            @Override
-            public Object next() {
-                if (!hasNext()) throw new NoSuchElementException();
-                Object out = ready;
-                ready = null;
-                return out;
-            }
-        };
-    }
-
-    /// Ref entries are kept untouched; a Quay is located iff a coordinate can be read, INCLUDING
-    /// the gml:pos fallback.
-    private static boolean located(JAXBElement<?> el) {
-        if (!(el.getValue() instanceof Quay q)) return true;
-        return quayCoord(q) != null;
-    }
-
-    /// The coordinate read, applied to a Quay; [ScheduledStopPoints#stopplaceCoord] is the
-    /// StopPlace-typed twin.
-    private static double[] quayCoord(Quay q) {
-        SimplePoint_VersionStructure c = q.getCentroid();
-        LocationStructure loc = c != null ? c.getLocation() : null;
-        if (loc == null) return null;
-        if (loc.getLatitude() != null && loc.getLongitude() != null) {
-            return new double[] {loc.getLatitude().doubleValue(), loc.getLongitude().doubleValue()};
-        }
-        if (loc.getPos() != null && loc.getPos().getValue() != null && loc.getPos().getValue().size() >= 2) {
-            return new double[] {loc.getPos().getValue().get(0), loc.getPos().getValue().get(1)};
-        }
-        return null;
-    }
-
-    // ==================================================================================
-    // ORPHANED LevelRefs — cleared, deliberately. See below for why the absence is conformant.
+    // Orphaned LevelRefs, cleared. PROV-CAP: strip-orphan-levelrefs
     //
-    // PROV-CAP: strip-orphan-levelrefs
-    // ==================================================================================
+    // `Level` and `LevelRef` are both optional in EPIP, but the profile declares `Level_KeyRef`
+    // with selector `.//netex:LevelRef` and requires an internal reference to resolve in the same
+    // document. So a LevelRef whose Level is not in the document is a profile violation, while its
+    // absence is conformant. No consumer reads a LevelRef; they read a site's levels instead.
     //
-    // `Level` and `LevelRef` are both OPTIONAL in EPIP, but the profile declares `Level_KeyRef`
-    // with selector `.//netex:LevelRef` and requires an internal reference to resolve IN THE SAME
-    // DOCUMENT. So a LevelRef whose Level is not in the document is a profile violation, while its
-    // ABSENCE is conformant. This pass removes the ones that refer to nothing, and nothing is
-    // lost by doing so: no consumer reads a LevelRef, they read a site's levels instead.
-    //
-    // THREE SHAPES, not one:
-    //   (a) the `levelRef` field on an embedded site component — Quay AND Entrance AND AccessSpace
-    //       and every other subclass, which is the trap: a Quay-only traversal misses references
-    //       on sibling subclasses inside the very fragments it walks;
+    // The refs come in three shapes:
+    //   (a) the `levelRef` field on an embedded site component — Quay, Entrance, AccessSpace and
+    //       every other subclass;
     //   (b) containment-by-reference — a `<LevelRef>` sitting directly in a site's `<levels>`,
     //       which binds as a list of Level OR ref, so this shape is a member of the same list the
     //       definitions live in;
-    //   (c) `<LevelInStructure>`, whose content group carries a MANDATORY `<LevelRef>`, two hops
-    //       from a site. Because the ref is mandatory, the repair is to REMOVE THE WHOLE element
+    //   (c) `<LevelInStructure>`, whose content group carries a mandatory `<LevelRef>`, two hops
+    //       from a site. Because the ref is mandatory, the repair is to remove the whole element
     //       rather than null the field.
-    //
-    // The model declares a ref member in exactly five places, pinned by a test. The traversal is
-    // the same reflective walker the insert path uses, with every declared carrier handled BY TYPE.
-    // The completeness gate takes its denominator from the store's own STORED FRAGMENT BYTES rather
-    // than from the traversal, so a container this walk misses cannot pass silently.
-    //
-    // Done HERE and not in the merge that creates most of them, so the change is confined to the
-    // EXPORT arm.
 
-    /// TEST SEAM, null in every shipped run. Set it and the MAIN pass uses it instead of
+    /// Test seam, null in every shipped run. Set it and the main pass uses it instead of
     /// [#isOrphan], while the independent pre-pass keeps the real predicate — so the guard must
     /// catch the disagreement.
     private static BiPredicate<Set<String>, String> orphanTest = null;
@@ -217,8 +64,8 @@ public final class EpipSanitize {
     /// Install (or, with `null`, remove) the seam above. A shipped run never calls it.
     public static void setOrphanTest(BiPredicate<Set<String>, String> hook) { orphanTest = hook; }
 
-    /// THE SECOND TEST SEAM: [#orphanTest] changes what the pass DECIDES, this changes what it can
-    /// SEE. Set it and every node it accepts is skipped by both the pre-pass and the strip — a
+    /// The second test seam: [#orphanTest] changes what the pass decides, this changes what it can
+    /// see. Set it and every node it accepts is skipped by both the pre-pass and the strip — a
     /// traversal narrower than the store, which only the fragment-byte gate catches.
     private static java.util.function.Predicate<Object> reachBlind = null;
 
@@ -241,21 +88,21 @@ public final class EpipSanitize {
     /// @param cleared        refs cleared
     /// @param intact         refs left in place; `refs == cleared + intact` (G1)
     /// @param levelsBefore   `<Level>` elements before (G2)
-    /// @param levelsAfter    `<Level>` elements after — MUST equal `levelsBefore`
+    /// @param levelsAfter    `<Level>` elements after — must equal `levelsBefore`
     /// @param refsAfter      refs the independent post-pass found (G5)
-    /// @param orphansAfter   orphaned refs the post-pass found — MUST be 0 (G3)
+    /// @param orphansAfter   orphaned refs the post-pass found — must be 0 (G3)
     /// @param targetsStopPlace  distinct cleared targets, StopPlace-scoped (G6's subject)
     /// @param targetsOtherSite  distinct cleared targets on every other Site class
-    /// @param g6Collisions   cleared StopPlace targets that ARE a Level somewhere in the store
-    ///                       — MUST be 0 (G6)
-    /// @param otherSiteCollisions the same count for the non-StopPlace sites: NOT zero today
+    /// @param g6Collisions   cleared StopPlace targets that are a Level somewhere in the store
+    ///                       — must be 0 (G6)
+    /// @param otherSiteCollisions the same count for the non-StopPlace sites: not zero today
     ///                       (a Parking's levels live inside StopPlaces), reported not asserted
-    /// @param storeRefsBefore  `<LevelRef>` elements in the STORED FRAGMENT BYTES of EVERY
+    /// @param storeRefsBefore  `<LevelRef>` elements in the stored fragment bytes of every
     ///                       class map before the pass — G7's denominator
     /// @param storeRefsAfter   the same count over the Site class maps after the writes (G7)
     /// @param storeRefsOutside how many of `storeRefsBefore` sit in a class map that is not
-    ///                       a Site at all — MUST be 0, or the pass cannot reach them (G7)
-    /// @param nestedSites    Site objects found INSIDE another Site by the walk — MUST be 0, or
+    ///                       a Site at all — must be 0, or the pass cannot reach them (G7)
+    /// @param nestedSites    Site objects found inside another Site by the walk — must be 0, or
     ///                       `own(s)` is ambiguous and the per-Site predicate ill-defined (G8)
     public record LevelRefResult(
             long sites, long sitesTouched, long refs, long cleared, long intact,
@@ -278,15 +125,14 @@ public final class EpipSanitize {
         }
     }
 
-    /// What a READ-ONLY look at a store says about its `LevelRef` population — the pass's three
-    /// passes minus the pass. `orphans == 0` means the [Strip] iterator would yield nothing and no
-    /// stored byte could move.
+    /// What a read-only look at a store says about its `LevelRef` population. `orphans == 0` means
+    /// the [Strip] iterator would yield nothing and no stored byte could move.
     ///
     /// @param sites     Sites examined
     /// @param refs      refs the bean traversal reached
-    /// @param orphans   of those, the ones the pass WOULD clear
+    /// @param orphans   of those, the ones the pass would clear
     /// @param levels    `<Level>` elements
-    /// @param storeRefs `<LevelRef>` elements in the stored bytes of EVERY class map
+    /// @param storeRefs `<LevelRef>` elements in the stored bytes of every class map
     /// @param storeRefsOutside how many of those sit outside every Site class map
     /// @param nestedSites Sites found inside another Site
     public record LevelRefInspection(long sites, long refs, long orphans, long levels,
@@ -301,9 +147,8 @@ public final class EpipSanitize {
         }
     }
 
-    /// READ-ONLY. Run the pass's pre-pass and its byte census over an existing store and report;
-    /// write nothing, mutate no bean the store owns. `LevelRefProbe --dry-run`
-    /// is its front end.
+    /// Read-only. Run the pass's pre-pass and its byte census over an existing store and report;
+    /// write nothing, mutate no bean the store owns.
     public static LevelRefInspection inspectLevelRefs(Store db, Txn txn) {
         List<Class<?>> siteClasses = siteClasses(db, txn);
         Survey s = survey(db, txn, siteClasses);
@@ -317,8 +162,8 @@ public final class EpipSanitize {
     /// What the last [#stripOrphanLevelRefs] in this JVM measured, or `null`.
     public static LevelRefResult lastLevelRefResult() { return last; }
 
-    /// Clear every `LevelRef` whose target is not a `Level` its own Site defines,
-    /// write the changed Sites back through `insertAnyObjects`, and prove it.
+    /// Clear every `LevelRef` whose target is not a `Level` its own Site defines, and write the
+    /// changed Sites back through `insertAnyObjects`.
     ///
     /// ```
     /// own(s)     = { l.id : l ∈ s.levels, l instanceof Level }
@@ -326,16 +171,15 @@ public final class EpipSanitize {
     /// cleared(s) = |{ r ∈ refs(s) : r.ref ∉ own(s) }|;   intact(s) = |refs(s)| − cleared(s)
     /// ```
     ///
-    /// THREE passes. Pass 1 surveys the store and derives the expectation independently of the code
-    /// that acts on it; pass 2 acts and counts what IT did; pass 3 re-reads the store — after the
-    /// writes, so from re-encoded fragments rather than from the beans pass 2 held — and asks
-    /// whether anything is left to clear.
+    /// Three passes: pass 1 surveys the store and derives the expectation independently of the code
+    /// that acts on it, pass 2 acts and counts what it did, and pass 3 re-reads the store after the
+    /// writes, so from re-encoded fragments rather than from the beans pass 2 held.
     ///
     /// @throws IllegalStateException on G1–G6 (see the guard block at the tail)
     public static LevelRefResult stripOrphanLevelRefs(Store db, Txn txn) {
         List<Class<?>> siteClasses = siteClasses(db, txn);
 
-        // ---- pass 0: the STORE's own LevelRef population, over stored fragment bytes (G7).
+        // ---- pass 0: the store's own LevelRef population, over stored fragment bytes (G7).
         // Every class map, not only the Site ones.
         long[] bytesBefore = storedLevelRefs(db, txn, siteClasses, /*sitesOnly=*/false);
 
@@ -348,8 +192,8 @@ public final class EpipSanitize {
 
         // ---- pass 3: re-read what was written
         Survey after = survey(db, txn, siteClasses);
-        // ---- pass 4: and re-count the stored bytes. Site class maps only, which is sound ONLY
-        // because pass 0 measured 0 elsewhere and this pass writes nothing but Sites — the guard
+        // ---- pass 4: and re-count the stored bytes. Site class maps only, which is sound only
+        // because pass 0 measured 0 elsewhere and this pass writes nothing but Sites; the guard
         // below refuses the narrowing when that premise fails.
         long[] bytesAfter = storedLevelRefs(db, txn, siteClasses, /*sitesOnly=*/true);
 
@@ -361,13 +205,11 @@ public final class EpipSanitize {
                 before.targetsStopPlace.size(), before.targetsOtherSite.size(),
                 g6, otherCollisions,
                 bytesBefore[0], bytesAfter[0], bytesBefore[1], before.nestedSites);
-        last = r;   // set BEFORE the guard, so a negative test can read what it measured
+        last = r;   // set before the guard, so a negative test can read what it measured
 
-        // ------------------------------------------------------------------ THE GUARD
+        // ------------------------------------------------------------------ the guard
         List<String> fail = new ArrayList<>();
 
-        // A pass that saw refs where the pre-pass saw none — or none where the pre-pass saw some
-        // — has not measured the same store, and its zeros mean nothing.
         if (strip.refs != before.refs) {
             fail.add("INOPERATIVE: the strip pass saw " + strip.refs + " LevelRef(s) where the "
                     + "independent pre-pass saw " + before.refs + " — the two passes did not read "
@@ -378,8 +220,7 @@ public final class EpipSanitize {
             fail.add("G1 conservation: cleared " + strip.cleared + " + intact " + strip.intact
                     + " != " + strip.refs + " refs seen");
         }
-        // G2 <Level> count unchanged. Stays GREEN under over-stripping, which is why G4's `intact`
-        // arm below is not optional.
+        // G2 <Level> count unchanged.
         if (after.levels != before.levels) {
             fail.add("G2 <Level> count moved: " + before.levels + " -> " + after.levels
                     + "; this pass removes references, never definitions");
@@ -397,22 +238,19 @@ public final class EpipSanitize {
             fail.add("G4 intact: the pass left " + strip.intact + " ref(s) in place where the "
                     + "independent pre-pass expected " + (before.refs - before.orphans));
         }
-        // PER SITE, not only in total: a totals-only guard nets an over-strip on one Site against
-        // an under-strip on another and reports zero. This cannot.
         List<String> diffs = perSiteDiff(before.perSite, strip.perSite);
         if (!diffs.isEmpty()) {
             fail.add("G4 per Site: " + diffs.size() + " Site(s) where the pass and the pre-pass "
                     + "disagree on (refs, cleared, intact). First: " + diffs.get(0));
         }
-        // G5 a second pass clears 0 — i.e. what survives is exactly what was left intact, and a
-        // re-run of the same predicate over the re-encoded fragments would remove nothing.
+        // G5: what survives the pass is exactly what it left intact.
         if (after.refs != strip.intact) {
             fail.add("G5 second pass: the store holds " + after.refs + " LevelRef(s) after the "
                     + "pass, where " + strip.intact + " were left intact");
         }
         // G6 — what licenses the per-Site predicate standing in for the per-document one
         // Level_KeyRef states. Every StopPlace-scoped target this pass removes must be a Level that
-        // exists NOWHERE in the store; the moment a feed defines a Level in one StopPlace and
+        // exists nowhere in the store; the moment a feed defines a Level in one StopPlace and
         // references it from another, this fires and the per-Site predicate must be revisited.
         if (g6 != 0) {
             fail.add("G6 StopPlace scope: " + g6 + " cleared target(s) ARE a <Level> defined "
@@ -421,14 +259,10 @@ public final class EpipSanitize {
                     + "First: " + firstIntersecting(before.targetsStopPlace, before.levelIds));
         }
         // ------------------------------------------------------------------------ G7
-        // THE DENOMINATOR THE TRAVERSAL DOES NOT SUPPLY. G1-G6 are all scoped to what the bean
-        // traversal reaches. G7 counts the store's <LevelRef> in ITS OWN STORED BYTES — which is
-        // also what EpipDbToXml emits, fragment bytes verbatim — and makes the two reconcile. No
-        // JAXB decode is involved, so this arm also fails if the binding ever drops a reference the
-        // bytes carry.
-        //
-        // G3 says "no orphan survives among the refs the traversal reached"; G7 says "the traversal
-        // reached every ref the store holds". Only the conjunction says what the profile requires.
+        // G1-G6 are scoped to what the bean traversal reaches. G7 counts the store's <LevelRef> in
+        // its own stored bytes — which is what the export emits, fragment bytes verbatim — and
+        // makes the two reconcile. No JAXB decode is involved, so this arm also fails if the
+        // binding ever drops a reference the bytes carry.
         if (bytesBefore[1] != 0) {
             fail.add("G7 scope: " + bytesBefore[1] + " <LevelRef> live in a class map that is not "
                     + "a Site_VersionStructure, so this pass — which iterates Site classes — "
@@ -444,9 +278,8 @@ public final class EpipSanitize {
             fail.add("G7 residue: the store's fragment bytes hold " + bytesAfter[0]
                     + " <LevelRef> after the pass, where " + strip.intact + " were left intact");
         }
-        // G8 — the per-Site predicate needs "the Site" to be unambiguous. A Site nested inside
-        // another Site would give a ref two candidate own() sets, and this walk would silently
-        // use the outer one.
+        // G8 — a Site nested inside another Site would give a ref two candidate own() sets, and
+        // this walk would silently use the outer one.
         if (before.nestedSites != 0) {
             fail.add("G8 nesting: " + before.nestedSites + " Site(s) found INSIDE another Site. "
                     + "own(s) is then ambiguous and the per-Site predicate is not well defined; "
@@ -457,12 +290,12 @@ public final class EpipSanitize {
                     + ". Refusing to write. " + r);
         }
 
-        // NOT ASSERTED, deliberately. G6 is FALSE for the non-StopPlace Sites: an AT Parking's
+        // Not asserted: G6 is false for the non-StopPlace Sites, where an AT Parking's
         // <levels><LevelRef/></levels> points at Levels held inside StopPlace fragments. What
-        // licenses clearing them is DOCUMENT scope, which is what Level_KeyRef's selector says: the
+        // licenses clearing them is document scope, which is what Level_KeyRef's selector says: the
         // exporter emits Parking into the OTHER_REFERENCED closure entry (shared-06) and StopPlaces
-        // into the sites entry (shared-02), so a Parking's LevelRef is orphaned IN ITS OWN DOCUMENT
-        // whatever the store holds. A property of the export split, which beans cannot see.
+        // into the sites entry (shared-02), so a Parking's LevelRef is orphaned in its own document
+        // whatever the store holds.
         Log.info("[epip-levelref] %s", r);
         return r;
     }
@@ -494,21 +327,17 @@ public final class EpipSanitize {
         return levels;
     }
 
-    /// `refs(s)` — every `LevelRef` anywhere under this Site, in walk order.
-    ///
-    /// NOT a list of containers. [RecursiveAttributes#walk] does the navigating and this method
-    /// only says what to do with each node it is handed. The four carriers below are the complete
-    /// set of places the model declares a `LevelRefStructure` member;
-    /// `TestEpipLevelRefs.modelDeclaresExactlyFourLevelRefCarriers` pins that list, so a model
-    /// upgrade that adds a fifth fails a test instead of quietly halving this pass's reach.
-    ///
-    /// `walk` yields a reference object as a LEAF and never recurses into it, so a
-    /// `LevelRefStructure` arrives via `reference()` and is deliberately ignored here — it is
-    /// counted through its HOLDER, which is the only thing that can also remove it.
-    ///
     /// One read-only walk of one Site: its refs in walk order, and G8's nested-Site count.
     private record SiteScan(List<String> refs, long nestedSites) {}
 
+    /// `refs(s)` — every `LevelRef` anywhere under this Site, in walk order.
+    /// [RecursiveAttributes#walk] does the navigating; this method only says what to do with each
+    /// node it is handed. The carriers below are the complete set of places the model declares a
+    /// `LevelRefStructure` member, a list TestEpipLevelRefs pins.
+    ///
+    /// `walk` yields a reference object as a leaf and never recurses into it, so a
+    /// `LevelRefStructure` arrives via `reference()` and is ignored here — it is counted through
+    /// its holder, which is the only thing that can also remove it.
     private static SiteScan siteRefs(Site_VersionStructure site) {
         List<String> refs = new ArrayList<>();
         long[] nested = {0};
@@ -530,9 +359,9 @@ public final class EpipSanitize {
                         if (e instanceof LevelRefStructure r) refs.add(r.getRef());
                     }
                 } else if (o instanceof SiteStructure_VersionStructure ss) {
-                    // Shape (c), the fifth carrier. Counted at the OWNER rather than at
+                    // Shape (c), counted at the owner rather than at
                     // LevelInStructure_VersionStructure itself, because the strip has to remove the
-                    // whole element and therefore needs the list; counting at both would double it.
+                    // whole element and therefore needs the list.
                     if (ss.getLevelsInStructure() != null) {
                         for (LevelInStructure_VersionStructure lis
                                 : ss.getLevelsInStructure().getLevelInStructure()) {
@@ -547,16 +376,12 @@ public final class EpipSanitize {
 
     // -------------------------------------------------------- G7: the store's own population
 
-    /// `<LevelRef>` elements in the STORED FRAGMENT BYTES, by decompress-and-scan — no JAXB
-    /// decode, no getter, nothing this file's traversal touches. Returns
-    /// {@code {total, outsideSiteClasses}}.
-    ///
-    /// Reads every row of every class map once. The post-pass call narrows to the Site class maps,
-    /// which is licensed by the pre-pass having measured 0 elsewhere AND by this pass writing
-    /// nothing but Sites — and the guard refuses the narrowing if that premise fails.
+    /// `<LevelRef>` elements in the stored fragment bytes, by decompress-and-scan — no JAXB
+    /// decode, no getter, nothing this file's traversal touches. Reads every row of every class map
+    /// once, and returns {@code {total, outsideSiteClasses}}.
     ///
     /// It matches the unprefixed spelling `<LevelRef`. Every fragment this codebase writes is
-    /// unprefixed; a namespace-prefixed writer would make this count FALL, which fires the guard.
+    /// unprefixed; a namespace-prefixed writer would make this count fall, which fires the guard.
     private static long[] storedLevelRefs(Store db, Txn txn, List<Class<?>> siteClasses,
                                           boolean sitesOnly) {
         FragmentCodec codec = new FragmentCodec();
@@ -576,9 +401,9 @@ public final class EpipSanitize {
 
     private static final byte[] LEVELREF_NAME = {'L', 'e', 'v', 'e', 'l', 'R', 'e', 'f'};
 
-    /// Occurrences of the START TAG `<LevelRef...>` in one fragment. Name-EXACT: the byte after the
-    /// name must end it, so a hypothetical `<LevelRefView>` could never inflate the count and make
-    /// G7 pass by accident. Public only so the test can drive that edge directly.
+    /// Occurrences of the start tag `<LevelRef...>` in one fragment. Name-exact: the byte after the
+    /// name must end it, so a `<LevelRefView>` could never inflate the count. Public only so the
+    /// test can drive that edge directly.
     public static long countLevelRefElements(byte[] x) {
         long n = 0;
         int end = x.length - LEVELREF_NAME.length - 1;
@@ -642,7 +467,7 @@ public final class EpipSanitize {
     }
 
     /// Pass 2. Mutates and yields the Sites it changed, lazily, so the insert drains it. Counts
-    /// what IT did, never what it expected.
+    /// what it did, never what it expected.
     private static final class Strip implements Iterator<Object> {
         private final Store db;
         private final Txn txn;
@@ -674,9 +499,9 @@ public final class EpipSanitize {
                 ownLevelIds(site, own);
                 long[] here = {0, 0};   // {refs, cleared}
 
-                // The SAME walk siteRefs() makes, with the action attached. Mutating in the node
-                // callback is safe by the walker's own order: descend() calls visitor.node(v)
-                // BEFORE it reads v's fields, so a slot cleared here is simply not there when the
+                // The same walk siteRefs() makes, with the action attached. Mutating in the node
+                // callback is safe only by the walker's own order: descend() calls visitor.node(v)
+                // before it reads v's fields, so a slot cleared here is simply not there when the
                 // walk descends, and a list shortened here is iterated once, afterwards, in its
                 // new state.
                 RecursiveAttributes.walk(site, new RecursiveAttributes.Visitor() {
@@ -714,8 +539,8 @@ public final class EpipSanitize {
                                 here[1]++;
                             }
                         } else if (o instanceof SiteStructure_VersionStructure ss) {
-                            // SHAPE (c), THE FIFTH CARRIER — the ONLY one where clearing the field
-                            // is not the repair. LevelInStructure_VersionStructure.levelRef is
+                            // Shape (c), the one carrier where clearing the field is not the
+                            // repair. LevelInStructure_VersionStructure.levelRef is
                             // `@XmlElement(name="LevelRef", required=true)`, so a LevelInStructure
                             // with its LevelRef nulled would trade a Level_KeyRef violation for a
                             // content-model violation. The whole <LevelInStructure> goes instead.
@@ -731,7 +556,7 @@ public final class EpipSanitize {
                                 here[1]++;
                             }
                             // levelsInStructure is minOccurs="0" but its content is
-                            // maxOccurs="unbounded" with minOccurs=1, so an EMPTIED container is
+                            // maxOccurs="unbounded" with minOccurs=1, so an emptied container is
                             // itself invalid and must go.
                             if (ss.getLevelsInStructure().getLevelInStructure().isEmpty()) {
                                 ss.setLevelsInStructure(null);
@@ -742,7 +567,7 @@ public final class EpipSanitize {
                 long refsHere = here[0], clearedHere = here[1];
 
                 // Drop a container the strip has emptied: `levels` is minOccurs="0", so its absence
-                // is conformant. Only ever reached when no <Level> remains, so G2 cannot see it.
+                // is conformant.
                 if (site.getLevels() != null && site.getLevels().getLevelRefOrLevel().isEmpty()) {
                     site.setLevels(null);
                 }
@@ -778,8 +603,8 @@ public final class EpipSanitize {
 
     // ---------------------------------------------------------------- guard plumbing
 
-    /// The per-Site key. Class name AND (id, version), because a class map may legitimately hold
-    /// two versions of one id; colliding keys ACCUMULATE on both sides.
+    /// The per-Site key. Class name and (id, version), because a class map may legitimately hold
+    /// two versions of one id; colliding keys accumulate on both sides.
     private static String siteKey(Class<?> clazz, Site_VersionStructure site) {
         return clazz.getSimpleName() + '|' + site.getId() + '|' + site.getVersion();
     }

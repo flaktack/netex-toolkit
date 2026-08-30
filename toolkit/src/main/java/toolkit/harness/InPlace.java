@@ -11,11 +11,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-/// The same-database counterpart of [DbToDb]: a "fix" opens ONE existing store read-write,
-/// runs the apply function inside one write transaction (reading and writing back on the same txn,
-/// the fix idiom), commits, then runs the mandatory `resolve()` +
-/// `resolveEmbeddings()` pair. The db's format is whatever it already is — there is no
-/// `--format` option.
+/// The FIX sandwich: one existing store opened read-write, the apply function run inside one write
+/// transaction (reading and writing back on the same txn), commit, then the mandatory `resolve()` +
+/// `resolveEmbeddings()` pair. The db's format is whatever it already is — there is no `--format`
+/// option.
 ///
 /// `--no-resolve` skips the resolve pair. For A/B comparison only; production fixes must not use it.
 ///
@@ -46,7 +45,7 @@ public final class InPlace {
         Path database = Path.of(a.positional().get(0));
         if (!toolkit.store.Stores.exists(database)) {
             // A bare directory would silently become a fresh empty store via Stores.open(rw);
-            // an in-place fix must only ever run on an EXISTING database.
+            // an in-place fix must only ever run on an existing database.
             Log.error("%s is not an existing database.", database);
             System.exit(1);
         }
@@ -74,18 +73,25 @@ public final class InPlace {
             reportChanged(tag, db);
         }
         Log.info("[%s] done (%.1f s)", tag, secs(t0));
-        // A fix reads its own store through the same reference path, so it needs the same reporting.
         Harness.finish(tag);
     }
 
-    /// What the fix rewrote, by class.
+    /// The resolve pair alone, on an existing store: open rw, `resolve()`, `resolveEmbeddings()`,
+    /// close. Returns how many references the two wired between them.
     ///
-    /// Deliberately NOT an `emptyOutput` post-condition, unlike the other sandwiches: a fix that
-    /// changes nothing is legitimate — the defect it repairs is absent — so refusing would make
-    /// the idempotent second run an error.
-    ///
-    /// Row counts cannot answer it either: a fix re-emits objects under their existing
-    /// (id, version), so the store's size is identical whether it rewrote nothing or everything.
+    /// Separate from [#runInPlace] because both passes open and commit their own write txn (see
+    /// [toolkit.store.StoreResolve]), so neither can run under one.
+    public static long resolveOnly(Path database, String tag) throws Exception {
+        long t0 = System.nanoTime();
+        long wired;
+        try (Store db = Stores.open(database, false)) {
+            wired = db.resolve() + db.resolveEmbeddings();
+        }
+        Log.info("[%s] wired %,d references (%.1f s)", tag, wired, secs(t0));
+        Harness.finish(tag);
+        return wired;
+    }
+
     private static void reportChanged(String tag, Store db) {
         Harness.reportInserted(tag, db, "changed",
                 "changed nothing — no object was re-inserted (the fix found no subject; this is a "
