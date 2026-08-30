@@ -1,3 +1,11 @@
+netex-toolkit originated as a port of badger <https://github.com/MMTIS/badger>,
+copyright its authors and likewise licensed under the GNU Affero General Public
+License version 3.  Portions of this work are derived from it.
+
+The verbatim text of that license follows.
+
+----------------------------------------------------------------------
+
                     GNU AFFERO GENERAL PUBLIC LICENSE
                        Version 3, 19 November 2007
 
