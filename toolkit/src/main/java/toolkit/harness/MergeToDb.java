@@ -16,8 +16,14 @@ import java.util.List;
 ///
 /// Raw-clone each source into the target with a cumulative key offset so per-source local keys
 /// never collide, skipping rows whose `(id, version, class)` already arrived from an earlier source,
-/// then run the mandatory `resolve()` + `resolveEmbeddings()` pair: cross-source references are
-/// unresolved in every per-source store and can only be wired once every source is present.
+/// re-inserting whatever referenced those skipped rows, then running the mandatory `resolve()` +
+/// `resolveEmbeddings()` pair: cross-source references are unresolved in every per-source store and
+/// can only be wired once every source is present.
+///
+/// The re-insert step is not a tidying pass and the resolve pair does not subsume it — see
+/// [#rewireOntoKeptCopies]. Dropping a duplicate row also drops every edge INTO it, without leaving
+/// an unresolved row for `resolve()` to find, so a merge that skipped anything used to hand back a
+/// store whose objects were right and whose reference graph was quietly short.
 ///
 /// "Combine several stores" is generic; what to do about the COLLISIONS is policy. This takes the
 /// answer that needs no knowledge of the feeds — first source wins, the shadowed copy is dropped.
@@ -84,6 +90,44 @@ public final class MergeToDb {
         }
     }
 
+    /// Re-insert everything that referenced a key this clone SKIPPED, so its references land on the
+    /// copy that was kept.
+    ///
+    /// WITHOUT THIS A MERGE SILENTLY LOSES EDGES, and neither pass below can recover them.
+    /// [ObjectWriter#cloneFrom] copies edge rows rather than re-deriving them, so an edge whose
+    /// target is skipped is simply not copied — and, unlike an ordinary miss, it leaves **no
+    /// unresolved row behind**. That is the hazard [toolkit.store.ReferenceResolver] states under
+    /// "NOT SOUND AFTER A SKIPPING CLONE", and it defeats `resolve()`, which works only from
+    /// unresolved rows. Measured on three EPIP-converted stores sharing a broadcast StopPlace
+    /// population: 19,733 of 2,505,319 edges missing, with `resolve()` recovering none of them.
+    ///
+    /// Re-inserting the referrer is enough: `insertOne` clears the stored copy's reference rows and
+    /// re-extracts them from the bean against a target that now holds the kept copy. It is
+    /// idempotent — the object matches by (id, version) onto the row the clone already wrote — so a
+    /// referrer reached from two sources costs a rewrite, not a duplicate.
+    private static long rewireOntoKeptCopies(Store tdb, Store sdb, Txn rtx, LongOpenHashSet skipped,
+            String tag) {
+        if (skipped == null || skipped.isEmpty()) return 0;
+        LongOpenHashSet referrers = new LongOpenHashSet();
+        for (long[] edge : sdb.iterEdges(rtx)) {
+            // The referrer must NOT itself be skipped: re-inserting a dropped row would resurrect
+            // the very object the clone excluded, and a skipped row referencing another skipped row
+            // is ordinary (a merged-away StopPlace naming its neighbour).
+            if (skipped.contains(edge[1]) && !skipped.contains(edge[0])) referrers.add(edge[0]);
+        }
+        if (referrers.isEmpty()) return 0;
+        List<Object> objects = new ArrayList<>(referrers.size());
+        for (long fk : referrers) {
+            Object o = sdb.loadObjectByFullKey(rtx, fk);
+            if (o != null) objects.add(o);
+        }
+        try (Txn wtx = tdb.rwTxn()) {
+            tdb.insertAnyObjects(wtx, objects);
+            wtx.commit();
+        }
+        return objects.size();
+    }
+
     /// The phase function, public so a test or a fused pipeline can drive it without the CLI.
     public static void merge(List<Path> sources, Path target, String format, String tag)
             throws Exception {
@@ -91,6 +135,7 @@ public final class MergeToDb {
         double cloneSecs;
         double resolveSecs;
         double embSecs;
+        long rewired = 0;
         try (Store tdb = Stores.create(target, format)) {
             // One write transaction per source bounds peak dirty pages to a single source.
             long offset = 0;
@@ -98,8 +143,10 @@ public final class MergeToDb {
             for (Path srcPath : sources) {
                 try (Store sdb = Stores.open(srcPath, true); Txn rtx = sdb.roTxn()) {
                     allSwept &= sdb.blobRepairMarkerPresent(rtx);
+                    // Declared out here because the rewire below needs it AFTER this transaction
+                    // commits: it re-inserts into a second one.
+                    LongOpenHashSet dups = null;
                     try (Txn wtx = tdb.rwTxn()) {
-                        LongOpenHashSet dups = null;
                         if (offset != 0) {
                             // Duplicate (id, version) across sources. A raw-cloned duplicate row
                             // would surface TWICE in every map-iterating consumer.
@@ -117,8 +164,13 @@ public final class MergeToDb {
                         // offset and let the next source's keys collide with the first's.
                         offset = Math.max(offset, maxLocal + 1);
                     }
+                    rewired += rewireOntoKeptCopies(tdb, sdb, rtx, dups, tag);
                 }
                 Log.info("[%s] cloned %s (keys shifted; next offset %d)", tag, srcPath, offset);
+            }
+            if (rewired > 0) {
+                Log.info("[%s] re-inserted %d referrers of dropped duplicates so their references "
+                        + "point at the copy that was kept", tag, rewired);
             }
             cloneSecs = Log.secs(t0);
 

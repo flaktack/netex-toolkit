@@ -132,6 +132,66 @@ public class TestMergeDbToDb {
         Check.equals(Map.of("dup", "first", "a1", "A1", "b1", "B1"), names, "first feed wins");
     }
 
+    /// A reference from the LOSING source onto the duplicate must end up on the copy that was kept.
+    ///
+    /// This is the case a merge used to get silently wrong. `cloneFrom` copies edge rows rather than
+    /// re-deriving them, so dropping the duplicate row also drops every edge INTO it — and unlike an
+    /// ordinary miss it leaves no unresolved row, so the `resolve()` that follows has nothing to find
+    /// and cannot repair it. The referrer kept its ref STRING either way, which is why the objects
+    /// looked right and only the reference graph was short. Measured on three EPIP-converted stores
+    /// before the repair existed: 19,733 of 2,505,319 edges missing.
+    @Test
+    void testAReferenceOntoADroppedDuplicateSurvivesOnTheKeptCopy(TestStore db) throws Exception {
+        // f2 declares the same StopPlace id as f1 AND an assignment pointing at it. f1's copy wins,
+        // so f2's copy is dropped -- and f2's assignment must still reach f1's.
+        Path f1 = db.buildDbFile(stopPlaceFrame("SP:dup"), "f1.lmdb");
+        Path f2 = db.buildDbFile(stopPlaceFrame("SP:dup") + assignmentFrame("PSA:2", "SP:dup"),
+                "f2.lmdb");
+        Path merged = f1.getParent().resolve("merged.lmdb");
+        merge(merged, f1, f2);
+        try (Store s = Stores.open(merged, true); Txn t = s.roTxn()) {
+            long sp = s.lookupFullKey(t, "SP:dup", "1", noi.netex.model.StopPlace.class);
+            long psa = s.lookupFullKey(t, "PSA:2", "1",
+                    noi.netex.model.PassengerStopAssignment.class);
+            Check.that(sp != -1 && psa != -1, "both the kept StopPlace and the assignment are rows");
+            boolean wired = false;
+            for (long[] e : s.iterEdges(t)) {
+                if (e[0] == psa && e[1] == sp) wired = true;
+            }
+            Check.that(wired, "the assignment from the losing source is wired to the KEPT StopPlace");
+        }
+    }
+
+    /// ...and the repair must not resurrect what the clone dropped. A skipped row referencing another
+    /// skipped row is ordinary, and re-inserting it as a "referrer" would undo the de-duplication —
+    /// caught this way on a real corpus, where it put 6,208 merged-away StopPlaces back.
+    @Test
+    void testTheRepairDoesNotResurrectADroppedDuplicate(TestStore db) throws Exception {
+        Path f1 = db.buildDbFile(stopPlaceFrame("SP:dup") + stopPlaceFrame("SP:other"), "f1.lmdb");
+        Path f2 = db.buildDbFile(stopPlaceFrame("SP:dup") + stopPlaceFrame("SP:other")
+                + assignmentFrame("PSA:2", "SP:dup"), "f2.lmdb");
+        Path merged = f1.getParent().resolve("merged.lmdb");
+        merge(merged, f1, f2);
+        try (Store s = Stores.open(merged, true); Txn t = s.roTxn()) {
+            int stops = 0;
+            for (Object ignored : s.iterOnlyObjects(t, noi.netex.model.StopPlace.class)) stops++;
+            Check.equals(2, stops, "one row per id: the duplicates stay dropped, not re-inserted");
+        }
+    }
+
+    private static String stopPlaceFrame(String id) {
+        return "<SiteFrame id=\"site-" + id + "\" version=\"1\"><stopPlaces>"
+                + "<StopPlace id=\"" + id + "\" version=\"1\"><Name>" + id + "</Name></StopPlace>"
+                + "</stopPlaces></SiteFrame>";
+    }
+
+    private static String assignmentFrame(String id, String stopPlaceId) {
+        return "<ServiceFrame id=\"sf-" + id + "\" version=\"1\"><stopAssignments>"
+                + "<PassengerStopAssignment id=\"" + id + "\" version=\"1\" order=\"1\">"
+                + "<StopPlaceRef ref=\"" + stopPlaceId + "\" version=\"1\"/>"
+                + "</PassengerStopAssignment></stopAssignments></ServiceFrame>";
+    }
+
     // The claim: resolve() SKIPS the full blob-repair sweep when every source
     // carries the marker (bind-time repair in pass-1 covers the only refs the merge touches --
     // the cross-feed edges). Here the sweep is counted from the driver's log (see
