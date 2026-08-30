@@ -1,5 +1,7 @@
 package toolkit.store;
 
+import it.unimi.dsi.fastutil.longs.LongIterator;
+import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
 import org.lmdbjava.Cursor;
 import org.lmdbjava.Dbi;
 import org.lmdbjava.GetOp;
@@ -54,8 +56,20 @@ final class EmbeddingResolver {
     private record Variant(BytesKey matchedRow, String versionChange, String classChange) {}
 
     /// Mutable state of one resolveEmbeddings pass (shared with the per-class scan).
+    ///
+    /// `unresolvedPairs` holds a PRIMITIVE referrer set per target key, and that is what makes this
+    /// pass runnable on a converted corpus at all. Its rows are already resident in the store's own
+    /// columns at 12 bytes each (`unresSrc` long + `unresKeyId` int); a `LinkedHashSet<Long>` costs
+    /// a boxed `Long` plus a map entry on top of that, ~64 B, so the pass used to build a copy of
+    /// the whole unresolved map several times larger than the map itself. On the post-EPIP national
+    /// store — 83,894,176 rows over 10,653,250 distinct target keys — that copy is what exhausted a
+    /// 16 GB heap in `XbDbToDb` and is why this pass has never run there.
+    ///
+    /// `LongLinkedOpenHashSet` and not `LongOpenHashSet`: iteration order is load-bearing here (see
+    /// [#resolveEmbeddings]), and only the linked variant keeps insertion order the way the
+    /// `LinkedHashSet` it replaces did.
     private static final class EmbState {
-        final LinkedHashMap<BytesKey, LinkedHashSet<Long>> unresolvedPairs = new LinkedHashMap<>();
+        final LinkedHashMap<BytesKey, LongLinkedOpenHashSet> unresolvedPairs = new LinkedHashMap<>();
         final LinkedHashMap<BytesKey, List<BytesKey>> unresolvedById = new LinkedHashMap<>();
         final Map<Class<?>, Integer> missingClassCount = new HashMap<>();
         final Set<Class<?>> stillMissing = new HashSet<>();
@@ -79,9 +93,9 @@ final class EmbeddingResolver {
             byte[] v = r.encodedTarget();
             BytesKey vk = new BytesKey(v);
             Class<?> cls = store.idxToClass.get(NulKeyCodec.classTrailer(v));
-            LinkedHashSet<Long> referrers = s.unresolvedPairs.get(vk);
+            LongLinkedOpenHashSet referrers = s.unresolvedPairs.get(vk);
             if (referrers == null) {
-                referrers = new LinkedHashSet<>();
+                referrers = new LongLinkedOpenHashSet();
                 s.unresolvedPairs.put(vk, referrers);
                 byte[] idPrefix = Arrays.copyOf(v, NulKeyCodec.idPrefixLen(v));
                 s.unresolvedById.computeIfAbsent(new BytesKey(idPrefix), k -> new ArrayList<>()).add(vk);
@@ -211,9 +225,9 @@ final class EmbeddingResolver {
         long phasebRepairs = 0;
         if (!s.almostQueue.isEmpty()) {
             LinkedHashMap<Long, LinkedHashSet<BytesKey>> inverted = new LinkedHashMap<>();
-            for (Map.Entry<BytesKey, LinkedHashSet<Long>> e : s.unresolvedPairs.entrySet()) {
-                for (long r : e.getValue()) {
-                    inverted.computeIfAbsent(r, k -> new LinkedHashSet<>()).add(e.getKey());
+            for (Map.Entry<BytesKey, LongLinkedOpenHashSet> e : s.unresolvedPairs.entrySet()) {
+                for (LongIterator it = e.getValue().iterator(); it.hasNext();) {
+                    inverted.computeIfAbsent(it.nextLong(), k -> new LinkedHashSet<>()).add(e.getKey());
                 }
             }
             for (long referrer : inverted.keySet()) {
@@ -307,9 +321,12 @@ final class EmbeddingResolver {
             if (v == null) continue;
             if (v.versionChange() == null && v.classChange() == null) {
                 // Exact: wire every referrer of the MATCHED row onto the container and drain it.
-                LinkedHashSet<Long> referrers = s.unresolvedPairs.remove(v.matchedRow());
+                LongLinkedOpenHashSet referrers = s.unresolvedPairs.remove(v.matchedRow());
                 if (referrers == null) continue;
-                for (long r : referrers) {
+                // LongIterator, not the enhanced for: this drain runs once per unresolved ROW —
+                // tens of millions on a converted corpus — and Iterable<Long> would box every one.
+                for (LongIterator it = referrers.iterator(); it.hasNext();) {
+                    long r = it.nextLong();
                     store.putEdge(t, r, containerFk);
                     store.deleteUnresolved(t, r, v.matchedRow().bytes);
                 }

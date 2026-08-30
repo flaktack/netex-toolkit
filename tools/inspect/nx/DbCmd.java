@@ -93,6 +93,7 @@ public final class DbCmd {
                 case "unres" -> unres(rest);
                 case "grep" -> grep(rest);
                 case "path" -> path(rest);
+                case "resident" -> resident(rest);
                 case "check" -> check(rest);
                 case "-h", "--help", "help" -> usage();
                 default -> {
@@ -178,6 +179,13 @@ public final class DbCmd {
                       `path` are resolved and reported BEFORE it is paid.  JAVA_XMX=8g or larger.
                       Only these need it:
                   path     --from <addr> --to <addr> --db S [--max-depth N] [--undirected]
+                  resident --db S [--csr]
+                           WHAT loadEdgeState() COSTS, on the store you point at: used heap before
+                           and after, beside the live row counts of both kinds.  #124's 3.77 GB is
+                           the figure everything else quotes; this is how it is re-measured when the
+                           mix of edges to unresolved rows changes, which is exactly what wiring a
+                           reference does -- it MOVES a row from one column to the other.  --csr
+                           adds Csr.build on top, which is a second copy of the resolved half.
                   refs/rrefs --csr        the same answer via Csr.out/Csr.in, printed BESIDE the
                                           scan answer.  Its purpose is agreement.
                   check    --db S [--head N]
@@ -350,6 +358,87 @@ public final class DbCmd {
         o.printf("    kind 0 resolved edges   %,14d%n", live[0]);
         o.printf("    kind 1 unresolved rows  %,14d%n", live[1]);
         o.println("    (tombstoned slots are excluded, as V2Store's own iterators exclude them)");
+    }
+
+    // ================================================================== resident
+
+    /// CSR tier, and the only command whose SUBJECT is the cost rather than the answer.
+    ///
+    /// `loadEdgeState()` materialises both columns — resolved edges into `edgeSrc`/`edgeDst`,
+    /// unresolved rows into `unresSrc`/`unresKeyId` over the `_unres_keys` intern table — plus a
+    /// per-referrer slot index for each. All of it is heap for as long as the store is open, so a
+    /// stage's working set includes it whether or not that stage ever reads an edge.
+    ///
+    /// The two columns do NOT cost the same per row, which is why this measures instead of
+    /// multiplying: an edge is two longs, while an unresolved row is a long plus an intern id and
+    /// the table behind it holds one byte[] per DISTINCT target key. Wiring a reference MOVES a row
+    /// from the second column to the first and may drop an intern entry with it, so the sign of the
+    /// change is not readable off the row counts.
+    ///
+    /// Heap is read after `System.gc()`, which is a request and not a guarantee, so this is a
+    /// measurement of one JVM on one run rather than a constant. Give it the `-Xmx` you are actually
+    /// asking about: the collector's slack scales with the heap it was handed.
+    private static int resident(String[] argv) {
+        Args a = Args.parse(argv, Set.of("--csr"), Set.of("--db"));
+        List<Path> dbs = a.paths("--db");
+        if (dbs.size() != 1) throw new BadUsage("--db <store> is required (exactly one)");
+        boolean withCsr = a.flag("--csr");
+        PrintStream o = System.out;
+        Path db = dbs.get(0);
+
+        o.println(RULE);
+        o.printf("nx db resident — CSR tier — %s%n", db);
+        o.printf("  -Xmx %,d MB%n", Runtime.getRuntime().maxMemory() >> 20);
+        o.println(RULE);
+
+        long base = usedHeap();
+        long edges = 0;
+        long unres = 0;
+        long t0 = System.nanoTime();
+        try (Store st = Stores.open(db, true); toolkit.store.Txn tx = st.roTxn()) {
+            // iterEdges/iterUnresolved are the MATERIALISED views, not the streaming ones: the
+            // first of them pays loadEdgeState, which is the whole point of this command.
+            for (long[] ignored : st.iterEdges(tx)) edges++;
+            for (toolkit.store.UnresolvedRow ignored : st.iterUnresolved(tx)) unres++;
+            long loaded = usedHeap();
+            double secs = (System.nanoTime() - t0) / 1e9;
+            long rows = edges + unres;
+            o.printf("  live rows       edges %,14d   unresolved %,14d   total %,14d%n",
+                    edges, unres, rows);
+            o.printf("  loadEdgeState   %,14d MB   in %6.1f s%s%n",
+                    (loaded - base) >> 20, secs,
+                    rows == 0 ? "" : String.format("   (%.1f bytes/row blended)",
+                            (double) (loaded - base) / rows));
+            if (withCsr) {
+                long c0 = System.nanoTime();
+                Csr csr = st.csr(tx);
+                long withBuilt = usedHeap();
+                o.printf("  + Csr.build     %,14d MB   in %6.1f s   over %,d resolved edges%n",
+                        (withBuilt - loaded) >> 20, (System.nanoTime() - c0) / 1e9, edges);
+                // Referenced after the measurement so the build cannot be collected before it.
+                if (csr == null) o.println("  (csr was null)");
+            }
+        }
+        o.println();
+        o.println("  A DIAGNOSTIC, NOT A GATE. The delta is this JVM's used heap around the load,");
+        o.println("  so it includes the collector's slack and excludes the page cache over data.mdb.");
+        return 0;
+    }
+
+    /// Used heap after asking for a collection. Three rounds because one `System.gc()` need not
+    /// have finished tracing by the time it returns, and the reading is the whole output here.
+    private static long usedHeap() {
+        Runtime r = Runtime.getRuntime();
+        for (int i = 0; i < 3; i++) {
+            System.gc();
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return r.totalMemory() - r.freeMemory();
     }
 
     private static String sideMapNote(String name) {
@@ -1600,7 +1689,7 @@ public final class DbCmd {
         o.println(VERSION + "   " + java.time.Instant.now());
         o.printf("%s   tier=%s   %s   format=%s%n", cmd, tier, db.toAbsolutePath(), s.formatMarker());
         o.println("  tier " + tier + ": " + (tier.equals("POINT")
-                ? "RawStore point lookups. V2Store is NOT opened -- no 50 s / 3.77 GB loadEdgeState."
+                ? "RawStore point lookups. V2Store is NOT opened."
                 : "RawStore for the address, then ONE streaming pass over one map, O(1) heap."
                         + " loadEdgeState is NOT run."));
     }

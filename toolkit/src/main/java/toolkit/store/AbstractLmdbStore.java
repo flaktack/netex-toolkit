@@ -948,6 +948,11 @@ public abstract class AbstractLmdbStore implements Store {
             profRefs += ex.references().size();
             profEmbs += ex.embedded().size();
         }
+        // A reference whose target is an EMBEDDED child misses here and lands in the unresolved map:
+        // the id index holds first-class rows, and an embedded object has none. Wiring it to its
+        // container is toolkit.store.EmbeddingResolver's job, and it is deliberately not attempted
+        // here — this path sees the store as of THIS insert, so it cannot tell "no row" from "no row
+        // yet", and an edge written on that guess is one resolve() can never revisit.
         for (RecursiveAttributes.Ref ref : ex.references()) {
             int targetIdx = idxForName(ref.targetClassName());
             byte[] unresolvedValue = NulKeyCodec.encodeKey(
