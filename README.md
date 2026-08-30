@@ -168,6 +168,76 @@ so a driver in another repository cannot import a `.java` from this one. Reach e
 real: a change to a compiled generator is no longer edit-and-run for a downstream consumer, which needs `mvn install`
 first.
 
+### Testing a driver
+
+Testing one needs no JUnit, no runner and no build step: `toolkit.test` ships in the jar for exactly this.
+
+**Your test can call your driver — ours cannot.** A test *in this repo* is compiled, and no compiled class may import
+the default package, so it restates the sandwich call instead: `FeedToDb.driverMain(…)`, never `NetexToDb`. Yours is
+source-launched from the same root as your driver, and one source root reaches every file in it, so
+`MyDriver.main(new String[] {…})` simply works — the barrier above is across repositories, not across a directory. Call
+the sandwich directly only when you want to vary something the CLI does not expose. (For a driver too large to restate
+and awkward to call, the third way is a subprocess: `toolkit.Drivers.run` is that shape, JVM flags and source launcher
+included.)
+
+**Take the input, the output path and the assertions off the fixture.** `TestStore.create` is a temp LMDB store, a NeTEx
+skeleton and the real loader in one call, and everything the driver touches comes off it — `buildDbFile(frames, name)`
+for a store input the driver opens itself (populated, resolved and *closed*, which is what a driver expects to find),
+`tempPath(name)` for anything it writes, `loadNetex(frames)` to fill the store you already hold. In all three, `frames`
+is the inner content of the skeleton's frames element, not a whole document. Then assert by **reopening** what the
+driver wrote — `Stores.open(path, true)`, a `roTxn`, `iterOnlyObjects` — because that, and not the driver's return
+value, is what the next stage in a chain will see:
+
+```java
+// MyDriverTest.java — beside MyDriver.java in your source root, launched the same way
+public static void testEveryLineSurvives(TestStore ts) throws Exception {
+    Path src = ts.buildDbFile("""
+            <ServiceFrame id="sf" version="1"><lines>
+              <Line id="line:1" version="1"><Name>L</Name></Line>
+            </lines></ServiceFrame>""", "src.lmdb");
+    Path out = ts.tempPath("out.lmdb");
+
+    MyDriver.main(new String[] {src.toString(), out.toString()});   // the driver, whole
+
+    try (Store db = Stores.open(out, true); Txn tx = db.roTxn()) {
+        List<Object> lines = new ArrayList<>();
+        for (Object o : db.iterOnlyObjects(tx, Line.class)) lines.add(o);
+        Check.equals(1, lines.size(), "the transform must keep every Line");
+        Xml.assertXmlEqual(Xml.toXmlAll(lines), EXPECTED);
+    }
+}
+
+void main(String[] args) { Runner.run(MyDriverTest.class); }
+```
+
+**Launch it exactly like the driver** — the [Usage](#usage) line with `scripts/NetexToDb.java` swapped for
+`MyDriverTest.java`, same two flags, same classpath. `Runner` finds `public static void test*(TestStore)` reflectively,
+builds and closes a fresh store per method, prints a transcript and exits non-zero if anything failed. A `test*` method
+that is not `public static` is *skipped with a warning*, not run, and a class with no test methods throws rather than
+reporting a green zero.
+
+**Four things bite.**
+
+- A driver failure propagates out of `driverMain` and fails your test — some sandwiches wrap it in a `RuntimeException`,
+  the `throws Exception` ones rethrow as-is. A bad *command line* does not: it is `System.exit(1)` for a missing input
+  and `2` for a malformed argument, which takes the test JVM down with it and reports nothing. Build the paths you pass
+  from `tempPath`/`buildDbFile` and they will be right by construction.
+- The sandwich already runs the mandatory `resolve()` + `resolveEmbeddings()` pair. Drive the library directly instead
+  and you owe both yourself — see [Usage](#usage).
+- `Check.equals` is `(expected, actual)` and `Xml.assertXmlEqual` is `(actual, expected)`. They are the reverse of each
+  other, and neither will tell you when you get it wrong; only the failure message reads backwards.
+- A reference whose target is already in the store resolves **eagerly**, so a fixture like that proves nothing about
+  ordering. To test a forward reference, point it at an object the feed does not contain.
+
+The suite's own harness tests (`toolkit/src/test/java/toolkit/harness/`) are worked examples of the same calls, but not
+copy-paste templates: they are JUnit-registered and take their `TestStore` from the test-scoped `TestStoreExtension`
+rather than from `Runner`. The kit underneath is the same one.
+
+**What no test covers.** Whether a change altered the *data* is checked out-of-band, not by the suite:
+`tools/diff/Fragments.java` for the store, `tools/diff/export_zip.py` for an export zip (the
+`<PublicationTimestamp>` normalisation is why an export is not byte-reproducible) and `nx xsd` for schema validity. See
+[Instruments](#instruments).
+
 ## Instruments
 
 Nothing in [`tools/`](tools/README.md) ships, and `mvn verify` runs none of it. Two you will want:
