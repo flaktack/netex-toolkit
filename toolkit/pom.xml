@@ -124,8 +124,24 @@
            One JVM: surefire's default forkCount=1/reuseForks=true. The fixed cost is JVM start
            and JAXB context init, worth ~15x.
 
-           The six flags are not tuning. lmdbjava (JNR-FFI) on JDK 25 fails at RUNTIME inside the
-           store without them; ../noi-pipeline/Makefile passes the same set. -->
+           The two flags below are warning suppression, NOT correctness. Measured on JDK 25
+           (Temurin 25.0.4.1): the store loads, resolves and reads with no flags at all. What they
+           silence is jffi's System::load and its Unsafe::putLong, plus lz4-java's
+           System::loadLibrary, which is a second and independent native caller with nothing to do
+           with lmdbjava. The JVM names only the first restricted-method caller per module, so no
+           single run shows both.
+
+           (Flag names below are written without their leading dashes on purpose: an XML comment
+           may not contain two dashes in a row, and restoring them makes this pom unparseable.)
+
+           This set carried four "add-opens" flags, on java.nio, sun.nio.ch, java.lang and
+           java.lang.reflect, until they were measured and found dead: they are ByteBufferProxy's
+           requirement, and AbstractLmdbStore builds its Env on ByteArrayProxy.PROXY_BA, so that
+           class never loads. DO NOT ADD THEM BACK without a run that fails without them.
+
+           "sun-misc-unsafe-memory-access" stops being cosmetic on JDK 26, where JEP 498 made
+           `deny` its default and jffi's putLong would throw. ../noi-pipeline/Makefile passes the
+           same set. -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
@@ -135,10 +151,6 @@
             -Xmx4g
             --enable-native-access=ALL-UNNAMED
             --sun-misc-unsafe-memory-access=allow
-            --add-opens java.base/java.nio=ALL-UNNAMED
-            --add-opens java.base/sun.nio.ch=ALL-UNNAMED
-            --add-opens java.base/java.lang=ALL-UNNAMED
-            --add-opens java.base/java.lang.reflect=ALL-UNNAMED
           </argLine>
           <systemPropertyVariables>
             <!-- The tree scans (TestConf, TestProvenance, TestStoreFormat, TestHarnessExamples)

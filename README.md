@@ -18,7 +18,7 @@ re-serialised, and what a build could and could not do is recorded beside the da
   `.loadreport.json` records what one run *tolerated*.
 - **Configuration declared once.** Every knob lives in `toolkit.util.Conf` with a name, type, default and one-line doc.
 - **A fixture kit, shipped in the production jar on purpose.** `toolkit.test` gives you a real temp LMDB store, a NeTEx
-  skeleton and a loader in one call, canonical XML comparison, reflective test discovery and four assertions — no JUnit,
+  skeleton and a loader in one call, canonical XML comparison, reflective test discovery and three assertions — no JUnit,
   no runner, no build step. It is what lets you test a driver you wrote yourself.
 - **The reference graph as a first-class structure.** `toolkit.graph` is an immutable forward + inverse CSR adjacency
   over the store's edges, built lazily and invalidated by any edge mutation.
@@ -33,20 +33,29 @@ re-serialised, and what a build could and could not do is recorded beside the da
 
 # Usage
 
-The thin jar alone is not runnable — the drivers are uncompiled source programs launched against the jar plus `deps/`,
-and lmdbjava needs a specific flag set on JDK 25:
+The thin jar alone is not runnable — the drivers are uncompiled source programs launched against the jar plus `deps/`:
 
 ```
 java -Xmx6g \
   --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow \
-  --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
-  --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED \
   -cp "toolkit/target/netex-toolkit.jar:toolkit/target/deps/*" \
   scripts/NetexToDb.java feed.xml.gz out.lmdb
 ```
 
-**Those six flags are not tuning**: without them the store fails at runtime. Any embedder needs them too. With the
-shaded jar only the classpath changes — same flags, same drivers:
+**Those two flags are warning suppression, not correctness.** Measured on JDK 25: the store loads, resolves and reads
+with no flags at all — omitting them costs eight lines of stderr per JVM, which is why every invocation here carries
+them. They silence jffi's `System::load` and `Unsafe::putLong`, plus lz4-java's `System::loadLibrary`, which is a
+second native caller unrelated to lmdbjava. An embedder wanting clean logs wants them too.
+
+`--sun-misc-unsafe-memory-access` stops being cosmetic on JDK 26, where [JEP 498](https://openjdk.org/jeps/498) made
+`deny` the default and jffi's `putLong` would throw without it.
+
+This set used to carry four `--add-opens` (`java.nio`, `sun.nio.ch`, `java.lang`, `java.lang.reflect`) described as
+mandatory. They were measured and found dead: those are `ByteBufferProxy`'s requirement, and `AbstractLmdbStore` builds
+its `Env` on `ByteArrayProxy.PROXY_BA`, so that class never loads. Do not add them back without a run that fails
+without them.
+
+With the shaded jar only the classpath changes — same flags, same drivers:
 
 ```
   -cp toolkit/target/netex-toolkit-shaded.jar \
@@ -129,7 +138,7 @@ At one extreme a driver is the harness call and nothing else — this is the who
 
 ```java
 public static void main(String[] args) throws Exception {
-    FeedToDb.driverMain("netex_to_db", args, ZipLoad.Options.DEFAULTS);
+    FeedToDb.driverMain("netex-to-db", args, ZipLoad.Options.DEFAULTS);
 }
 ```
 
@@ -138,19 +147,14 @@ transaction, the atomic `.tmp`/rename and the reporting tail; `FrameWriter`
 decompresses and emits; the driver decides only what goes in which entry:
 
 ```java
-DbToZip.driverMain("db_to_zip_raw",args, USAGE, new String[0], a ->(db,tx,out)->{
-NetexEnvelope env = new NetexEnvelope(ENVELOPE, List.of(), null);
-FrameWriter fw = new FrameWriter(db, tx, out, env); // no hook: stored bytes, verbatim
-    for(
-Class<?> clazz :db.
-
-dbNames(tx)){
-        if(!fw.
-
-hasRows(clazz))continue;
+DbToZip.driverMain("db-to-zip-raw", args, USAGE, new String[0], a -> (db, tx, out) -> {
+    NetexEnvelope env = new NetexEnvelope(ENVELOPE, List.of(), null);
+    FrameWriter fw = new FrameWriter(db, tx, out, env); // no hook: stored bytes, verbatim
+    for (Class<?> clazz : db.dbNames(tx)) {
+        if (!fw.hasRows(clazz)) continue;
         ...
-        }
-        });
+    }
+});
 ```
 
 Two drivers are deliberately **not** minimal. `EpipDbToXml` (~800 lines) is the EPIP export **profile** sitting on the

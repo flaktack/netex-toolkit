@@ -32,14 +32,14 @@ Then, once per shell:
 ```bash
 P=$(git rev-parse --show-toplevel)
 CP="$P/toolkit/target/netex-toolkit.jar:$P/toolkit/target/deps/*"
-# Not tuning: lmdbjava (JNR-FFI) on JDK 25 fails at RUNTIME inside the store without these.
-JVM="--enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow
-     --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/sun.nio.ch=ALL-UNNAMED
-     --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED"
+# Warning suppression, not correctness: on JDK 25 the store runs with no flags at all, but omitting
+# these costs eight lines of stderr per JVM. See ../README.md#usage for what each one silences and
+# for the four --add-opens that were measured dead and removed.
+JVM="--enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow"
 ```
 
-Every Java row below is then `java $JVM -cp "$CP" tools/<path> <args>`. The Python tools are pure
-stdlib and need none of this. `gate/*.sh` find their own paths.
+Every Java row below is then `java $JVM -cp "$CP" tools/<path> <args>`. The Python tools are pure stdlib and need none
+of this. `gate/*.sh` find their own paths.
 
 ## The before/after loop
 

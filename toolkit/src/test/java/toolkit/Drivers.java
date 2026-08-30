@@ -29,15 +29,14 @@ public final class Drivers {
 
     private Drivers() {}
 
-    /// Not tuning: lmdbjava (JNR-FFI) on JDK 25 fails at RUNTIME inside the store without these.
-    /// The child opens a store, so it needs the set the pom gives this JVM.
+    /// Warning suppression, not correctness — on JDK 25 the store runs with no flags at all. The
+    /// child opens a store, so it gets the set the pom gives this JVM and its stderr stays clean;
+    /// a driver reports through its log tail, and eight JVM warnings on top of it are noise a
+    /// caller would have to filter. See the pom's surefire comment for what each one silences and
+    /// for the four --add-opens that were measured dead and removed.
     private static final List<String> JVM_FLAGS = List.of(
             "--enable-native-access=ALL-UNNAMED",
-            "--sun-misc-unsafe-memory-access=allow",
-            "--add-opens", "java.base/java.nio=ALL-UNNAMED",
-            "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED",
-            "--add-opens", "java.base/java.lang=ALL-UNNAMED",
-            "--add-opens", "java.base/java.lang.reflect=ALL-UNNAMED");
+            "--sun-misc-unsafe-memory-access=allow");
 
     /// `scripts/<driver>.java args...`, and it must exit 0.
     ///
