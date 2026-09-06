@@ -10,7 +10,9 @@ package toolkit.codec;
 //
 //   1. `z-links.xml`'s TimetableFrame emitted `journeyInterchanges` before `trainNumbers`.
 //      TimetableFrameGroup's xsd:sequence puts TimetableJourneyInFrameGroup (trainNumbers) before
-//      InterchangeInFrameGroup (journeyInterchanges), so this arm was the invalid one.
+//      InterchangeInFrameGroup (journeyInterchanges), so this arm was the invalid one. z-links has
+//      since been split — interchanges ride with their journeys in a group file, trainNumbers are
+//      shared — so the same sequence is now asserted on both frames that replaced it.
 //
 //   2. VehicleTypes in `shared-01-resource.xml` carried FuelType before EuroClass, an order that
 //      comes STRAIGHT FROM THE SOURCE FEED, because the fragment format stores the object's
@@ -366,11 +368,19 @@ public class TestFragmentOrder {
   </vehicleJourneys>
 </TimetableFrame>
 """;
-    /// TimetableFrameGroup sequences TimetableJourneyInFrameGroup (trainNumbers) before
-    /// InterchangeInFrameGroup (journeyInterchanges); the exporter emitted them the other way
-    /// round, which is the cvc-complex-type.2.4.a the XSD probe found on z-links.xml.
+    /// TimetableFrameGroup's xsd:sequence, asserted where each container now lands.
+    ///
+    /// The original bug was z-links.xml emitting InterchangeInFrameGroup (journeyInterchanges)
+    /// before TimetableJourneyInFrameGroup (trainNumbers) — the cvc-complex-type.2.4.a the XSD
+    /// probe found. z-links no longer exists, and its two halves have since separated again: the
+    /// export writes THREE TimetableFrames, one per file level, each carrying one container.
+    /// trainNumbers are globally shared (every group's journeys reference them); a shard's
+    /// interchanges sit in its gSS-shared.xml, which OTP indexes for the whole group and maps at
+    /// the group pop; the journeys are in the numbered files, whose index is dropped one file at a
+    /// time. Nothing can violate the sequence while no two of those containers share a frame — so
+    /// what this pins is exactly that: which container is in which frame, and alone.
     @Test
-    void testZLinksEmitsTrainNumbersBeforeJourneyInterchanges(TestStore ts) throws Exception {
+    void testTimetableFrameContainersFollowTheXsdSequence(TestStore ts) throws Exception {
         String frames = NETEX + """
             <TimetableFrame id="tf2" version="1">
               <journeyInterchanges>
@@ -383,10 +393,39 @@ public class TestFragmentOrder {
             </TimetableFrame>
             """;
         Map<String, Document> entries = export(ts, frames);
-        Document zlinks = entries.get("z-links.xml");
-        Check.that(zlinks != null, "z-links.xml present: " + entries.keySet());
-        List<String> children = childNames(zlinks, "TimetableFrame");
-        Check.equals(List.of("TypeOfFrameRef", "trainNumbers", "journeyInterchanges"), children,
-                "trainNumbers precedes journeyInterchanges, per TimetableFrameGroup's xsd:sequence");
+        Check.that(!entries.containsKey("z-links.xml"),
+                "z-links is gone, its two halves moved: " + entries.keySet());
+
+        Document shared = entries.get("shared-04-links.xml");
+        Check.that(shared != null, "shared-04-links.xml present: " + entries.keySet());
+        Check.equals(List.of("TypeOfFrameRef", "trainNumbers"),
+                childNames(shared, "TimetableFrame"),
+                "the shared entry carries the trainNumbers and nothing else");
+
+        // The interchange rides in its shard's SHARED GROUP file now. Found by content rather than
+        // by name: which shard that is depends on the partition, and this test is about element
+        // ORDER, not placement.
+        String sharedGroup = null;
+        String numbered = null;
+        for (Map.Entry<String, Document> e : entries.entrySet()) {
+            boolean hasInterchange = e.getValue()
+                    .getElementsByTagNameNS(NS, "ServiceJourneyInterchange").getLength() > 0;
+            if (e.getKey().matches("g\\d\\d-shared\\.xml") && hasInterchange) {
+                sharedGroup = e.getKey();
+            } else if (e.getKey().matches("g\\d\\d-\\d{4}\\.xml")
+                    && e.getValue().getElementsByTagNameNS(NS, "ServiceJourney").getLength() > 0) {
+                numbered = e.getKey();
+            }
+        }
+        Check.that(sharedGroup != null,
+                "an interchange rides in a shared group file: " + entries.keySet());
+        Check.equals(List.of("TypeOfFrameRef", "journeyInterchanges"),
+                childNames(entries.get(sharedGroup), "TimetableFrame"),
+                "the shared group entry carries the journeyInterchanges and nothing else");
+
+        Check.that(numbered != null, "a numbered group file holds the journeys: " + entries.keySet());
+        Check.equals(List.of("TypeOfFrameRef", "vehicleJourneys"),
+                childNames(entries.get(numbered), "TimetableFrame"),
+                "a numbered group entry carries the vehicleJourneys and nothing else");
     }
 }
