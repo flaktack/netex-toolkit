@@ -73,6 +73,8 @@ public final class Projection {
     /// The transformer cache, keyed "{srsName}_{crsTo}".
     private static final Map<String, Transform> TRANSFORMERS = new HashMap<>();
     private static final Set<String> LOGGED_ONCE = new HashSet<>();
+    /// [#isResolvableCrs] answers, so a frame default is decided once per distinct name.
+    private static final Map<String, Boolean> RESOLVABLE = new HashMap<>();
 
     private static final Pattern URN_CRS = Pattern.compile("urn:ogc:def:crs:([^:]+):[^:]*:(.+)", Pattern.CASE_INSENSITIVE);
     private static final Pattern AUTH_CODE = Pattern.compile("([A-Za-z]+):(\\d+)");
@@ -179,6 +181,30 @@ public final class Projection {
         CoordinateReferenceSystem crs = CRS_FACTORY.createFromName(lookup);
         if (crs == null) throw new IllegalArgumentException("Unparseable CRS: " + name);
         return crs;
+    }
+
+    /// Whether `name` resolves to a CRS under the rule in the class header — no logging, no
+    /// fallback, nothing counted. For a caller that has to decide whether a name is a CRS at all
+    /// BEFORE any geometry is stamped with it; going through [#resolveTransform] instead would
+    /// count the answer as a dropped geometry and fire the fallback ERROR.
+    ///
+    /// Answers from the same proj4j registry that [#resolveCrs] uses, so it cannot reject a name
+    /// this class would go on to accept.
+    public static boolean isResolvableCrs(String name) {
+        if (name == null || name.isEmpty()) return false;
+        synchronized (RESOLVABLE) {
+            Boolean known = RESOLVABLE.get(name);
+            if (known != null) return known;
+            boolean ok;
+            try {
+                resolveCrs(name);
+                ok = true;
+            } catch (RuntimeException e) {
+                ok = false;
+            }
+            RESOLVABLE.put(name, ok);
+            return ok;
+        }
     }
 
     private static Transform buildTransform(String srsName, String crsTo) {

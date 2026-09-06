@@ -6,6 +6,7 @@ import jakarta.xml.bind.JAXBException;
 import jakarta.xml.bind.Unmarshaller;
 import noi.netex.model.EntityStructure;
 import noi.netex.model.VersionFrameDefaultsStructure;
+import toolkit.geo.Projection;
 import toolkit.model.ModelRegistry;
 import toolkit.store.Store;
 import toolkit.store.Txn;
@@ -223,6 +224,11 @@ public final class NetexLoader {
             if (it.captureFallbacks > 0) {
                 Log.warn("[load] %s: %d objects fell back to JAXB re-marshal capture", label, it.captureFallbacks);
             }
+            if (!it.badLocationSystems.isEmpty()) {
+                Log.warn("[load] %s: FrameDefaults/DefaultLocationSystem is not a CRS and was "
+                        + "ignored, leaving the geometries under it without an srsName: %s",
+                        label, it.badLocationSystems);
+            }
             Log.info("[load] %s: %d objects inserted (%d FrameDefaults, %.1f s)",
                     label, it.objects, it.frameDefaults, nanos / 1e9);
             return new LoadStats(it.objects, it.frameDefaults, it.skippedNoId, it.unmapped,
@@ -265,6 +271,8 @@ public final class NetexLoader {
 
         long objects, unmapped, frameDefaults, skippedNoId, captureFallbacks;
         final Set<String> unmappedNames = new HashSet<>();
+        /// The DefaultLocationSystem values refused by [#locationSystemOf], distinct.
+        final Set<String> badLocationSystems = new HashSet<>();
         Object pending;
         boolean exhausted;
 
@@ -456,8 +464,9 @@ public final class NetexLoader {
                         if (fd.getDefaultResponsibilitySetRef() != null) {
                             currentResponsibilitySetRef = fd.getDefaultResponsibilitySetRef().getRef();
                         }
-                        if (fd.getDefaultLocationSystem() != null) {
-                            currentLocationSystem = fd.getDefaultLocationSystem();
+                        String ls = locationSystemOf(fd);
+                        if (ls != null) {
+                            currentLocationSystem = ls;
                         }
                         r.setFrameDefaults(currentDatasourceRef, currentResponsibilitySetRef,
                                 currentLocationSystem);
@@ -489,8 +498,8 @@ public final class NetexLoader {
                             if (currentResponsibilitySetRef == null && fd.getDefaultResponsibilitySetRef() != null) {
                                 currentResponsibilitySetRef = fd.getDefaultResponsibilitySetRef().getRef();
                             }
-                            if (currentLocationSystem == null && fd.getDefaultLocationSystem() != null) {
-                                currentLocationSystem = fd.getDefaultLocationSystem();
+                            if (currentLocationSystem == null) {
+                                currentLocationSystem = locationSystemOf(fd);
                             }
                         }
                         r.setFrameDefaults(currentDatasourceRef, currentResponsibilitySetRef,
@@ -506,6 +515,30 @@ public final class NetexLoader {
                 if (!r.hasNext()) return null;
                 ev = r.next();
             }
+        }
+
+        /// The frame's DefaultLocationSystem, or null when it is absent OR is not a CRS at all.
+        ///
+        /// A REFUSAL HERE IS CHEAPER THAN A FALLBACK LATER, because this value is DENORMALISED:
+        /// CopyingCapture's N7 arm stamps it onto every srsName-less geometry under the frame
+        /// (PROV-CAP srsname-depth), so one bad frame default becomes tens of thousands of
+        /// geometries that no CRS registry can resolve. Left null instead, those geometries keep
+        /// no srsName and Projection's resolution rule reads them as WGS84 -- which is what they
+        /// are, and what the fallback arm was going to assume anyway, minus the ERROR and minus
+        /// counting every one of them as possibly-wrong output.
+        ///
+        /// Publishers really do write a non-CRS here: three abruzzo RAP feeds
+        /// (IT-ITF1 0083, 13, TUA-MAAS) carry `<DefaultLocationSystem>Europe/Rome</...>`, copied
+        /// from the `DefaultLocale/TimeZone` two lines above it in their own FrameDefaults.
+        ///
+        /// Only a name proj4j cannot resolve is refused, so this can never reject a CRS that
+        /// Projection would have gone on to accept.
+        String locationSystemOf(VersionFrameDefaultsStructure fd) {
+            String ls = fd.getDefaultLocationSystem();
+            if (ls == null) return null;
+            if (Projection.isResolvableCrs(ls)) return ls;
+            badLocationSystems.add(ls);
+            return null;
         }
 
         static void skipSubtree(XMLStreamReader r) throws XMLStreamException {

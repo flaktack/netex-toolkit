@@ -42,7 +42,11 @@ import java.util.Set;
 ///    `DefaultLocationSystem`, `srsName` is synthesized
 ///    onto the `srs_name.txt` set (matched on local name, any namespace) and onto every `Location`
 ///    without one. Inside a `Location` that declares `srsName`, that value wins over the frame
-///    default. Stamped verbatim — feeds put non-CRS strings there.
+///    default. An srsName the SOURCE declares is stamped verbatim — feeds put non-CRS strings
+///    there, and this is not the layer that judges them. The frame DEFAULT is different, because
+///    it is the one value that gets multiplied across a whole frame: the loader only hands one
+///    down when it resolves to a CRS (NetexLoader.ParseIterator#locationSystemOf), so a garbage
+///    default arrives here as null and the geometries under it keep no srsName at all.
 ///
 /// Comments and PIs copied verbatim. One instance per stream; the loader itself is shareable.
 final class CopyingCapture extends StreamReaderDelegate {

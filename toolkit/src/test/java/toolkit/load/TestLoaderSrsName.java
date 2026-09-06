@@ -20,10 +20,12 @@ package toolkit.load;
 //                  Location's value rather than the frame
 //                  default — while a gml:posList inside a gml:LineString that declares one does
 //                  NOT inherit it (only Location is special-cased);
-//   3. verbatim  — the value is stamped as-is, never validated as a CRS: three of the four
-//                  Italian feeds that declare DefaultLocationSystem declare the TIMEZONE
-//                  "Europe/Rome" there, and that string is stored as the srsName (verified
-//                  against data/it-rap-abruzzo-IT-ITF1-0083.lmdb);
+//   3. judged    — the frame DEFAULT is stamped only when it resolves to a CRS, because it is the
+//                  one value that multiplies across a whole frame: three of the four Italian feeds
+//                  that declare DefaultLocationSystem declare the TIMEZONE "Europe/Rome" there.
+//                  A non-CRS default is dropped and the geometries under it keep no srsName, which
+//                  Projection reads as WGS84. An srsName the SOURCE declares on the element is NOT
+//                  judged — "ITA", from 48 Emilia-Romagna/Lombardia feeds, is stored as-is;
 //   4. scoped    — the default dies with its frame, and a frame that declares none stamps
 //                  nothing (the 298-of-302 gz feeds / 14-of-14 zips case).
 
@@ -156,17 +158,40 @@ public class TestLoaderSrsName {
     }
 
     @Test
-    void testValueIsStampedVerbatimEvenWhenItIsNotACrs(TestStore db) throws Exception {
+    void testFrameDefaultThatIsNotACrsIsNotStamped(TestStore db) throws Exception {
         // Three of the four Italian gz feeds that declare DefaultLocationSystem declare a
-        // TIMEZONE there. The raw string is stamped and the reprojection takes its
-        // CRSError fallback later; the loader must not validate or normalise.
+        // TIMEZONE there, copied from the DefaultLocale/TimeZone two lines above it.
+        //
+        // THIS TEST USED TO ASSERT THE OPPOSITE — that the string was stamped verbatim and the
+        // reprojection took its CRSError fallback later. It was changed deliberately: stamping is
+        // a denormalisation, so one garbage frame default became every geometry under the frame.
+        // On the 2026-09-02 pipeline run that was 56,875 geometries per store, each one logged as
+        // "transformed through a FALLBACK WGS84 source transform ... coordinates are wrong unless
+        // they were WGS84 already" and each one counted as possibly-wrong output that
+        // -Dtoolkit.strict.droppedOutput=true would refuse the run over. Not stamping leaves them
+        // with no srsName, which Projection's resolution rule already reads as WGS84 — the same
+        // coordinates, without the false alarm.
+        //
+        // An srsName the SOURCE declares on an element is still stamped verbatim and still takes
+        // the fallback; only the frame default is judged. See testDeclaredNonCrsSrsNameSurvives.
         db.loadNetex(withDefaults("Europe/Rome"));
 
         ScheduledStopPoint ssp = Gen.byId(db, ScheduledStopPoint.class).get("ssp1");
-        Check.equals("Europe/Rome", ssp.getLocation().getSrsName(), "raw DefaultLocationSystem on Location");
+        Check.isNull(ssp.getLocation().getSrsName(), "non-CRS frame default: Location srsName stays absent");
         ServiceLink sl = Gen.byId(db, ServiceLink.class).get("sl1");
-        Check.equals("Europe/Rome", sl.getLineString().getSrsName(), "raw DefaultLocationSystem on gml:LineString");
-        Check.equals("Europe/Rome", sl.getLineString().getPosList().getSrsName(), "…and on gml:posList");
+        Check.isNull(sl.getLineString().getSrsName(), "non-CRS frame default: gml:LineString stays absent");
+        Check.isNull(sl.getLineString().getPosList().getSrsName(), "…and gml:posList stays absent");
+    }
+
+    /// The other half of the rule: `srsName="ITA"` is what 48 Emilia-Romagna and Lombardia RAP
+    /// feeds declare on the element itself, and the loader is not the layer that judges it.
+    @Test
+    void testDeclaredNonCrsSrsNameSurvives(TestStore db) throws Exception {
+        db.loadNetex(withDefaults(null).replace("<gml:posList>", "<gml:posList srsName=\"ITA\">"));
+
+        ServiceLink sl = Gen.byId(db, ServiceLink.class).get("sl1");
+        Check.equals("ITA", sl.getLineString().getPosList().getSrsName(),
+                "a source-declared srsName is kept whatever it says");
     }
 
     @Test
