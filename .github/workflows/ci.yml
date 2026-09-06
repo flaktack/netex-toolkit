@@ -7,6 +7,7 @@ name: ci
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -56,3 +57,86 @@ jobs:
           path: |
             toolkit/target/netex-toolkit.jar
             toolkit/target/deps/
+
+  # A `v*` tag turns the run's artefacts into a downloadable release, so a consumer can
+  #   curl -LO https://github.com/flaktack/netex-toolkit/releases/latest/download/netex-toolkit-shaded.jar
+  # instead of digging through a workflow run. The asset filenames are the version-free ones the
+  # jars already build under, which is what ../noi-pipeline's Makefile and compile-gate.sh hardcode.
+  #
+  # `needs: build` is what makes this safe: nothing is published unless `mvn verify` passed, and the
+  # shape gates (assert-shaded-jar-is-complete, assert-one-netex-model-on-classpath) run at package.
+  # Nothing is rebuilt here either -- the released bytes are the bytes that were tested.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: write
+
+    steps:
+      # Full history and tags: the release notes are a git log range, not the PR list GitHub would
+      # generate (this repo commits straight to main, so there are no PRs to summarise).
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: netex-toolkit-shaded.jar
+          path: dist
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: netex-toolkit
+          path: split
+
+      # The thin jar alone is not runnable, so deps/ travels with it in one asset.
+      - name: Pack the split form
+        run: cd split && zip -qr ../dist/netex-toolkit-split.zip netex-toolkit.jar deps
+
+      # The sha256s are the point of this block: toolkit/prov/Provenance.java identifies a jar by the
+      # digest of whatever the class was loaded from, so a provenance record from a downloaded jar
+      # can be tied back to the release that shipped it.
+      - name: Write release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Empty on the first-ever tag, which makes RANGE the whole history.
+          prev=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+          range=${prev:+$prev..}$TAG
+
+          {
+            echo '## Changes'
+            echo
+            git log --no-merges --pretty='- %s' "$range"
+            echo
+            echo '## Artifacts'
+            echo
+            echo '| asset | sha256 |'
+            echo '| --- | --- |'
+            (cd dist && sha256sum netex-toolkit-shaded.jar netex-toolkit-split.zip) |
+              while read -r sum name; do echo "| \`$name\` | \`$sum\` |"; done
+            echo
+            echo "Built with temurin JDK 25 · \`deps/\` = $(ls split/deps | wc -l) jars"
+            echo
+            echo '```'
+            echo 'java --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow \'
+            echo '     -cp netex-toolkit-shaded.jar conv/SomeDriver.java'
+            echo
+            echo 'java --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow \'
+            echo '     -cp "netex-toolkit.jar:deps/*" scripts/SomeDriver.java'
+            echo '```'
+          } > notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file notes.md \
+            dist/netex-toolkit-shaded.jar \
+            dist/netex-toolkit-split.zip
