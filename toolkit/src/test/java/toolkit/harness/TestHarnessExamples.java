@@ -1,17 +1,15 @@
 package toolkit.harness;
 
-// The example set held to the harness set, from both ends (OPEN.md item 12c).
+// The example set held to the harness set, from both ends.
 //
-// WHY BOTH. toolkit/harness/package-info.java lists the sandwiches and README.md calls the drivers
-// in scripts/ "the worked examples for writing your own". Two hand-maintained claims, and both had
-// drifted before this test existed. The failure mode recurs every time a sandwich is added, because
-// the two lists that should grow are prose in two other files.
+// toolkit/harness/package-info.java lists the sandwiches and README.md calls the drivers in
+// scripts/ "the worked examples for writing your own": two claims that are prose in another file
+// and have to grow every time a sandwich is added. The subject here is read off the filesystem and
+// confirmed by reflection, so it is not a third list to forget.
 //
-// DISCOVERED, NOT ENUMERATED. The subject is read off the filesystem and confirmed by reflection; a
-// hand-written list here would be a third list to forget.
-//
-// The companions (Args, ZipWriter, NetexEnvelope, FrameWriter) and the compositions (EpipToDb) are
-// excluded by having no driverMain rather than by being named, so adding one never edits this file.
+// The companions (Args, ZipWriter, NetexEnvelope, FrameWriter) and the compositions (EpipToDb,
+// EpipDbToZip) are excluded by having no driverMain rather than by being named, so adding one never
+// edits this file.
 
 import org.junit.jupiter.api.Test;
 import toolkit.Sources;
@@ -31,15 +29,13 @@ public class TestHarnessExamples {
     private static final String HARNESS_DIR = "toolkit/src/main/java/toolkit/harness";
     private static final String PACKAGE_INFO = HARNESS_DIR + "/package-info.java";
 
-    /// The tree a driver may live in. It was `scripts/conv` + `scripts/fix` until the drivers
-    /// flattened into one directory; the suite is deliberately not a root — a test calling
+    /// The tree a driver may live in. The suite is deliberately not a root — a test calling
     /// driverMain is not an example, and two of them do (TestMergeDbToDb, TestStoreFormat).
     private static final List<String> DRIVER_ROOTS = List.of("scripts");
 
-    /// A vacuity floor, NOT the count. There are five sandwiches today and this asserts four on
-    /// purpose: pinning it to the exact number would recreate the hand-maintained count that
-    /// OPEN.md 12c is about. What it defends against is the scan finding nothing and reporting
-    /// green, which is the one way a discovery test lies.
+    /// A vacuity floor, NOT the count. Pinning it to the exact number would recreate the
+    /// hand-maintained count this test exists to remove; what it defends against is the scan
+    /// finding nothing and reporting green, which is the one way a discovery test lies.
     private static final int MIN_HARNESSES = 4;
 
     /// Every public toolkit.harness type that exposes a public static driverMain.
@@ -57,11 +53,10 @@ public class TestHarnessExamples {
                 try {
                     c = Class.forName("toolkit.harness." + file.substring(0, file.length() - 5));
                 } catch (ClassNotFoundException e) {
-                    // A source file whose class is not on the classpath. This USED to be OPEN.md
-                    // 14's stale-jar trap, when the suite was source-launched against the built
-                    // jar; it now compiles against target/classes, so this arm can only fire on a
-                    // genuinely non-public or non-existent class. Kept because a scan that skips
-                    // what it cannot resolve is a scan that reports green over a shrinking subject.
+                    // A source file whose class is not on the classpath. The suite compiles against
+                    // target/classes, so this arm can only fire on a genuinely non-public or
+                    // non-existent class; it is kept because a scan that skips what it cannot
+                    // resolve reports green over a shrinking subject.
                     throw new AssertionError(p + " has no class on the classpath — "
                             + "the jar is behind toolkit/src (mvn clean install)", e);
                 }
@@ -83,7 +78,7 @@ public class TestHarnessExamples {
         return found;
     }
 
-    /// OPEN.md 12c: every sandwich is named in the package doc that claims to list them.
+    /// Every sandwich is named in the package doc that claims to list them.
     @Test
     void testEverySandwichIsNamedInThePackageDoc() throws IOException {
         String doc = Sources.read(Sources.root().resolve(PACKAGE_INFO));
@@ -119,8 +114,6 @@ public class TestHarnessExamples {
                 uncovered.add(c.getSimpleName());
             }
         }
-        // Every uncovered sandwich at once: told one at a time, this takes as many runs to clear
-        // as there are gaps, and each run is a full build.
         Check.equals(List.of(), uncovered,
                 "every sandwich has at least one example driver under " + DRIVER_ROOTS
                         + " calling its driverMain — these have none: " + uncovered);

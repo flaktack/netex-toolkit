@@ -266,8 +266,10 @@ public class TestFragmentOrder {
         Path out = ts.tempPath("split.zip");
         List<String> argv = new ArrayList<>(List.of(source.toString(), out.toString()));
         argv.addAll(List.of(args));
-        // Source-launched, in its own JVM: the export profile lives in scripts/EpipDbToXml.java and
-        // nothing compiled can import it. See toolkit.Drivers.
+        // Source-launched, in its own JVM. The profile itself is compiled (toolkit.harness
+        // .EpipDbToZip) and could be driven in-process; going through the FILE is the point here —
+        // it is the only thing in the suite that runs a scripts/ driver as production runs it,
+        // source launcher and flags included. See toolkit.Drivers.
         Drivers.run("EpipDbToXml", argv);
         DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
         dbf.setNamespaceAware(true);

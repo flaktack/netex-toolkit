@@ -3,15 +3,16 @@ package toolkit;
 // Runs a driver from `scripts/` the way production runs it: source-launched, in its own JVM.
 //
 // WHY A SUBPROCESS. The drivers are in the DEFAULT PACKAGE and outside every Maven module, so no
-// compiled test can import one. For the thin ones that costs nothing, because the driver IS
-// `SomeHarness.driverMain(tag, args, fn)` and a test calls that instead (TestMergeDbToDb and
-// TestStoreFormat both do). `EpipDbToXml` is the exception: it is EPIP export PROFILE that exists
-// nowhere else, so "call what the driver calls" has nothing to call.
+// compiled test can import one. What a test CAN do is call what the driver calls --
+// `SomeHarness.driverMain(tag, args, fn)` -- which is what TestMergeDbToDb and TestStoreFormat do,
+// and what a test of `EpipDbToXml` could do too now that its profile is `toolkit.harness.EpipDbToZip`
+// rather than 1140 lines of the script itself. That is exactly what makes this different: calling
+// the harness tests the PROFILE, and launching the file tests the FILE.
 //
 // Same idiom as TestConf's config probe, for the same reason.
 //
 // WHAT IT COSTS: one JVM start, one JAXB context init and a javac per call -- several seconds
-// against milliseconds. Two callers, deliberately.
+// against milliseconds. One caller, deliberately.
 //
 // WHAT IT BUYS BACK: this is the only test that runs a `scripts/` driver at all, flags and source
 // launcher included. Everything else about the drivers is checked by reading them
