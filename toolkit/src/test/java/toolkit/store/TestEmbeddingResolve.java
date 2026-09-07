@@ -6,14 +6,7 @@ package toolkit.store;
 // PassengerStopAssignment. The referenced object therefore HAS an id but has no store row of its
 // own — only its container does — so resolve() cannot see it, and the reference would sit in
 // _unresolved forever. resolveEmbeddings() is the second pass that wires it, and it wires the
-// referrer to the CONTAINER, because the container is the only thing addressable by a full key.
-//
-// The suite covers this mechanism's structure — which classes are in scope (TestEmbeddingScope),
-// that index rows follow the injected scope (TestEmbeddingScopeInjection), how an absent index is
-// distinguished from an unreadable one (TestEmbeddingIndexOpen) — and nowhere its BEHAVIOUR: that
-// resolve() returns 0 here, that resolveEmbeddings() returns 1, or which end of the edge the
-// container is on. An implementation that pointed the edge at the embedded object's synthesized key
-// instead would leave every structural test green and produce edges into rows that do not exist.
+// referrer to the container, because the container is the only thing addressable by a full key.
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.model.PassengerStopAssignment;
@@ -87,7 +80,7 @@ public class TestEmbeddingResolve {
         }
     }
 
-    /// Nothing left to do the second time: the pass is idempotent, not additive.
+    /// The second pass finds nothing left: resolveEmbeddings is idempotent.
     @Test
     void testASecondPassWiresNothingFurther(TestStore ts) throws Exception {
         try (Store store = Stores.create(ts.tempPath("emb2.lmdb"), ts.format)) {

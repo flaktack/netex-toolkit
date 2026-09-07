@@ -1,37 +1,11 @@
 package toolkit.codec;
 
-// JAXB bind events: the "raised and discarded" shape.
+// Regression test for toolkit.codec.BindEvents, the counting ValidationEventHandler installed on
+// FragmentCodec.decode and NetexLoader.loadStream.
 //
-// FragmentCodec.decode and NetexLoader.loadStream both bound values with NO
-// ValidationEventHandler installed. Every source value that failed to parse into the type its
-// field is bound to was therefore raised by the JAXB RI and dropped: the field was left empty and
-// nothing said so.
-//
-// WHY THIS TEST EXISTS RATHER THAN A REPORT. The fix is a COUNTING handler, and the argument that
-// it is safe to install one is that it does not change any verdict. That argument rests on six
-// numbers — what the RI's own default handler returns for each severity on each side — which a
-// jaxb-runtime bump could change. So they are measured here, at every build, instead of quoted:
-//
-//     unmarshal default:  WARNING -> true    ERROR -> true    FATAL_ERROR -> false
-//     marshal   default:  WARNING -> false   ERROR -> false   FATAL_ERROR -> false
-//
-// The unmarshal ERROR row IS the defect: the RI decided to continue, and with no handler nobody
-// was told. The marshal row is why the marshal side was never silent — an event there is already
-// an exception — and therefore why this is a decode-and-load fix that instruments marshal only
-// for attribution.
-//
-// WHAT THIS FILE PINS:
-//   1. those six verdicts, read off the running jaxb-runtime;
-//   2. that BindEvents returns EXACTLY what the handler it wrapped returns, severity by severity
-//      — a property of the construction, not a claim;
-//   3. that decoding <gml:posList>None</gml:posList> still yields the same bean it yielded before
-//      (empty list, no throw) AND now yields a count attributed to the class, the element and the
-//      cause;
-//   4. that the tally is BOUNDED — 500 bad decodes produce 500 counted events and ONE site, which
-//      is why this is not a ValidationEventCollector;
-//   5. that the loader arm counts too, labelled with the stream it was reading — the "per feed"
-//      axis;
-//   6. that clean data counts nothing at all.
+// Both arms bind <gml:posList>None</gml:posList>: the RI raises an ERROR, continues, and leaves the
+// posList empty. The bean must stay exactly what it was; what is new is the count, and its
+// attribution to the class, the offending element and the cause.
 
 import jakarta.xml.bind.Marshaller;
 import jakarta.xml.bind.Unmarshaller;
@@ -82,8 +56,8 @@ public class TestBindEvents {
 
     // ------------------------------------------------------------------ 1. the six verdicts
 
-    /// The RI's own default handlers, measured. If a jaxb-runtime bump moves any of these six, the
-    /// argument moves with it and this is the only thing that would say so.
+    /// The RI's own default handlers, measured rather than quoted: a jaxb-runtime bump could move
+    /// any of these six.
     @Test
     void testRiDefaultVerdictsAreWhatTheFixAssumes() throws Exception {
         Unmarshaller u = FragmentCodec.packageContext().createUnmarshaller();
@@ -104,8 +78,7 @@ public class TestBindEvents {
                 "marshal default ABORTS on FATAL_ERROR");
     }
 
-    /// Delegation by construction: whatever the wrapped handler decides, BindEvents decides. A
-    /// handler that answered "true" on its own would be MORE tolerant than the RI on a fatal error.
+    /// Delegation by construction: whatever the wrapped handler decides, BindEvents decides.
     @Test
     void testHandlerDelegatesEveryVerdictAndCountsEveryEvent() {
         BindEvents.reset();
@@ -123,10 +96,7 @@ public class TestBindEvents {
 
     // ------------------------------------------------------------------ 2. the decode arm
 
-    /// The fragment through the real codec. The BEAN must be exactly what it was before —
-    /// that is the unchanged half — and the COUNT must be exactly one, attributed to the class, the
-    /// offending element and the cause. That attribution is not inferred: the element name is read
-    /// off the StAX reader the RI is standing on when the event fires.
+    /// The fragment through the real codec.
     @Test
     void testDecodeCountsTheLostPosListWithoutChangingTheBean() {
         BindEvents.reset();
@@ -154,7 +124,6 @@ public class TestBindEvents {
         BindEvents.reset();
     }
 
-    /// Clean data must count nothing.
     @Test
     void testCleanDataCountsNothing() {
         BindEvents.reset();
@@ -166,9 +135,7 @@ public class TestBindEvents {
         BindEvents.reset();
     }
 
-    /// THE reason this is not a ValidationEventCollector: the collector retains one event object
-    /// per event. This retains a bounded tally, so 500 identical failures cost one map entry and
-    /// three sample strings.
+    /// A ValidationEventCollector retains one event object per event; this retains a bounded tally.
     @Test
     void testTheTallyIsBoundedNotAccumulated() {
         BindEvents.reset();
@@ -185,14 +152,13 @@ public class TestBindEvents {
 
     // ------------------------------------------------------------------ 3. the load arm
 
-    /// The loader is the FIRST place a source value is bound, and it had no handler either. The
-    /// scope here is the stream label, which is what makes the report per-feed.
+    /// The loader is the first place a source value is bound; the scope here is the stream label.
     @Test
     void testLoaderCountsAndLabelsWithTheStream(TestStore db) throws Exception {
         BindEvents.reset();
         db.loadNetex(FRAME_NONE);
-        // Snapshot BEFORE anything reads the store back: the load and the read-back are two
-        // separate binding sites and the whole point of the scope axis is that they are told apart.
+        // Snapshot before anything reads the store back: the load and the read-back are two
+        // separate binding sites, which the scope axis tells apart.
         List<Map.Entry<BindEvents.Site, Long>> afterLoad = BindEvents.sites();
         long loadTotal = BindEvents.total();
 
@@ -210,7 +176,7 @@ public class TestBindEvents {
         Check.equals("ServiceLink", s.clazz(), "attributed to the loaded class");
         Check.that(s.element().endsWith("posList"), "and to the offending element: " + s.element());
 
-        // Reading the same object back through the codec raises it a SECOND time, under its own
+        // Reading the same object back through the codec raises it a second time, under its own
         // scope: the same value costs one event per bind.
         Check.equals(2L, BindEvents.total(), "load + read-back = two binds, two events");
         Check.equals(2, BindEvents.sites().size(), "under two distinguishable sites");

@@ -1,32 +1,20 @@
 package toolkit.load;
 
-// Regression test for the loader's attribute denormalisation, which was once applied at the
-// fragment ROOT only for three of its four arms. TestLoaderSrsName covers the srsName arm; this
-// file covers the other four.
+// Regression test for the loader's attribute denormalisation. TestLoaderSrsName covers the srsName
+// arm; this file covers the other four.
 //
-// THE RULE, per arm:
+// The rule, per arm:
 //
-//   1. id      every element whose LOCAL name is in all_with_id and that has no no-namespace `id`,
-//              AT ANY DEPTH, gets the nearest id-bearing ANCESTOR's id with that ancestor's element
-//              name textually replaced by ours. NOT gated on FrameDefaults.
+//   1. id      every element whose local name is in all_with_id and that has no no-namespace `id`,
+//              at any depth, gets the nearest id-bearing ancestor's id with that ancestor's element
+//              name textually replaced by ours. Not gated on FrameDefaults.
 //   2. version every element in all_with_version with no `version`, at any depth: the nearest
-//              enclosing version if the element is ALSO in all_with_id, otherwise the literal
-//              "any" — which is the case for every *Ref. NOT gated on FrameDefaults.
+//              enclosing version if the element is also in all_with_id, otherwise the literal
+//              "any" — which is the case for every *Ref. Not gated on FrameDefaults.
 //   3. dataSourceRef        every element in all_datasource_refs (= classes derived from
 //              DataManagedObjectStructure) with none of its own, at any depth, when the enclosing
 //              frame's <FrameDefaults><DefaultDataSourceRef> is set.
 //   4. responsibilitySetRef same, from <DefaultResponsibilitySetRef>.
-//
-// Two traps this test pins down, both of which produce a Java-only attribute if got wrong:
-//
-//   * arm 4's NAME SET. The rule tests allResponsibilitySetRefs = classes derived from
-//     EntityInVersionStructure, which is WIDER than DataManagedObjectStructure — but
-//     responsibilitySetRef is declared on DataManagedObjectStructure, so for the difference
-//     (TimetabledPassingTime, StopPointInJourneyPattern, Call, …) the attribute is dropped on
-//     unmarshal and never reaches the stored object. What is STORED is the DataManagedObject set,
-//     for both arms.
-//   * arm 1 and GML. all_with_id contains LineString/Polygon/MultiSurface/… because they carry
-//     gml:id; the rule writes a NO-NAMESPACE `id` onto them, which is likewise dropped.
 
 import noi.netex.model.ServiceJourneyPattern;
 import noi.netex.model.StopPlace;
@@ -53,7 +41,7 @@ public class TestLoaderDenormalisation {
     /// Everything nested: the journey pattern's RouteView carries neither id nor version, its
     /// StopPointInJourneyPattern carries neither, the refs carry no version, and the StopPlace's
     /// Quay/Level carry no dataSourceRef/responsibilitySetRef. The frame version is 7 and the two
-    /// objects' versions are 3 and 5, so an arm that reads the WRONG stack level is visible.
+    /// objects' versions are 3 and 5, so an arm that reads the wrong stack level is visible.
     static final String NESTED = """
         <ServiceFrame id="test:ServiceFrame:1" version="7">
           __DEFAULTS__
@@ -147,15 +135,12 @@ public class TestLoaderDenormalisation {
         db.loadNetex(with(NESTED));
 
         String sjp = fragmentOf(db, ServiceJourneyPattern.class);
-        // RouteView: enclosing id "test:ServiceJourneyPattern:1" with "ServiceJourneyPattern"
-        // textually replaced by "RouteView".
         Check.that(sjp.contains("<RouteView id=\"test:RouteView:1\""),
                 "nested RouteView gets the enclosing id with its own element name substituted");
         Check.that(sjp.contains("<StopPointInJourneyPattern order=\"1\" id=\"test:StopPointInJourneyPattern:1\""),
                 "nested StopPointInJourneyPattern gets one too, after the source attributes");
 
-        // The bean sees the same thing: the attribute is injected into the READER, not patched onto
-        // the fragment afterwards.
+        // The attribute is injected into the reader, not patched onto the fragment afterwards.
         ServiceJourneyPattern bean = Gen.byId(db, ServiceJourneyPattern.class).get("test:ServiceJourneyPattern:1");
         Check.equals("test:RouteView:1", bean.getRouteView().getId(),
                 "the BOUND BEAN carries the synthesized nested id");
@@ -163,8 +148,6 @@ public class TestLoaderDenormalisation {
 
     @Test
     void testNestedIdIsSynthesizedWithoutFrameDefaultsToo(TestStore db) throws Exception {
-        // The id/version arms are in the `start` branch and have NO FrameDefaults gate, unlike the
-        // two ref arms and srsName: a feed with no FrameDefaults still gets them.
         db.loadNetex(without(NESTED));
 
         String sjp = fragmentOf(db, ServiceJourneyPattern.class);
@@ -174,12 +157,10 @@ public class TestLoaderDenormalisation {
                 "no FrameDefaults: the version arm still fires too");
     }
 
-    /// ARM 1 ON AN OBJECT THAT BECOMES ITS OWN ROW. Every other case in this file is an element
-    /// nested inside a fragment, where the synthesized id is only ever read back out of the stored
-    /// bytes. A frame-level ValidBetween declares no id either, but it IS a registered class, so the
-    /// loader stores it — and then the synthesized id is the key the row is filed under. A store
-    /// that captured the fragment correctly but keyed the row from the raw (absent) id would be
-    /// indistinguishable from a correct one until something tried to look it up.
+    /// Arm 1 on an object that becomes its own row. A frame-level ValidBetween declares no id and
+    /// is a registered class, so the loader stores it and the synthesized id is the key the row is
+    /// filed under — everywhere else in this file the synthesized id is only read back out of the
+    /// stored bytes.
     @Test
     void testAnIdlessTopLevelObjectIsKeyedByItsSynthesizedId(TestStore db) throws Exception {
         db.loadNetex("""
@@ -195,8 +176,6 @@ public class TestLoaderDenormalisation {
             """);
 
         try (Txn tx = db.store.roTxn()) {
-            // The id is the frame's with "ServiceFrame" replaced by "ValidBetween"; the version is
-            // the frame's, taken off the enclosing version stack rather than defaulted.
             long fk = db.store.lookupFullKey(tx, "test:ValidBetween:1", "7", ValidBetween.class);
             Check.that(fk != -1, "the row is filed under the SYNTHESIZED (id, version)");
             ValidBetween vb = (ValidBetween) db.store.loadObjectByFullKey(tx, fk);
@@ -210,8 +189,9 @@ public class TestLoaderDenormalisation {
 
     @Test
     void testGmlGeometryDoesNotGetAPlainId(TestStore db) throws Exception {
-        // LineString is in allWithId because it carries gml:id, so the rule writes a NO-NAMESPACE
-        // id onto it — dropped, the bound field being {gml}id. Ours must not carry it either.
+        // all_with_id contains LineString/Polygon/MultiSurface/… because they carry gml:id, so the
+        // rule writes a no-namespace id onto them, which unmarshal drops: the bound field is
+        // {gml}id. Ours must not carry one either.
         db.loadNetex(with(GEOMETRY));
 
         String link = fragmentOf(db, noi.netex.model.ServiceLink.class);
@@ -228,14 +208,11 @@ public class TestLoaderDenormalisation {
         db.loadNetex(with(NESTED));
 
         String sjp = fragmentOf(db, ServiceJourneyPattern.class);
-        // id-bearing element -> the nearest ENCLOSING version, which is the pattern's 3, not the
-        // frame's 7 and not "any".
         Check.that(sjp.contains("<StopPointInJourneyPattern order=\"1\" id=\"test:StopPointInJourneyPattern:1\" version=\"3\""),
                 "an id-bearing nested element inherits the enclosing version");
-        // a *Ref is not in all_with_id, so it takes the literal "any"
         Check.that(sjp.contains("<ScheduledStopPointRef ref=\"test:ScheduledStopPoint:1\" version=\"any\"/>"),
                 "a nested ref with no version gets version=\"any\"");
-        // RouteView is in all_with_id but NOT in all_with_version: no version at all.
+        // RouteView is in all_with_id but not in all_with_version.
         Check.that(!sjp.contains("<RouteView id=\"test:RouteView:1\" version="),
                 "an element outside all_with_version gets no version");
     }
@@ -247,15 +224,15 @@ public class TestLoaderDenormalisation {
         db.loadNetex(with(NESTED));
 
         String sp = fragmentOf(db, StopPlace.class);
-        // On the ROOT the hoisted namespace declarations (normalization N1) sit between the
-        // source attributes and the synthesized ones, so match the tail only.
+        // On the root the hoisted namespace declarations (normalisation N1) sit between the source
+        // attributes and the synthesized ones, so match the tail only.
         Check.that(sp.startsWith("<StopPlace id=\"test:StopPlace:1\" version=\"5\" xmlns=")
                         && sp.contains("dataSourceRef=\"test:DataSource:ds\""
                                 + " responsibilitySetRef=\"test:Authority:rs\">"),
                 "the fragment ROOT gets both ref arms");
         Check.that(sp.contains("<Quay id=\"test:Quay:1\" version=\"5\""
                         + " dataSourceRef=\"test:DataSource:ds\" responsibilitySetRef=\"test:Authority:rs\">"),
-                "a NESTED Quay gets both ref arms — this is the 90,209-attribute path of EXPORT_AB §5.1");
+                "a NESTED Quay gets both ref arms — this is the 90,209-attribute path");
         Check.that(sp.contains("<Level id=\"test:Level:1\" version=\"5\""
                         + " dataSourceRef=\"test:DataSource:ds\" responsibilitySetRef=\"test:Authority:rs\">"),
                 "a nested Level gets them too");
@@ -267,13 +244,14 @@ public class TestLoaderDenormalisation {
 
     @Test
     void testRefArmsUseTheDataManagedObjectSetOnly(TestStore db) throws Exception {
-        // StopPointInJourneyPattern IS in allResponsibilitySetRefs (it derives from
-        // EntityInVersionStructure) but is NOT a DataManagedObject, so the injected
-        // responsibilitySetRef is dropped and none is stored. Ours must not invent one.
+        // The rule tests allResponsibilitySetRefs = classes derived from EntityInVersionStructure,
+        // which is wider than DataManagedObjectStructure. responsibilitySetRef is declared on
+        // DataManagedObjectStructure, so for the difference (TimetabledPassingTime,
+        // StopPointInJourneyPattern, Call, …) unmarshal drops the injected attribute and it never
+        // reaches the stored object. What is stored is the DataManagedObject set, for both arms.
         db.loadNetex(with(NESTED));
 
         String sjp = fragmentOf(db, ServiceJourneyPattern.class);
-        // The pattern itself IS a DataManagedObject, so it gets both — exactly once.
         Check.equals(1, sjp.split("responsibilitySetRef", -1).length - 1,
                 "responsibilitySetRef appears exactly once: on the ServiceJourneyPattern root, "
                         + "and on nothing inside it");

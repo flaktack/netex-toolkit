@@ -4,15 +4,11 @@ import toolkit.graph.Csr;
 
 import java.util.Iterator;
 
-/// **Role: the reference graph.** Resolved edges, unresolved rows, the CSR adjacency built over
-/// them, and the closure walk that turns a set of classes into the objects they reach.
+/// Role: the reference graph. Resolved edges, unresolved rows, the CSR adjacency built over them,
+/// and the closure walk that turns a set of classes into the objects they reach.
 ///
-/// It READS the edge index and does not maintain it: wiring an unresolved row into an edge is
-/// [StoreResolve]'s job, inserting is [ObjectWriter]'s. Edge state is the expensive thing in the
-/// store, and the streaming variants below exist so a read-only consumer can avoid materialising it.
-///
-/// [#fetchAllReferencesByClass] is the one method that hands back objects rather than
-/// keys, because its whole purpose is the export payload; it decodes only at emission.
+/// It reads the edge index and does not maintain it: wiring an unresolved row into an edge is
+/// [StoreResolve]'s job, inserting is [ObjectWriter]'s.
 public interface RefGraph {
 
     /// Every resolved reference edge as {referrer full_key, target full_key}.
@@ -21,18 +17,14 @@ public interface RefGraph {
     /// Every unresolved reference row.
     Iterable<UnresolvedRow> iterUnresolved(Txn txn);
 
-    /// [#iterEdges] again — **the same rows, in the same order** — but for a consumer that
-    /// intends to FILTER rather than to keep.
+    /// [#iterEdges] again — the same rows, in the same order — for a consumer that intends to
+    /// filter rather than to keep.
     ///
-    /// The contract is IDENTITY: it must yield exactly the sequence `iterEdges` yields on the same
+    /// The contract is identity: it must yield exactly the sequence `iterEdges` yields on the same
     /// `txn` — same pairs, same order, same tombstone exclusions — and nothing may branch on which
-    /// was called. Hence a `default` of literally `return iterEdges(txn)`; an override can buy only
-    /// a different MEMORY PROFILE.
+    /// was called. An override can buy only a different memory profile.
     ///
-    /// It exists because `iterEdges` is a view over materialised state — v2 concatenates every block
-    /// into slot arrays before the first pair comes out.
-    ///
-    /// An override may hold one block at a time and resolve side tables by point lookup. It may NOT
+    /// An override may hold one block at a time and resolve side tables by point lookup. It may not
     /// reorder: v2's block numbers are u32 LE in a byte-ordered map, so cursor order stops being
     /// numeric order past block 255, and [#fetchAllReferencesByClass]'s determinism is defined in
     /// terms of edge order.
@@ -44,17 +36,14 @@ public interface RefGraph {
 
     /// [#iterUnresolved] streamed, under the identity contract of [#scanEdges].
     ///
-    /// It trades memory for time, and unlike [#scanEdges] the trade is STEEP: an unresolved row's
-    /// target key is interned, so a streaming reader that does not hold the intern table pays one
-    /// point lookup per emitted row.
-    ///
-    /// So this is for a consumer that filters, stops early, or runs against a small unresolved set;
-    /// full enumeration of a large one is what [#iterUnresolved] is for.
+    /// An unresolved row's target key is interned, so a streaming reader that does not hold the
+    /// intern table pays one point lookup per emitted row. This is for a consumer that filters,
+    /// stops early, or runs against a small unresolved set.
     default Iterable<UnresolvedRow> scanUnresolved(Txn txn) {
         return iterUnresolved(txn);
     }
 
-    /// Forward+inverse CSR over the current edge set (A4), cached and invalidated by any edge mutation.
+    /// Forward+inverse CSR over the current edge set, cached and invalidated by any edge mutation.
     Csr csr(Txn txn);
 
     /// The reference-graph closure over the outward-edge index. Seeded from the OUTGOING edges of
@@ -64,7 +53,7 @@ public interface RefGraph {
     /// appears. Emission decodes each collected full_key; `skipExisting` drops in-set classes
     /// there, having collected them regardless during the seed pass.
     ///
-    /// Ordering is DETERMINISTIC — discovery order: the seed scan over the edge set in ascending
+    /// Ordering is deterministic — discovery order: the seed scan over the edge set in ascending
     /// unsigned full_key order, then per fixpoint round. Unresolved references contribute nothing;
     /// the closure walks the resolved edge index only. Single-use, bound to `txn`.
     Iterator<Object> fetchAllReferencesByClass(Txn txn, java.util.Set<Class<?>> clazzes, boolean skipExisting);

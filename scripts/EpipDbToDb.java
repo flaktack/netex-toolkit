@@ -1,10 +1,5 @@
 // CLI over toolkit.harness.EpipToDb: raw-clone the source database into the target, then run the
-// EPIP transformation on the target in place. The phase map, the no-resolve rule and the
-// same-format constraint are documented on EpipToDb, which is where the work is.
-//
-// This is the sandwich shape toolkit.harness describes: argument parsing, existence and format
-// checks, and one call. Everything the transformation does is in the library, so a driver in
-// another repository can run the identical path by calling EpipToDb.inPlace directly.
+// EPIP transformation on the target in place.
 
 import toolkit.harness.Args;
 import toolkit.harness.EpipToDb;

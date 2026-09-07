@@ -23,41 +23,33 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
-/// Child-element ORDER normalisation for stored fragments — the missing half of the fragment format.
+/// Child-element order normalisation for stored fragments.
 ///
 /// The fragment format stores the object's XML as captured from the source feed and the exporter
 /// copies those bytes straight into the zip, so the export inherits the source's child-element
-/// ORDER verbatim — and a source feed is free to be schema-invalid. Real feeds do emit inverted
-/// pairs, and the export then fails `cvc-complex-type.2.4.a`. Only XSD validation sees this: the
-/// export A/B declares element order a normalisation, the round-trip harness absorbs it, graph
-/// dumps carry only `Class|id|version`, and JAXB readers accept out-of-order children.
+/// order verbatim — and a source feed is free to be schema-invalid. Real feeds do emit inverted
+/// pairs, and the export then fails `cvc-complex-type.2.4.a`. Only XSD validation sees it; JAXB
+/// readers accept out-of-order children.
 ///
-/// **What this does.** [#normalise] takes a fragment and the class it was stored under, and returns
-/// the fragment with its TOP-LEVEL children stably reordered into the class's declared JAXB
-/// emission order — the order [FragmentCodec#marshalFragment] would have produced, which is the XSD
-/// sequence. Everything else is untouched: attributes, quoting, namespace declarations,
-/// inter-element whitespace positions and nested content are all byte-preserved, because the
-/// rewrite MOVES child spans rather than re-serialising anything. A fragment already in order is
-/// returned as the same array.
+/// [#normalise] takes a fragment and the class it was stored under, and returns the fragment with
+/// its top-level children stably reordered into the class's declared JAXB emission order, which is
+/// the XSD sequence. Attributes, quoting, namespace declarations, inter-element whitespace
+/// positions and nested content are byte-preserved: the rewrite moves child spans rather than
+/// re-serialising anything. A fragment already in order is returned as the same array.
 ///
-/// **What this deliberately does NOT do** (each case returns the fragment verbatim, and is
-/// counted in [#skipped()]):
+/// Three cases return the fragment verbatim and are counted in [#skipped()]:
 ///
 /// - a fragment containing a comment, CDATA section or processing instruction — the byte-level
-///    scan does not model those, so it declines rather than guesses;
+///    scan does not model those;
 /// - a fragment with a child whose element name the class does not declare — substitution-group
-///    members reached through `@XmlElementRef`, foreign-namespace children such as
-///    `gml:LineString`, anything the model spells differently. KNOWN GAP (OPEN.md §16): a journey's
-///    `ServiceJourneyPatternRef` substitutes for the declared `JourneyPatternRef`, so most journeys
-///    decline; closing it means resolving `@XmlElementDecl(substitutionHeadName)` into the rank
-///    table;
-/// - a class whose emission order is not statically knowable — `@XmlAnyElement` (wildcard
-///    content) or a name that two different properties both claim.
+///    members reached through `@XmlElementRef`, foreign-namespace children such as `gml:LineString`,
+///    anything the model spells differently. KNOWN GAP: a journey's `ServiceJourneyPatternRef`
+///    substitutes for the declared `JourneyPatternRef`, so most journeys decline; closing it means
+///    resolving `@XmlElementDecl(substitutionHeadName)` into the rank table;
+/// - a class whose emission order is not statically knowable — `@XmlAnyElement` (wildcard content)
+///    or a name that two different properties both claim.
 ///
-/// Declining is always safe.
-///
-/// Static: the counters are atomics, the rank cache is a [ConcurrentHashMap] and the scan is
-/// stateless.
+/// Thread-safe.
 public final class FragmentOrder {
 
     /// Sentinel rank map meaning "this class cannot be ordered statically".
@@ -76,7 +68,7 @@ public final class FragmentOrder {
         return REORDERED.get();
     }
 
-    /// Fragments left verbatim because they could not be ranked (see the class javadoc).
+    /// Fragments left verbatim because they could not be ranked.
     public static long skipped() {
         return SKIPPED.get();
     }
@@ -95,8 +87,8 @@ public final class FragmentOrder {
 
     // ------------------------------------------------------------------ the rank table
 
-    /// Element name -&gt; emission rank for the top-level children of `clazz`, or an EMPTY map
-    /// when the class cannot be ranked. Built once per class from the JAXB annotations the model was
+    /// Element name -&gt; emission rank for the top-level children of `clazz`, or an empty map when
+    /// the class cannot be ranked. Built once per class from the JAXB annotations the model was
     /// generated with, walking the superclass chain root-first because that is the order JAXB emits
     /// inherited content in.
     public static Map<String, Integer> ranks(Class<?> clazz) {
@@ -132,9 +124,9 @@ public final class FragmentOrder {
         return ranks.isEmpty() ? UNORDERABLE : Map.copyOf(ranks);
     }
 
-    /// The class's OWN element properties in emission order: `@XmlType(propOrder)` when it
-    /// declares one (XJC emits it whenever there is more than one property), otherwise declared
-    /// field order, which is what JAXB falls back to and what XJC's single-property classes carry.
+    /// The class's own element properties in emission order: `@XmlType(propOrder)` when it declares
+    /// one (XJC emits it whenever there is more than one property), otherwise declared field order,
+    /// which is what JAXB falls back to and what XJC's single-property classes carry.
     private static List<Field> orderedFields(Class<?> k) {
         XmlType xt = k.getDeclaredAnnotation(XmlType.class);
         String[] propOrder = xt == null ? null : xt.propOrder();
@@ -188,8 +180,8 @@ public final class FragmentOrder {
 
     // ------------------------------------------------------------------ the rewrite
 
-    /// The fragment with its top-level children in declared order — the SAME array when nothing
-    /// needed moving or when the fragment declined ranking (see the class javadoc).
+    /// The fragment with its top-level children in declared order — the same array when nothing
+    /// needed moving or when the fragment declined ranking.
     public static byte[] normalise(Class<?> clazz, byte[] fragment) {
         SEEN.incrementAndGet();
         Map<String, Integer> ranks = ranks(clazz);
@@ -220,7 +212,7 @@ public final class FragmentOrder {
         for (int i = 0; i < scan.count; i++) perm[i] = i;
         Arrays.sort(perm, (a, b) -> Integer.compare(rank[a], rank[b]));
 
-        // Rebuild by SLOT: the prefix, then child(perm[k]) followed by the gap that originally
+        // Rebuild by slot: the prefix, then child(perm[k]) followed by the gap that originally
         // followed slot k. Whitespace and the root's own tags therefore stay exactly where they
         // were; only the child spans move.
         byte[] out = new byte[fragment.length];
@@ -236,7 +228,7 @@ public final class FragmentOrder {
             System.arraycopy(fragment, gapFrom, out, p, gapTo - gapFrom);
             p += gapTo - gapFrom;
         }
-        if (p != fragment.length) {                // a guard before shipping bytes
+        if (p != fragment.length) {
             SKIPPED.incrementAndGet();
             return fragment;
         }
@@ -253,8 +245,8 @@ public final class FragmentOrder {
     }
 
     /// Byte-level scan for the root element's direct children. Returns null when the fragment holds
-    /// anything this scanner does not model (comment, CDATA, processing instruction, malformed tag)
-    /// — the caller then leaves the fragment alone.
+    /// anything this scanner does not model (comment, CDATA, processing instruction, malformed
+    /// tag) — the caller then leaves the fragment alone.
     private static Scan scan(byte[] b) {
         int n = b.length;
         int i = 0;
@@ -326,10 +318,10 @@ public final class FragmentOrder {
             }
             i = e;
         }
-        return curStart >= 0 ? null : s;              // an unclosed child means we mis-parsed
+        return curStart >= 0 ? null : s;              // an unclosed child: the scan mis-parsed
     }
 
-    /// Index just PAST the '&gt;' of the tag starting at `from`, or -1. Quote-aware.
+    /// Index just past the '&gt;' of the tag starting at `from`, or -1. Quote-aware.
     private static int tagEnd(byte[] b, int from) {
         int n = b.length;
         byte quote = 0;

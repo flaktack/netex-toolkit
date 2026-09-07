@@ -1,18 +1,8 @@
 package toolkit.codec;
 
-// The defect is JAXB-specific: JAXB marshals whatever is in a field, where a schema-aware
-// serializer skips a field equal to its declared default.
-//
-// Two arms, marshal-time omit-empty and marshal-time omit-default:
-//
-//   arm 1  an empty <DaysOfWeek></DaysOfWeek>, from an addAll of an empty list and from a
-//          create-on-get read of a bean that is then re-inserted
-//   arm 2  modification="new" status="active" publication="public" on projected objects
-//
-// The rule lives in toolkit/codec/SchemaDefaults, installed as a Marshaller.Listener by
-// FragmentCodec — the chokepoint every mutated or synthesized object passes through. It must also
-// strip values that arrived FROM THE SOURCE PARSE, which is the arm no getter-side or
-// post-processing fix can reach.
+// Regression test for toolkit.codec.SchemaDefaults, the Marshaller.Listener FragmentCodec installs.
+// Two arms: an empty <DaysOfWeek></DaysOfWeek>, and modification="new" status="active"
+// publication="public" on projected objects.
 //
 // NEUTER PROOF: comment out `marshaller.setListener(SchemaDefaults.LISTENER)` in
 // FragmentCodec.marshalFragment and all eight arm tests below fail;
@@ -68,9 +58,8 @@ public class TestSchemaDefaultsMarshal {
 
     // ------------------------------------------------------- arm 1: empty collections
 
-    /// The route no getter change can reach: `<DaysOfWeek></DaysOfWeek>` in the SOURCE
-    /// unmarshals to a non-null EMPTY `ArrayList`, and JAXB re-emits the element because
-    /// the field is non-null. A schema-aware serializer writes nothing.
+    /// `<DaysOfWeek></DaysOfWeek>` in the source unmarshals to a non-null empty `ArrayList`, and
+    /// JAXB re-emits the element because the field is non-null.
     @Test
     void testEmptyXmlListFromSourceParseIsOmitted() {
         String xml = reparse("""
@@ -84,8 +73,8 @@ public class TestSchemaDefaultsMarshal {
                 "the PropertyOfDay itself survives: " + xml);
     }
 
-    /// The dominant shape: `getDaysOfWeek().addAll(empty)`
-    /// materialises the list on the bean, and the bean then marshals an empty element.
+    /// `getDaysOfWeek().addAll(empty)` materialises the list on the bean, and the bean then
+    /// marshals an empty element.
     @Test
     void testEmptyXmlListFromCreateOnGetAccessorIsOmitted() {
         UicOperatingPeriod uop = new UicOperatingPeriod();
@@ -100,8 +89,8 @@ public class TestSchemaDefaultsMarshal {
 
     // ------------------------------------------------- arm 2: scalars equal to their default
 
-    /// The other route no getter change can reach: the source SPELLS OUT the schema defaults. JAXB
-    /// parses them into real fields and re-emits them.
+    /// The source spells the schema defaults out; JAXB parses them into real fields and re-emits
+    /// them.
     @Test
     void testSchemaDefaultAttributesFromSourceParseAreOmitted() {
         String xml = reparse("""
@@ -118,7 +107,7 @@ public class TestSchemaDefaultsMarshal {
         Check.that(xml.contains("<Name>Weekdays</Name>"), "content is untouched: " + xml);
     }
 
-    /// [NetexUtils#project] copies JAXB's DEFAULTED GETTERS into real target FIELDS, so the
+    /// [NetexUtils#project] copies JAXB's defaulted getters into real target fields, so the
     /// projected bean marshals three attributes that must never be emitted.
     @Test
     void testSchemaDefaultAttributesFromGetterToFieldCopyAreOmitted() {
@@ -140,10 +129,10 @@ public class TestSchemaDefaultsMarshal {
 
     // ------------------------------------------------------------- reach: nested + JAXBElement
 
-    /// The listener must reach every bean in the tree, not just the root — including beans that
-    /// are only reachable through a wildcarded `List<JAXBElement<?>>` element-ref field
-    /// (`ServiceJourney/calls/Call`), and `@XmlValue`-only leaf types, whose text
-    /// must survive untouched.
+    /// The listener must reach every bean in the tree, not just the root — including beans only
+    /// reachable through a wildcarded `List<JAXBElement<?>>` element-ref field
+    /// (`ServiceJourney/calls/Call`), and `@XmlValue`-only leaf types, whose text must survive
+    /// untouched.
     @Test
     void testNestedAndJaxbElementChildrenAreNormalised() {
         String xml = reparse("""
@@ -175,10 +164,10 @@ public class TestSchemaDefaultsMarshal {
 
     // ------------------------------------------------------------------ the guard rails
 
-    /// The rule strips ONLY the declared default. A non-default value of the same field, and a
-    /// field that has no schema default at all, must both survive — including
-    /// `<isAvailable>true</isAvailable>`, whose value looks like a default but is not one
-    /// (the XSD declares none, so xjc generated a plain, non-defaulting getter).
+    /// The rule strips only the declared default. A non-default value of the same field, and a
+    /// field with no schema default at all, must both survive — including
+    /// `<isAvailable>true</isAvailable>`, whose value looks like a default but is not one (the XSD
+    /// declares none, so xjc generated a plain, non-defaulting getter).
     @Test
     void testNonDefaultValuesAndUndefaultedFieldsSurvive() {
         String xml = reparse("""
@@ -214,25 +203,19 @@ public class TestSchemaDefaultsMarshal {
         }
     }
 
-    /// The rule set is DERIVED from a virgin instance, never written down: a field is "defaulted"
-    /// exactly when it is null on a virgin bean while its accessor returns non-null. This pins
-    /// that derivation against the model as generated — if netex-model is regenerated from a
-    /// newer schema the table follows automatically, and this test says what it currently finds.
+    /// The rule set is derived from a virgin instance: a field is "defaulted" exactly when it is
+    /// null on a virgin bean while its accessor returns non-null. Pinned against the model as
+    /// generated, so a netex-model regenerated from a newer schema moves the table and this test
+    /// with it.
     ///
-    /// **`@publication` is the one row the 2.0 flip deleted.** NeTEx 2.0 drops `publication` from
+    /// `@publication` is the row the 2.0 flip deletes: NeTEx 2.0 drops `publication` from
     /// `BasicModificationDetailsGroup`, i.e. from `EntityInVersionStructure`, the base class of
-    /// every versioned NeTEx entity. It is a REMOVED census row rather than a changed cell, and it
-    /// is an ATTRIBUTE, so the element-QName census does not carry it either.
+    /// every versioned NeTEx entity. It is a removed census row rather than a changed cell, and an
+    /// attribute, so the element-QName census does not carry it either.
     ///
-    /// The assertion is therefore VERSION-AWARE rather than deleted, and deliberately not weakened
-    /// to "if it is there, fine". The model is asked a DIFFERENT question from the one
-    /// [SchemaDefaults#rulesFor] asks — "does the generated bean bind `getPublication()` at all"
-    /// against "is this field null on a virgin bean while its accessor answers non-null" — and the
-    /// two must agree. A version that binds the field WITHOUT a schema default still fails here.
-    ///
-    /// CONSEQUENCE: at 1.15.2 `SchemaDefaults` strips `publication="public"` as a declared default
-    /// and lets a non-default value through; at 2.0 there is no field, so a non-default
-    /// `publication` on a RE-MARSHALLED object is lost silently.
+    /// At 1.15.2 `SchemaDefaults` strips `publication="public"` as a declared default and lets a
+    /// non-default value through; at 2.0 there is no field, so a non-default `publication` on a
+    /// re-marshalled object is lost silently.
     @Test
     void testDerivedRuleSetTracksTheModel() {
         Map<String, Object> dt = SchemaDefaults.rulesFor(DayType.class);
@@ -241,8 +224,8 @@ public class TestSchemaDefaultsMarshal {
         Check.equals(StatusEnumeration.ACTIVE, dt.get("status_BasicModificationDetailsGroup"),
                 "status' default is derived from the getter");
 
-        // The discriminator itself: `binds` must be able to answer BOTH ways,
-        // or "2.0 does not bind publication" would be indistinguishable from "binds() is broken".
+        // `binds` must be able to answer both ways, or "2.0 does not bind publication" would be
+        // indistinguishable from "binds() is broken".
         Check.that(binds(DayType.class, "getModification"),
                 "binds() finds an accessor the model certainly has (guards the two arms below)");
         Check.that(!binds(DayType.class, "getNoSuchAccessorAnywhere"),
@@ -301,8 +284,8 @@ public class TestSchemaDefaultsMarshal {
                 .getPointInJourneyPatternOrStopPointInJourneyPatternOrTimingPointInJourneyPattern();
         Check.equals(2, points.size(), "two projected points");
 
-        // Asserted on the WHOLE pattern: the points are nested inside it in the export, so the
-        // fix has to hold through the container, not only on a marshalled leaf.
+        // Asserted on the whole pattern: the points are nested inside it in the export, so the rule
+        // has to hold through the container, not only on a marshalled leaf.
         String xml = Xml.toXml(sjp);
         Check.that(!xml.contains("modification="), "no modification anywhere in the pattern: " + xml);
         Check.that(!xml.contains("status="), "no status anywhere in the pattern: " + xml);
@@ -311,8 +294,8 @@ public class TestSchemaDefaultsMarshal {
                 "the projected points keep their order: " + xml);
     }
 
-    // A national-holiday DayType whose single PropertyOfDay has NO DaysOfWeek. EpipCalendar READS
-    // getDaysOfWeek() on that bean to build the rrule byweekday set, which CREATES the empty list
+    // A national-holiday DayType whose single PropertyOfDay has no DaysOfWeek. EpipCalendar reads
+    // getDaysOfWeek() on that bean to build the rrule byweekday set, which creates the empty list
     // on a bean it is about to re-insert.
     private static final String CALENDAR_FIXTURE = """
         <ServiceCalendarFrame id="scf" version="1">
@@ -361,7 +344,7 @@ public class TestSchemaDefaultsMarshal {
                 "the re-emitted DayType must carry no empty <DaysOfWeek/>");
     }
 
-    /// Belt and braces: the JAXBElement wrapper itself must never be normalised or damaged.
+    /// The JAXBElement wrapper itself must never be normalised or damaged.
     @Test
     void testJaxbElementWrapperIsUntouched() {
         Call c = new Call();

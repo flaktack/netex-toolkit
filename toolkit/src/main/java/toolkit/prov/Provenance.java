@@ -21,15 +21,14 @@ import java.util.TreeSet;
 
 /// The provenance sidecar: `<store-dir>/.provenance.json`.
 ///
-/// OUTSIDE LMDB, deliberately: verdicts here are byte comparisons of the store itself, and the
-/// on-disk format may not move a byte to accommodate a debugging aid. A sidecar file next to
-/// `data.mdb` is invisible to every such comparison — LMDB ignores unknown files in the directory —
-/// and travels with the directory through `mv`, `rm -rf` and `Stores.destroy`.
+/// The sidecar sits outside LMDB: a file next to `data.mdb` is invisible to a byte comparison of the
+/// store itself — LMDB ignores unknown files in the directory — and travels with the directory
+/// through `mv`, `rm -rf` and `Stores.destroy`.
 ///
-/// MINIMUM, not union: a merged store is only as capable as its least capable input, so
-/// [#mergeFrom] intersects. A union would call a store current because two of its three inputs were.
+/// A merged store is only as capable as its least capable input, so [#mergeFrom] intersects rather
+/// than unions.
 ///
-/// **Absence means UNKNOWN, never FINE.** A store directory with no sidecar, or one whose lineage
+/// Absence means unknown, not fine: a store directory with no sidecar, or one whose lineage
 /// includes a store with no sidecar, is marked `caps_known:false` and every check refuses it.
 ///
 /// Disabled entirely by `-Dtoolkit.prov=off`.
@@ -83,13 +82,13 @@ public final class Provenance {
 
     // ------------------------------------------------------------------ write (production hooks)
 
-    /// Call site 1 + 2, from [toolkit.store.Stores]: a store has just been opened READ-WRITE.
+    /// Stamps a store that has just been opened read-write.
     ///
     /// @param freshDb true when `data.mdb` did not exist before this open — i.e. the running
     ///                code wrote every byte in it, so its capability set is the running set. False
     ///                for a pre-existing store being modified, whose content is a mix and whose
-    ///                effective set is therefore the INTERSECTION with whatever was there before —
-    ///                or UNKNOWN if there was no sidecar to intersect with.
+    ///                effective set is therefore the intersection with whatever was there before —
+    ///                or unknown if there was no sidecar to intersect with.
     public static void stampOpen(Path dir, boolean freshDb) {
         if (!ENABLED) return;
         Prov p = read(dir);
@@ -124,7 +123,7 @@ public final class Provenance {
     }
 
     /// Fragments have just been copied verbatim out of `sourceDir`, so the target is only as
-    /// capable as the source it inherited bytes from: take the MINIMUM, and inherit "unknown" when
+    /// capable as the source it inherited bytes from: take the minimum, and inherit "unknown" when
     /// the source has no sidecar.
     public static void mergeFrom(Path targetDir, Path sourceDir) {
         if (!ENABLED) return;
@@ -162,8 +161,7 @@ public final class Provenance {
     /// here is its capability set." Recorded as `kind:"attested"` with a mandatory reason and
     /// printed loudly by `nx prov check`, so it does not look like a measurement.
     ///
-    /// Intersects with anything already recorded — attesting can only ever LOWER a set, so a
-    /// mis-attestation cannot launder a store the machinery already knows is stale.
+    /// Intersects with anything already recorded: attesting can only ever lower a set.
     public static void attest(Path dir, Set<String> caps, String why) {
         if (why == null || why.isBlank()) throw new IllegalArgumentException("attest requires --why");
         for (String c : caps) {
@@ -217,8 +215,8 @@ public final class Provenance {
     // ------------------------------------------------------------------ internals
 
     /// Cap on the lineage list: an uncapped union grows to thousands of rows and is rewritten once
-    /// per source. The capability set — the only thing any gate reads — is a fold and does not
-    /// depend on the list, so the narrative is capped and the elision recorded.
+    /// per source. The capability set is a fold and does not depend on the list, so the narrative is
+    /// capped and the elision recorded.
     static final int MAX_WRITERS = Conf.intOf(Conf.PROV_MAX_WRITERS);
 
     private static Set<String> intersect(Set<String> a, Set<String> b) {
@@ -238,7 +236,7 @@ public final class Provenance {
         return Instant.now().toString();
     }
 
-    /// The launched main class or script path. Every driver here is an UNCOMPILED `.java` script,
+    /// The launched main class or script path. Every driver here is an uncompiled `.java` script,
     /// for which `sun.java.command` reads `jdk.compiler/…SourceLauncher <script> <args…>`, so the
     /// launcher is stripped and the script path is reported.
     private static String tool() {
@@ -505,7 +503,7 @@ public final class Provenance {
         }
     }
 
-    /// Unmodifiable view helper used by callers that render a verdict.
+    /// The running jar's capability set, unmodifiable.
     public static Set<String> running() {
         return Collections.unmodifiableSet(Capabilities.current());
     }

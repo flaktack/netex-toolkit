@@ -11,13 +11,13 @@ import java.util.List;
 /// Zero-infra test runner for source-launched test scripts. A test class exposes
 /// `public static void test*(TestStore)` methods (or no-arg `test*()` for pure tests).
 ///
-/// One format, one run per test. The `FORMATS` array is the seam a second format would re-enter
-/// through, and the format column stays in the output so transcripts line up row for row.
+/// One format, one run per test; the format column stays in the output so transcripts line up row
+/// for row.
 ///
 /// Script usage: {@code void main(String[] args) { Runner.run(MyTest.class); }} — or an aggregate
 /// script passing several classes. Exits non-zero on any failure.
 ///
-/// [#run] is the script entry point and EXITS the JVM. [#runReporting] is the same run without the
+/// [#run] is the script entry point and exits the JVM. [#runReporting] is the same run without the
 /// exit, for a host running several test classes in one JVM that must still see the ones after a
 /// failure. The transcript is identical either way.
 public final class Runner {
@@ -27,18 +27,15 @@ public final class Runner {
     /// The on-disk formats every store-taking test is run against.
     private static final String[] FORMATS = {Stores.V2};
 
-    /// What a run counted: `tests` test RUNS attempted, `failures` of them failed.
+    /// What a run counted: `tests` test runs attempted, `failures` of them failed.
     public record Tally(int tests, int failures) {}
 
     public static void run(Class<?>... testClasses) {
         if (runReporting(testClasses).failures() > 0) System.exit(1);
     }
 
-    /// Same transcript as [#run], but RETURNS the counts instead of exiting. The only per-JVM state
+    /// Same transcript as [#run], but returns the counts instead of exiting. The only per-JVM state
     /// in play is the JAXB context and the reflection caches.
-    ///
-    /// Returning the counts means a batched host never has to redirect `System.out`, which would
-    /// put the runner in the way of every driver's logging.
     public static Tally runReporting(Class<?>... testClasses) {
         // Small v2 edge blocks, so the dirty-block machinery crosses block boundaries at test scale
         // (production default is 65,536 pairs). Suite-wide, because a test that never reaches a

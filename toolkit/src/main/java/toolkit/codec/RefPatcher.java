@@ -25,25 +25,21 @@ import toolkit.util.Log;
 ///
 /// Resolve repairs a reference by setting `version` and/or `nameOfRefClass` and then persisting
 /// the object. Persisting through a full re-marshal, to change one start-tag attribute, is where
-/// stored-fragment loss comes from.
+/// stored-fragment loss comes from. [#patch] instead rewrites exactly the affected start tags and
+/// passes every other character through verbatim: the parser only locates element boundaries, via
+/// Woodstox [LocationInfo] character offsets, and nothing outside a patched start tag is rewritten,
+/// so text, CDATA, comments, entity references and attribute order survive byte for byte.
 ///
-/// So: rewrite exactly the affected start tags and pass every other character through verbatim.
-/// Deliberately NOT a re-serialisation — the parser only LOCATES element boundaries via Woodstox
-/// [LocationInfo] character offsets, and nothing outside a patched start tag is rewritten, so no
-/// escaping, quoting, empty-element, whitespace or namespace normalisation can be applied by
-/// accident. Text, CDATA, comments, entity references and attribute order survive byte for byte.
+/// Matching is by the triple (`@ref`, `@version`, `@nameOfRefClass`) as it appears in the fragment,
+/// on any element carrying an unqualified `ref` attribute, in any namespace and under any element
+/// name — NeTEx spreads `*Ref` elements over several namespaces and the resolve code never looks at
+/// the element name either. Every element matching a patched triple is patched, as the bean-side
+/// repair does.
 ///
-/// MATCHING is by the triple (`@ref`, `@version`, `@nameOfRefClass`) as it appears in the
-/// fragment, on any element carrying an unqualified `ref` attribute, in any namespace and under
-/// any element name — NeTEx spreads `*Ref` elements over several namespaces and the resolve code
-/// never looks at the element name either. EVERY element matching a patched triple is patched,
-/// which is what the bean-side repair does.
-///
-/// SAFETY: [#patch] returns `null` — meaning "fall back to the re-marshal" — when the fragment is
-/// not well-formed, contains a CR (whose line-ending normalisation moves the parser's offsets off
-/// the raw text), has a located start tag that does not scan as one, or when ANY requested patch
-/// failed to land on at least one element. That last check turns "the stored bytes carry exactly
-/// the repairs the bean carries" into a verified property.
+/// [#patch] returns `null` — meaning "fall back to the re-marshal" — when the fragment is not
+/// well-formed, contains a CR (whose line-ending normalisation moves the parser's offsets off the
+/// raw text), has a located start tag that does not scan as one, or when any requested patch failed
+/// to land on at least one element.
 public final class RefPatcher {
 
     /// A reference as it appears in the stored fragment. `null` = attribute absent.
@@ -56,8 +52,7 @@ public final class RefPatcher {
     private static final String A_VERSION = "version";
     private static final String A_NAME = "nameOfRefClass";
 
-    /// Woodstox: the StAX implementation here that reports per-event input offsets, which [#patch]
-    /// cannot be written without.
+    /// Woodstox: the only StAX implementation here that reports per-event input offsets.
     private final WstxInputFactory wif = Stax.offsetFactory();
 
     /// Aalto — `FragmentCodec.decode`'s reader, used by [#scan] (no offsets needed).
@@ -89,25 +84,20 @@ public final class RefPatcher {
         return oddlyNamed;
     }
 
-    /// One reference element as the fragment carries it: the three attributes [#patch] keys
-    /// on, plus where it sits (`element` local name, `depth` 0 = fragment root).
+    /// One reference element as the fragment carries it: the three attributes [#patch] keys on,
+    /// plus where it sits (`element` local name, `depth` 0 = fragment root).
     public record Occurrence(String ref, String version, String nameOfRefClass, String element,
                              int depth) {}
 
-    /// Read every reference element of `xml`, in document order — the READ half of what [#patch]
-    /// does, with the attribute rule shared literally ([#triple]).
+    /// Read every reference element of `xml`, in document order, keying on the same attributes
+    /// [#patch] does ([#triple]).
     ///
-    /// Values are RAW attribute strings, exactly as [#patch] keys on them, so a caller comparing
-    /// against bean fields must apply the model's adapters — only `nameOfRefClass` is adapted;
-    /// `ref` and `version` bind verbatim.
+    /// Values are raw attribute strings, so a caller comparing against bean fields must apply the
+    /// model's adapters — only `nameOfRefClass` is adapted; `ref` and `version` bind verbatim.
     ///
-    /// The element set is a SUPERSET of what JAXB binds: anything with an unqualified `ref`
-    /// attribute is reported, pruned packages and the fragment root included. Deliberate — a
-    /// "can this possibly change?" filter may over-report and must never miss a bound reference.
-    ///
-    /// Parsed with the SAME StAX implementation `FragmentCodec.decode` feeds JAXB, not the
-    /// Woodstox instance [#patch] needs: these values are compared against unmarshalled bean
-    /// fields, so it is the decoder's attribute handling that must match.
+    /// The element set is a superset of what JAXB binds: anything with an unqualified `ref`
+    /// attribute is reported, pruned packages and the fragment root included. It may over-report
+    /// and must never miss a bound reference.
     ///
     /// @return one [Occurrence] per reference element (null attribute = absent), or
     ///     `null` if the fragment is not well-formed
@@ -134,11 +124,11 @@ public final class RefPatcher {
         return out;
     }
 
-    /// The reference triple of the START_ELEMENT the reader is positioned on, or `null` if
-    /// the element carries no unqualified `ref` attribute. (Slot 3 is left for the caller's
-    /// element name; [#patch] does not use it.)
+    /// The reference triple of the START_ELEMENT the reader is positioned on, or `null` if the
+    /// element carries no unqualified `ref` attribute. (Slot 3 is left for the caller's element
+    /// name; [#patch] does not use it.)
     ///
-    /// Only attributes with NO namespace count: `getAttributeValue(null, name)` would match ANY
+    /// Only attributes in no namespace count: `getAttributeValue(null, name)` would match any
     /// namespace and would read, say, `gml:id` where `id` was meant. JAXB binds these attributes
     /// unqualified, so an unqualified-only scan is what mirrors it.
     private static String[] triple(XMLStreamReader r) {
@@ -169,7 +159,7 @@ public final class RefPatcher {
     public byte[] patch(byte[] xml, Map<Key, Val> patches) {
         if (patches.isEmpty()) return null;
         for (byte b : xml) {
-            if (b == '\r') { refusals[0]++; return null; } // javadoc: CR moves the parser's offsets
+            if (b == '\r') { refusals[0]++; return null; } // CR moves the offsets off the raw text
         }
         String s = new String(xml, StandardCharsets.UTF_8);
         List<int[]> spans = new ArrayList<>();   // {start, end} of each start tag to rewrite
@@ -187,8 +177,6 @@ public final class RefPatcher {
                 if (v == null) continue;
                 long from = li.getStartingCharOffset();
                 long to = li.getEndingCharOffset();
-                // For a NON-empty element Woodstox reports the START_ELEMENT event as spanning the
-                // whole element, so only the start of the range is usable; find the tag's own '>'.
                 if (from < 0 || to <= from || to > s.length()) { refusals[2]++; return null; }
                 if (s.charAt((int) from) != '<') { refusals[2]++; return null; }
                 int end = tagEnd(s, (int) from, (int) to);
@@ -208,7 +196,7 @@ public final class RefPatcher {
             if (DEBUG) debug(s, patches, landed);
             return null; // a requested repair found no element
         }
-        if (spans.isEmpty()) return null;                 // unreachable given the check above
+        if (spans.isEmpty()) return null;
         // spans/vals are positionally paired and already in document order; the ascending check in
         // the splice loop below enforces that, so never sort them.
         StringBuilder out = new StringBuilder(s.length() + 64 * spans.size());
@@ -225,9 +213,9 @@ public final class RefPatcher {
         return out.toString().getBytes(StandardCharsets.UTF_8);
     }
 
-    /// End (exclusive) of the start tag that begins at `from`: the first `'>'` outside
-    /// an attribute value. `limit` is the parser-reported end of the event, which for an
-    /// empty element is the end of the tag and for a non-empty one the end of the whole element.
+    /// End (exclusive) of the start tag that begins at `from`: the first `'>'` outside an attribute
+    /// value. `limit` is the parser-reported end of the event, which Woodstox gives as the end of
+    /// the tag for an empty element and as the end of the whole element for a non-empty one.
     private static int tagEnd(String s, int from, int limit) {
         boolean inQuote = false;
         char q = 0;
@@ -251,10 +239,10 @@ public final class RefPatcher {
     private record Attr(int preStart, int nameStart, int nameEnd, int valueStart, int valueEnd,
                         char quote, int end) {}
 
-    /// Rewrite the start tag `s[from,to)` so that `version`/`nameOfRefClass`
-    /// carry `v`. Present-and-different is replaced IN PLACE (attribute order preserved);
-    /// present-and-equal is left untouched; absent-and-wanted is appended after the last existing
-    /// attribute; present-and-wanted-null is removed together with its leading whitespace.
+    /// Rewrite the start tag `s[from,to)` so that `version`/`nameOfRefClass` carry `v`.
+    /// Present-and-different is replaced in place (attribute order preserved); present-and-equal is
+    /// left untouched; absent-and-wanted is appended after the last existing attribute;
+    /// present-and-wanted-null is removed together with its leading whitespace.
     ///
     /// @return the new tag text, or `null` if the tag does not scan as a start tag
     private static String rewriteTag(String s, int from, int to, Val v) {
@@ -361,13 +349,11 @@ public final class RefPatcher {
         return sb.toString();
     }
 
-    // ------------------------------------------------------------------ patch-set assembly
-
     /// Build the patch map from the before/after state of one object's reference list.
     ///
-    /// @param before per-reference {@code {ref, version, nameOfRefClass}} snapshot taken BEFORE
+    /// @param before per-reference {@code {ref, version, nameOfRefClass}} snapshot taken before
     ///     resolve() mutated anything
-    /// @param after the same three values read back AFTER the mutation, positionally aligned
+    /// @param after the same three values read back after the mutation, positionally aligned
     /// @param inventNameOfRefClass false = do not ADD a `nameOfRefClass` attribute the source
     ///     fragment never had (PROV-CAP: no-invent-nameofrefclass); an attribute that
     ///     exists is still corrected
@@ -384,7 +370,7 @@ public final class RefPatcher {
                 out.put(key(before[i]), v);
             }
         }
-        // Every reference sharing a patched triple must want the SAME outcome — otherwise the XML
+        // Every reference sharing a patched triple must want the same outcome — otherwise the XML
         // cannot tell them apart and only the re-marshal is faithful.
         for (int i = 0; i < before.length; i++) {
             Val v = out.get(key(before[i]));

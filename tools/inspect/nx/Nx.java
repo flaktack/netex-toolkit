@@ -133,7 +133,7 @@ public final class Nx {
                       the 3 defects this campaign was named for -- NeTEx declares nearly everything
                       optional, so a validator cannot see data LOSS. It sees ORDER and LEXICAL
                       validity, which nothing else in the stack sees.
-                      `xsd` needs no classpath: ../bin/java.sh scratch/nx/XsdCmd.java scan ...
+                      `xsd` needs no classpath: java tools/inspect/nx/XsdCmd.java scan ...
 
                 `lens` is built to its CORE only -- there is no source index, so layer S is a
                 linear scan of the feeds you name. There is no corpus census subcommand.""");

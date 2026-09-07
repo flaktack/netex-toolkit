@@ -16,9 +16,8 @@
 // A1 is enabled with --a1 <scratch-db-dir>; without it phase 3 is skipped and no db is created.
 //
 // Pass 1 (source) is independent of toolkit.load.CopyingCapture: a plain StAX event copy of the
-// element subtree with in-scope namespace declarations hoisted onto the fragment root (the only
-// thing that makes the subtree parseable standalone) and nothing else -- no
-// id/version/dataSourceRef/responsibilitySetRef synthesis, no srsName injection.
+// element subtree with in-scope namespace declarations hoisted onto the fragment root, and nothing
+// else -- no id/version/dataSourceRef/responsibilitySetRef synthesis, no srsName injection.
 //
 // Pass 2 (loader) runs the production NetexLoader against a stub Store that never writes: for
 // each object it records (a) the stored fragment bytes the loader captured -- Mode A -- and

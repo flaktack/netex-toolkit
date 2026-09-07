@@ -10,16 +10,6 @@ package toolkit.harness;
 // carries both journey shapes the generator dispatches on: sj1 arrives WITH passing times, sj2 with
 // CALLS (the md5 pattern synthesis + the TimetabledPassingTimes profile). Both arms run in ONE JVM,
 // which is why GenParallel.workers() reads the property per call rather than at class-init.
-//
-// THREE arms, and the third is the point:
-//   * serial vs parallel  -> identical                (the claim)
-//   * serial vs serial    -> identical                (positive control: the path is deterministic
-//                                                      at all, so "identical" is not vacuous)
-//   * TEST vs PRODUCTION defaults -> DIFFERENT        (negative control: the digest CAN fail; the
-//                                                      generated ids carry the codespace, so this
-//                                                      is a difference inside the class maps,
-//                                                      which is where a broken pipeline would put
-//                                                      one)
 
 import org.junit.jupiter.api.Test;
 import toolkit.store.RawRow;
@@ -41,8 +31,8 @@ import java.util.List;
 public class TestGenParallel {
 
     /// Order-independent digest of every stored object plus the two reference tables: one line per
-    /// row, sorted, hashed. Order-independent on purpose — a pipeline that reordered the INSERTS
-    /// would still be caught by the local keys, which the store hands out in insert order.
+    /// row, sorted, hashed. A pipeline that reordered the INSERTS is still caught, by the local
+    /// keys the store hands out in insert order.
     private static String digest(Path database) throws Exception {
         List<String> lines = new ArrayList<>();
         try (Store db = Stores.open(database, true); Txn txn = db.roTxn()) {
@@ -99,10 +89,9 @@ public class TestGenParallel {
         Check.equals(serial, parallel, "parallel arm must be byte-identical to the serial arm");
     }
 
-    /// N = 2, the recommended production setting. It has a DIFFERENT in-flight window from both
-    /// 1 and 4 — `max(8, 4*2) = 8` against N = 4's 16 — and the window sets how far the generator's
-    /// source cursor runs ahead of the insert path's writes, so it is a different pipeline shape
-    /// and not an interpolation between two tested ones.
+    /// N = 2, the recommended production setting. Its in-flight window is `max(8, 4*2) = 8` against
+    /// N = 4's 16, and the window sets how far the generator's source cursor runs ahead of the
+    /// insert path's writes.
     @Test
     void testTwoWorkersIsAlsoByteIdentical(TestStore ts) throws Exception {
         String serial = transformDigest(ts, "genpar-serial2.lmdb", GeneratorDefaults.TEST);
@@ -150,12 +139,9 @@ public class TestGenParallel {
                         + "cannot fail proves nothing about the arms above");
     }
 
-    /// A malformed flag value must REFUSE, and a negative one must still mean serial.
-    ///
-    /// Falling back to serial on a misspelt value would be a silent no-op whose only symptom is a
-    /// slow run, which is precisely the thing someone setting
-    /// this flag is trying to measure. A negative value is different and still falls back, because
-    /// `-1` is a deliberate way to spell "serial", not a typo.
+    /// A malformed flag value must REFUSE, and a negative one must still mean serial: `-1` is a
+    /// deliberate way to spell "serial", where a misspelt value would be a silent no-op whose only
+    /// symptom is a slow run.
     @Test
     void testBadFlagValueIsRefused() {
         IllegalStateException e = null;

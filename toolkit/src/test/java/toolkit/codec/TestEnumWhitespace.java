@@ -1,30 +1,12 @@
 package toolkit.codec;
 
-// Regression test. A schema-aware deserializer applies the xs:collapse the schema mandates before
-// matching an enum. The JAXB RI does not:
-// XJC binds every NeTEx enumeration (a restriction of xs:NMTOKEN, facet COLLAPSE) to an
-// @XmlEnum whose base is the DEFAULT String.class, whose transducer facet is PRESERVE, and
-// RuntimeEnumLeafInfoImpl.parse then looks the raw lexical up in a map keyed on the exact
-// @XmlEnumValue text. A miss returns null with NO ValidationEvent — the value is gone and nothing
-// says so.
+// Regression test for toolkit.codec.EnumWhitespace, the xs:collapse the JAXB RI skips on
+// enum-valued elements.
 //
-// Cost of the hole: a feed that writes <TransportMode>bus </TransportMode> WITH A TRAILING SPACE
-// keeps it in the stored fragment (CopyingCapture copies source events verbatim, so every
-// round-trip gate passes), but every decode produces transportMode == null and the EPIP transform
-// re-marshals every Line — so the export ships Lines with no <TransportMode> at all, and a consumer
-// that returns null on an unsupported mode discards the whole Route.
-//
-// The four properties gated here are the four ways this can go wrong:
-//   1. collapsed  — a padded enum lexical binds, at any of the three whitespace positions;
-//   2. asymmetric — the STORED FRAGMENT still carries the source bytes (the fix must not move
-//                   the round-trip gate), while the DECODED BEAN and its re-marshal carry the
-//                   collapsed value;
-//   3. scoped     — non-enum text of any type keeps every space it had; a padded value that is
-//                   NOT a declared lexical of an enum bound to that element name is left alone
-//                   (this is what makes the name-keyed table sound for Status/Type/Covered/…,
-//                   which bind to an enum in one class and a String/Boolean in another);
-//   4. general    — the table is derived from the model by reflection, so it covers every
-//                   enum-valued element name rather than TransportMode alone.
+// Four properties: a padded lexical binds at any of the three whitespace positions; the stored
+// fragment still carries the source bytes while the decoded bean and its re-marshal carry the
+// collapsed value; non-enum text and undeclared lexicals are left alone; and the table covers every
+// enum-valued element name rather than TransportMode alone.
 
 import noi.netex.model.AllVehicleModesOfTransportEnumeration;
 import noi.netex.model.Line;
@@ -118,14 +100,13 @@ public class TestEnumWhitespace {
     void testFragmentKeepsSourceBytesAndRemarshalCollapses(TestStore db) throws Exception {
         db.loadNetex(LINES);
 
-        // The stored fragment is a byte copy of the source events and MUST NOT move: this is what
-        // keeps the round-trip gate's capture modes at zero.
+        // The stored fragment is a byte copy of the source events and must not move.
         String stored = fragmentOf(db, Line.class, "epd:IT:ITI3:Line:CONTRAM_0002");
         Check.that(stored.contains("<TransportMode>bus </TransportMode>"),
                 "the stored fragment still carries the source's trailing space");
 
-        // The re-marshal is the export path (EpipLines rewrites every Line), and it is where the
-        // 460 elements used to vanish. It must now emit the collapsed lexical.
+        // The re-marshal is the export path (EpipLines rewrites every Line) and must emit the
+        // collapsed lexical.
         FragmentCodec codec = new FragmentCodec();
         Line line = Gen.byId(db, Line.class).get("epd:IT:ITI3:Line:CONTRAM_0002");
         String remarshalled = new String(codec.marshalFragment(line), StandardCharsets.UTF_8);
@@ -170,8 +151,8 @@ public class TestEnumWhitespace {
     @Test
     void testTableIsDerivedFromTheWholeModel() {
         var table = EnumWhitespace.table();
-        // Not TransportMode alone: the hole is model-wide, and the table is built by reflection so
-        // it follows a netex.schema.version bump instead of rotting across it.
+        // Built by reflection, so it follows a netex.schema.version bump instead of rotting across
+        // it.
         Check.that(table.size() > 300,
                 "the reflective table covers every enum-valued element name (got " + table.size() + ")");
         Set<String> modes = table.get("TransportMode");
@@ -186,12 +167,10 @@ public class TestEnumWhitespace {
                 "lexicals come from @XmlEnumValue, not Enum.name()");
     }
 
-    /// The soundness premise of the reader's hot-path pre-filter (EnumWhitespace.maybeCollapse):
-    /// it only looks at the FIRST and LAST character of a text node, and skips the map entirely
-    /// when neither is whitespace. That is only correct if no enum lexical contains a space —
-    /// otherwise a value differing from its collapse by an internal run alone could still match.
-    /// Every NeTEx enumeration restricts xs:NMTOKEN, so this holds; assert it rather than assume
-    /// it, because a netex.schema.version bump could in principle introduce one.
+    /// The premise of the reader's hot-path pre-filter (EnumWhitespace.maybeCollapse): it looks
+    /// only at the first and last character of a text node, which is correct while no enum lexical
+    /// contains a space. Every NeTEx enumeration restricts xs:NMTOKEN, so this holds — but a
+    /// netex.schema.version bump could in principle introduce one.
     @Test
     void testEveryEnumLexicalIsAnNmtoken() {
         int bad = 0;

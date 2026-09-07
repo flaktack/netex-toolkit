@@ -1,20 +1,10 @@
 package toolkit.harness;
 
-// THE HAZARD AT THE HEART OF EVERY IN-PLACE FIX.
-//
 // InPlace.runInPlace hands the fix ONE read-write transaction and the fix both reads and writes
 // through it: a lazy iterator over a class map feeds insertAnyObjects, which writes back into THE
 // SAME dbi, at THE SAME keys, while the read cursor is mid-iteration — and with a LARGER value, so
-// LMDB has to relocate the page rather than patch it in place. That is the one operation whose
-// safety the whole idiom rests on, and if the cursor skipped or revisited a row the result would
-// be a store that is simply missing some of the fix, in a database that opens, exports and
-// validates.
-//
-// The suite exercises runInPlace at outcome level (TestDayOffsetRewrite, TestEpipTransform,
-// TestGenParallel) and TestWriteTally pins the insert count on a same-key rewrite. None of them can
-// see this: TestDayOffsetRewrite's store has two journeys, which fit in one page and never force a
-// relocation. Here the counter itself is the assertion — it throws on the (n+1)-th visit rather
-// than reporting a total at the end, so a revisit is attributed to the row that caused it.
+// LMDB has to relocate the page rather than patch it in place. A cursor that skipped or revisited a
+// row would leave a store missing some of the fix, in a database that opens, exports and validates.
 //
 // NEUTER PROOF: shorten the replacement name to something no longer than the original ("old" ->
 // "new") and the rewrite stops relocating pages; the test still passes and stops testing anything.
@@ -40,7 +30,7 @@ import java.util.Set;
 
 public class TestInPlaceCursorStability {
 
-    /// Enough rows to span pages; the same 300 the retired smoke test used.
+    /// Enough rows to span pages.
     private static final int N = 300;
 
     /// N operators followed by N journeys referencing them: targets first, so nothing is unresolved.

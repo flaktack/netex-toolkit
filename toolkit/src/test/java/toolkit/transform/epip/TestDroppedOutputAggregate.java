@@ -1,20 +1,16 @@
 package toolkit.transform.epip;
 
-// THE AGGREGATE, for the three script-side places that delete data from the pipeline's own output.
+// The drop counters of the three places that delete data from the pipeline's own output: the EPIP
+// journey generator, TimetabledPassingTimesProfile and Projection. Each total is routed through
+// toolkit.util.Strictness under the droppedOutput concern, so -Dtoolkit.strict.droppedOutput=true
+// turns it into a refusal.
 //
-// WHY THESE TESTS EXIST. Each site below already said it was dropping something, once per item, at
-// warn or error level; what none of them had was a TOTAL. The counters make the number exist and
-// route it through toolkit.util.Strictness under the droppedOutput concern, so
-// -Dtoolkit.strict.droppedOutput=true turns the number into a refusal.
+// The refusal itself is TestStrictness's subject: the flags are `static final`, read at class-init,
+// and surefire hosts the suite in one JVM, so no test can flip droppedOutput and watch a site
+// refuse. What these tests pin is that the counts are complete and correctly attributed.
 //
-// WHAT IS NOT ASSERTED HERE. The refusal itself is TestStrictness's subject: the flags are
-// `static final`, read at class-init, and surefire hosts the suite in ONE JVM, so no test can flip
-// droppedOutput and watch a site refuse. What these tests pin is that the counts are COMPLETE and
-// correctly attributed, because a policy fed a wrong number refuses the wrong runs.
-//
-// COUNTER ISOLATION. Projection's and TimetabledPassingTimesProfile's counters are static (they
-// belong to classes that own no pass), so every test here zeroes them with reportDropped() before
-// it measures. That is also the production reset path, so the reset is under test too.
+// Projection's and TimetabledPassingTimesProfile's counters are static, so every test here zeroes
+// them with reportDropped() before it measures. That is also the production reset path.
 
 import noi.netex.calls.Calls;
 import noi.netex.model.Call;
@@ -131,10 +127,8 @@ public class TestDroppedOutputAggregate {
 
     // ------------------------------------------------- the EPIP journey generator
 
-    /// Every drop reason counted, and counted under its OWN field. Four journeys are deleted from
-    /// the output and four are emitted with something missing; before this, the first four were
-    /// four log lines and the second four were three (one is a logOnce), and nothing anywhere
-    /// added them up.
+    /// Every drop reason counted, and counted under its own field: four journeys deleted from the
+    /// output, four emitted with something missing.
     @Test
     void testGeneratorCountsEveryDrop(TestStore db) throws Exception {
         db.loadNetex(NETEX);
@@ -167,10 +161,9 @@ public class TestDroppedOutputAggregate {
         Check.equals(6L, dropped.incompleteJourneys(), "six objects emitted with something missing");
     }
 
-    /// The 3-arg generator — the one every driver calls — still reports at the end of its pass.
-    /// It cannot be observed through a bag the caller owns, so what is pinned here is that the
-    /// pass RUNS to exhaustion and reports: under a fatal droppedOutput this call is where the
-    /// IllegalStateException would come from, and a report that never fires cannot refuse.
+    /// The 3-arg generator — the one every driver calls — reports at the end of its pass through no
+    /// bag the caller owns, so what is pinned here is that the pass runs to exhaustion. Under a
+    /// fatal droppedOutput this call is where the IllegalStateException comes from.
     @Test
     void testDefaultGeneratorStillCompletesItsPass(TestStore db) throws Exception {
         db.loadNetex(NETEX);
@@ -181,13 +174,12 @@ public class TestDroppedOutputAggregate {
         Check.that(!emitted.isEmpty(), "the pass completes and emits the surviving journeys");
     }
 
-    // ------------------------------------- TimetabledPassingTimesProfile (the SHORT timetable)
+    // ------------------------------------- TimetabledPassingTimesProfile (the short timetable)
 
-    /// A call whose stop disagrees with the pattern point at the same order produces NO passing
-    /// time — the journey is emitted with a timetable one stop short, which is indistinguishable
-    /// from a journey that really calls at fewer stops. Both mismatch arms are known-unfinished
-    /// (OPEN.md §16) — they log and skip rather than resolving which ref is right — so the SIZE of
-    /// the unfinished arm is exactly the thing worth counting.
+    /// A call whose stop disagrees with the pattern point at the same order produces no passing
+    /// time — the journey is emitted with a timetable one stop short, indistinguishable from a
+    /// journey that really calls at fewer stops. Both mismatch arms log and skip rather than
+    /// resolving which ref is right.
     @Test
     void testShortTimetableIsCounted() {
         TimetabledPassingTimesProfile.reportDropped("test-reset");   // zero what this JVM already did
@@ -222,9 +214,8 @@ public class TestDroppedOutputAggregate {
 
     // ------------------------------------------------------------------- Projection
 
-    /// The fallback transform is CACHED, so logOnce fires on the BUILD and every later geometry
-    /// with the same unparseable srsName goes through it in silence. The count is of USES, which
-    /// is the number that says how much of the export rests on "we now assume WGS84, and hope".
+    /// The fallback transform is cached, so logOnce fires on the build and every later geometry
+    /// with the same unparseable srsName goes through it in silence. The count is of uses.
     @Test
     void testFallbackTransformCountsEveryUseNotEveryLog() {
         Projection.reportDropped("test-reset");
@@ -239,10 +230,10 @@ public class TestDroppedOutputAggregate {
         Check.equals(0L, Projection.reportDropped("test").total(), "reporting resets the counters");
     }
 
-    /// The two arms that leave coordinates alone. The second is the one that produces WRONG values
-    /// rather than missing ones: projectLocation4326's contract is "the result is WGS84", and a
-    /// location with a non-WGS84 srsName and no pos keeps its source-CRS numbers while every
-    /// consumer downstream reads them as degrees.
+    /// The two arms that leave coordinates alone. The second produces wrong values rather than
+    /// missing ones: projectLocation4326's contract is "the result is WGS84", and a location with a
+    /// non-WGS84 srsName and no pos keeps its source-CRS numbers while every consumer downstream
+    /// reads them as degrees.
     @Test
     void testLocationsLeftUnprojectedAreCounted() {
         Projection.reportDropped("test-reset");

@@ -1,32 +1,10 @@
 package toolkit.transform.epip;
 
-// The EPIP journey generator.
+// The EPIP journey generator, serial only.
 //
-// The serial generator only.
-//
-// testMd5SignatureIsStable and testMd5SignatureNonPrintableRepr FREEZE the
-// pointInPatternSignature -> md5 pattern-hash bytes, because those bytes end up in generated ids
-// that are already in published exports. Any change to the rendering below changes ids.
-//
-// Case 1 (testMd5SignatureIsStable) — the signatures hashed. NOTE: a line wrap inside these quoted
-// transcriptions stands for exactly ONE space (sig2 wraps after "lang=None," — the true string
-// continues " text_id_type=..."; joining the lines without that space rederives 5dcf3d17, not the
-// asserted hash):
-//   'ssp1|1|StopUseEnumeration.ACCESS|True||'
-//   "ssp2|2|StopUseEnumeration.NO_BOARDING_OR_ALIGHTING|False|(MultilingualString(lang=None,
-//    text_id_type=None, content=['Bolzano/Bozen']), None)|not1"
-// and md5(';'.join(['line1', 'DirectionTypeEnumeration.OUTBOUND', sig1, sig2]))[0:8]
-// = "3b4597d7". NOTE the direction component: the ENUM REPR
-// "DirectionTypeEnumeration.OUTBOUND" is hashed, not the XML token 'outbound'.
-//
-// Case 2 (testMd5SignatureNonPrintableRepr) — ddSig repr battery: frontText mixes NBSP (\xa0),
-// ZWSP (U+200B), C1 NEL (\x85), ESC (\x1b), a tag char (U+E0041, astral Cf) and a printable
-// astral emoji (U+1F68C stays literal); name carries a single quote (the rendering switches to
-// double quotes) plus NBSP. The expected hash input (with <bsu>/<bsU> denoting backslash-u/-U):
-//   'sspA|1|None|None|(MultilingualString(lang=None, text_id_type=None,
-//    content=[\'A\xa0B<bsu>200bC\x85D\x1bE<bsU>000e0041F<U+1F68C literal>\']),
-//    MultilingualString(lang=None, text_id_type=None, content=["it\'s\xa0ok"]))|'
-// with direction None -> 'None'; md5(';'.join(['line2', 'None', sig]))[0:8] = "f079c9aa".
+// testMd5SignatureIsStable and testMd5SignatureNonPrintableRepr freeze the pointInPatternSignature
+// -> md5 pattern-hash bytes, because those bytes end up in generated ids that are already in
+// published exports. Any change to the rendering changes ids.
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.calls.Calls;
@@ -123,7 +101,7 @@ public class TestEpipJourneyGenerator {
         </VehicleScheduleFrame>
         """;
 
-    /// \_journeys: load the fixture, run the generator, index the emitted ServiceJourneys.
+    /// Load the fixture, run the generator, index the emitted ServiceJourneys by id.
     private static Map<String, ServiceJourney> journeys(TestStore db) throws Exception {
         db.loadNetex(NETEX);
         List<Object> result = Gen.run(db, (s, txn) ->
@@ -151,19 +129,30 @@ public class TestEpipJourneyGenerator {
     void testJourneyWithoutTimingSourceIsDropped(TestStore db) throws Exception {
         Map<String, ServiceJourney> journeys = journeys(db);
 
-        // sj_bare has neither passing times, calls, nor a journey-pattern/time-demand pair:
-        // it is dropped — and the generator completes instead of dying on its absent
-        // pattern ref (before the fix, that threw and aborted the whole export).
+        // sj_bare has neither passing times, calls, nor a journey-pattern/time-demand pair: it is
+        // dropped, and the generator completes instead of dying on its absent pattern ref.
         List<String> ids = new ArrayList<>(journeys.keySet());
         Collections.sort(ids);
         Check.equals(List.of("sj_block", "sj_own"), ids, "only the timetabled journeys survive");
     }
 
-    /// The md5-signature freeze (see the header): a hand-built calls journey whose points carry
-    /// an enum stop use, a boolean request stop, a DestinationDisplayView (the tuple arm of ddSig)
-    /// and a NoticeAssignment. Every id asserted below embeds the pattern hash, so these ids
-    /// change if any signature byte does — 'StopUseEnumeration.ACCESS', 'True'/'False', the
+    /// The md5-signature freeze: a hand-built calls journey whose points carry an enum stop use, a
+    /// boolean request stop, a DestinationDisplayView (the tuple arm of ddSig) and a
+    /// NoticeAssignment. Every id asserted below embeds the pattern hash, so these ids change if
+    /// any signature byte does — 'StopUseEnumeration.ACCESS', 'True'/'False', the
     /// MultilingualString rendering, the notice target ref.
+    ///
+    /// The signatures hashed. A line wrap inside these quoted transcriptions stands for exactly one
+    /// space (sig2 wraps after "lang=None," — the true string continues " text_id_type=...";
+    /// joining the lines without that space rederives 5dcf3d17, not the asserted hash):
+    ///
+    ///     'ssp1|1|StopUseEnumeration.ACCESS|True||'
+    ///     "ssp2|2|StopUseEnumeration.NO_BOARDING_OR_ALIGHTING|False|(MultilingualString(lang=None,
+    ///      text_id_type=None, content=['Bolzano/Bozen']), None)|not1"
+    ///
+    /// and md5(';'.join(['line1', 'DirectionTypeEnumeration.OUTBOUND', sig1, sig2]))[0:8] =
+    /// "3b4597d7". The direction component hashed is the enum repr
+    /// "DirectionTypeEnumeration.OUTBOUND", not the XML token 'outbound'.
     @Test
     void testMd5SignatureIsStable() {
         ServiceJourney sj = new ServiceJourney();
@@ -224,8 +213,6 @@ public class TestEpipJourneyGenerator {
 
         ServiceJourneyPattern sjp = EpipJourneys.serviceJourneyPatternFromCalls(sj, GeneratorDefaults.TEST);
 
-        // sjp.id must be 'test:ServiceJourneyPattern:3b4597d7' (see the header derivation) —
-        // the hash covers the DirectionTypeEnumeration.OUTBOUND enum-repr direction component.
         Check.equals("test:ServiceJourneyPattern:3b4597d7", sjp.getId(),
                 "pattern id must equal the md5 of the signature bytes");
         Check.equals("1", sjp.getVersion(), "pattern version is the journey's");
@@ -248,10 +235,18 @@ public class TestEpipJourneyGenerator {
         Check.that(projected.getValidBetween().isEmpty(), "journey validBetween cleared");
     }
 
-    /// The sigRepr battery (Case 2 in the header): the ddSig MultilingualString renderings
-    /// carry every non-printable escape class — \xNN (NBSP, C1 NEL, ESC), BMP
-    /// backslash-u (ZWSP), astral backslash-U (tag char) — a literal printable astral emoji,
-    /// and the single-quote → double-quote switch. No direction (the 'None' arm).
+    /// The sigRepr battery: the ddSig MultilingualString renderings carry every non-printable
+    /// escape class — \xNN (NBSP, C1 NEL, ESC), BMP backslash-u (ZWSP), astral backslash-U (tag
+    /// char) — a literal printable astral emoji, and the single-quote → double-quote switch. No
+    /// direction (the 'None' arm).
+    ///
+    /// The expected hash input, with `<bsu>`/`<bsU>` denoting backslash-u/-U:
+    ///
+    ///     'sspA|1|None|None|(MultilingualString(lang=None, text_id_type=None,
+    ///      content=[\'A\xa0B<bsu>200bC\x85D\x1bE<bsU>000e0041F<U+1F68C literal>\']),
+    ///      MultilingualString(lang=None, text_id_type=None, content=["it\'s\xa0ok"]))|'
+    ///
+    /// with direction None -> 'None'; md5(';'.join(['line2', 'None', sig]))[0:8] = "f079c9aa".
     @Test
     void testMd5SignatureNonPrintableRepr() {
         ServiceJourney sj = new ServiceJourney();
@@ -287,7 +282,6 @@ public class TestEpipJourneyGenerator {
 
         ServiceJourneyPattern sjp = EpipJourneys.serviceJourneyPatternFromCalls(sj, GeneratorDefaults.TEST);
 
-        // sjp.id must be 'test:ServiceJourneyPattern:f079c9aa' (see the header derivation).
         Check.equals("test:ServiceJourneyPattern:f079c9aa", sjp.getId(),
                 "pattern id must equal the md5 over the escaped-repr signature bytes");
         StopPointInJourneyPattern p1 = (StopPointInJourneyPattern) sjp.getPointsInSequence()

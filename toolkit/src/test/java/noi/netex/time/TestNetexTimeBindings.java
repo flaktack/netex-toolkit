@@ -1,18 +1,17 @@
 package noi.netex.time;
 
-// THE ACCEPTANCE TEST of the date/time bindings: it asserts that REAL CORPUS VALUES SURVIVE A
-// ROUND TRIP, not that any particular mechanism is in place. The bindings themselves live in
-// model/src/main/xjb/00-global.xjb.
+// The acceptance test of the date/time bindings, which live in model/src/main/xjb/00-global.xjb: it
+// asserts that real corpus values survive a round trip, not that any particular mechanism is in
+// place.
 //
-// Every fixture value below is REAL, lifted verbatim from source feeds: the two xs:duration forms
+// Every fixture value below is lifted verbatim from a source feed: the two xs:duration forms
 // java.time.Duration.parse rejects, the after-midnight and exactly-24:00:00 times, an
 // offset-bearing xs:time, an offset-bearing ValidBetween pair, and a multi-line
 // xs:normalizedString whose line breaks a normalising binding eats.
 //
-// WHY THE TESTS RE-MARSHAL. The values are not lost at export; they are lost the first time an
-// object is bound and written back — which happens at LOAD time, because resolve()'s reference
-// repair re-marshals the WHOLE fragment to fix one ref attribute. So each test asserts on the
-// bytes a re-marshal produces, which is what every stored ServiceJourney fragment is.
+// The tests assert on re-marshalled bytes. A value is lost the first time an object is bound and
+// written back, which happens at load time: resolve()'s reference repair re-marshals the whole
+// fragment to fix one ref attribute.
 
 import noi.netex.model.AvailabilityCondition;
 import noi.netex.model.Operator;
@@ -71,10 +70,10 @@ public class TestNetexTimeBindings {
         </TimetableFrame>
         """;
 
-    /// The five time shapes, all inside ONE ServiceJourney — which is how they occur: a
-    /// TimetabledPassingTime is never a stored object of its own, it lives inside its journey's
-    /// fragment, so the journey's re-marshal is what has to preserve them.
-    /// Ordinary / after-midnight / deep after-midnight / exactly 24:00:00 / offset-bearing.
+    /// The five time shapes — ordinary, after-midnight, deep after-midnight, exactly 24:00:00,
+    /// offset-bearing — all inside one ServiceJourney, which is how they occur: a
+    /// TimetabledPassingTime is never a stored object of its own, so the journey's re-marshal is
+    /// what has to preserve them.
     public static final String TIMES = """
         <TimetableFrame id="tf" version="1">
           <vehicleJourneys>
@@ -109,10 +108,9 @@ public class TestNetexTimeBindings {
 
     static final String JOURNEY = "IT:ITI1:ServiceJourney:54004985";
 
-    /// The xs:dateTime half of the offset defect — NEW at Stage 4, because no adapter substitution
-    /// could have fixed it (see the file header). Two shapes on one journey: an offset-bearing
-    /// `Created` attribute and an offset-bearing `ValidBetween` pair, the latter being
-    /// the loss the round-trip harness reports.
+    /// The xs:dateTime half of the offset defect, in two shapes on one journey: an offset-bearing
+    /// `Created` attribute and an offset-bearing `ValidBetween` pair, the latter being the loss the
+    /// round-trip harness reports.
     public static final String DATETIMES = """
         <TimetableFrame id="tf" version="380">
           <vehicleJourneys>
@@ -182,9 +180,8 @@ public class TestNetexTimeBindings {
         throw new AssertionError("no stored " + clazz.getSimpleName() + " " + id);
     }
 
-    /// Decode the stored fragment and marshal it straight back — literally what
-    /// `AbstractLmdbStore.writeBlob` does after a reference repair, and what every EPIP
-    /// transform op does. This is the operation that loses the data.
+    /// Decode the stored fragment and marshal it straight back — what `AbstractLmdbStore.writeBlob`
+    /// does after a reference repair, and what every EPIP transform op does.
     private static String remarshalled(TestStore db, Class<?> clazz, String id) {
         FragmentCodec codec = new FragmentCodec();
         try (Txn tx = db.store.roTxn()) {
@@ -202,7 +199,7 @@ public class TestNetexTimeBindings {
 
     /// java.time.Duration.parse accepts only PnDTnHnMnS. The PnYnMnDTnHnMnS form these feeds use
     /// throws, JAXB's default event handler swallows it to null, and the element vanishes.
-    /// XmlDuration wraps javax.xml.datatype.Duration, which parses the FULL xs:duration lexical
+    /// XmlDuration wraps javax.xml.datatype.Duration, which parses the full xs:duration lexical
     /// space.
     @Test
     void testJourneyDurationSurvivesTheExtendedXsDurationForm(TestStore db) throws Exception {
@@ -248,10 +245,10 @@ public class TestNetexTimeBindings {
 
     // ---------------------------------------------------------------- 2. after midnight
 
-    /// LocalTime.parse rejects hour >= 24, so every 24:xx/25:xx/30:xx call was dropped and the
-    /// night services truncated. XmlTime stores the hour raw, so `getHour() == 24` and
-    /// `getDayOffset() == 1`; `toLocalTime()` still returns 00:09, which is the normalisation every
-    /// consumer calls.
+    /// LocalTime.parse rejects hour >= 24, which drops every 24:xx/25:xx/30:xx call and truncates
+    /// the night services. XmlTime stores the hour raw, so `getHour() == 24` and
+    /// `getDayOffset() == 1`; `toLocalTime()` still returns 00:09, the normalisation every consumer
+    /// calls.
     @Test
     void testAfterMidnightPassingTimesSurvive(TestStore db) throws Exception {
         db.loadNetex(TIMES);
@@ -283,8 +280,8 @@ public class TestNetexTimeBindings {
                 "no call loses a time element (the journey is not truncated at midnight)");
     }
 
-    /// 24:00:00 is the nastiest of the family: it is the one hour-24 value LocalTime.parse ACCEPTS,
-    /// silently turning it into 00:00:00 — a whole day's shift with no error anywhere.
+    /// 24:00:00 is the one hour-24 value LocalTime.parse accepts, silently turning it into
+    /// 00:00:00 — a whole day's shift with no error anywhere.
     @Test
     void testMidnightTwentyFourIsNotSilentlyRewrittenToZero(TestStore db) throws Exception {
         db.loadNetex(TIMES);
@@ -313,7 +310,7 @@ public class TestNetexTimeBindings {
         Check.that(x.contains("<DepartureTime>18:51:00+01:00</DepartureTime>"), "on both times");
     }
 
-    /// Ordinary times must not acquire anything or change shape: the retained lexical IS the source
+    /// Ordinary times must not acquire anything or change shape: the retained lexical is the source
     /// text and there is no offset.
     @Test
     void testOrdinaryTimesAreUntouched(TestStore db) throws Exception {
@@ -332,10 +329,10 @@ public class TestNetexTimeBindings {
                 "…and re-marshals byte-identically");
     }
 
-    // ---------------------------------------------------------------- 4. xs:dateTime offsets (NEW)
+    // ---------------------------------------------------------------- 4. xs:dateTime offsets
 
     /// The xs:dateTime offset. The ValidBetween pair below is what the round-trip harness reports
-    /// as CHANGED `2026-07-19T00:00:00.000+02:00 -> 2026-07-19T00:00:00`.
+    /// as changed `2026-07-19T00:00:00.000+02:00 -> 2026-07-19T00:00:00`.
     @Test
     void testDateTimeOffsetsSurviveOnCreatedAndValidBetween(TestStore db) throws Exception {
         db.loadNetex(DATETIMES);
@@ -360,9 +357,8 @@ public class TestNetexTimeBindings {
                 "…and specifically does NOT degrade to the offset-less form");
     }
 
-    /// The other half: a naive xs:dateTime must stay naive. The carrier retains the source lexical,
-    /// so it cannot invent the "+02:00" that the JVM's default zone would otherwise supply — the
-    /// failure mode that ruled out binding to OffsetDateTime.
+    /// A naive xs:dateTime must stay naive. The carrier retains the source lexical, so it cannot
+    /// invent the "+02:00" that the JVM's default zone would otherwise supply.
     @Test
     void testNaiveDateTimeDoesNotAcquireAnOffset(TestStore db) throws Exception {
         db.loadNetex(DATETIMES);
@@ -379,12 +375,11 @@ public class TestNetexTimeBindings {
         Check.equals(0, count(x, "+02:00"), "no offset anywhere in the fragment");
     }
 
-    /// `ServiceCalendarEpip.flatten` turns an AvailabilityCondition into a SET of dates, and that
+    /// `ServiceCalendarEpip.flatten` turns an AvailabilityCondition into a set of dates, and that
     /// set's cardinality becomes the ValidDayBits string of every exported ServiceCalendar. An
-    /// offset-bearing condition and a naive one naming the same days must flatten to the SAME eight
-    /// dates and union to eight, not sixteen — which is what `toLocalDateTime()` at the boundary
-    /// guarantees, and what putting carriers straight into the Set would have broken
-    /// (XmlDateTime.hashCode() throws so that mistake cannot be made quietly).
+    /// offset-bearing condition and a naive one naming the same days flatten to the same dates and
+    /// union to one copy of them, which `toLocalDateTime()` at the boundary guarantees;
+    /// `XmlDateTime.hashCode()` throws so a Set of carriers cannot be built by accident.
     @Test
     void testFlattenUnifiesOffsetBearingAndNaiveConditions(TestStore db) throws Exception {
         db.loadNetex(AVAILABILITY);
@@ -414,11 +409,11 @@ public class TestNetexTimeBindings {
 
     // ---------------------------------------------------------------- 5. normalizedString
 
-    /// xs:normalizedString fields carry @XmlJavaTypeAdapter(NormalizedStringAdapter) BY DEFAULT,
+    /// xs:normalizedString fields carry @XmlJavaTypeAdapter(NormalizedStringAdapter) by default,
     /// and its unmarshal() applies the whitespace facet, replacing every CR/LF/tab with a space.
-    /// The source does not apply the facet, so the line breaks are kept. The fix is the fifth
-    /// binding in 00-global.xjb, VerbatimStringAdapter — and the netex-model build asserts that
-    /// the override took (grep NormalizedStringAdapter over the generated sources == 0).
+    /// VerbatimStringAdapter, the fifth binding in 00-global.xjb, keeps the line breaks; the
+    /// netex-model build asserts the override took, by grepping the generated sources for
+    /// NormalizedStringAdapter.
     @Test
     void testMultilingualStringKeepsItsLineBreaks(TestStore db) throws Exception {
         db.loadNetex(MULTILINE);

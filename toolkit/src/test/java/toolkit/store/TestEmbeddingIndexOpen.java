@@ -1,31 +1,11 @@
 package toolkit.store;
 
-// TWO DATABASES THAT LOOKED IDENTICAL.
-//
-// V2Store opens `_embedding_idx` on a readonly store through openExistingEmbIdx, which was
-// `catch (Exception e) { return null; }` -- i.e. it inferred "this database predates the index"
-// from the ABSENCE of a successful open, so every other way mdb_dbi_open can fail gave the same
-// answer. Null is a SUPPORTED state: embeddingIndexReady returns false and resolveEmbeddings falls
-// back to a full corpus scan. A store that could not read its index therefore paid a
-// national-scale scan, produced the same correct result, said nothing, and exited 0.
-//
-// The fix makes the verdict positive evidence: getDbiNames() says whether the map is in the root db
-// at all. That list is what these tests read back through the store's own field, because it is the
-// only observable difference between the two states -- both stores open, both answer every query,
-// and the one without an index just costs more.
-//
-// WHAT CANNOT BE TESTED HERE, stated rather than left as a gap. LMDB 0.9 does not validate the
-// flags passed to mdb_dbi_open against an EXISTING named db -- it loads the stored MDB_db over them
-// -- so a map re-created without MDB_DUPSORT still opens as if it had them, and there is no way
-// from a test to produce "present but unopenable" (see editEmbIdx below, which still builds that
-// fixture). What the change guarantees is the discrimination, not a new exception: "absent" is
-// decided by the name list, so nothing else can be mistaken for it.
-//
-// NEUTER PROOF:
-//   * testAnAbsentIndexIsStillAnOldDatabase -- make openExistingEmbIdx throw unconditionally; every
-//     store written before the index stops opening at all.
-//   * testAnIndexThatIsThereIsOpened        -- restore `catch (Exception) { return null; }` and
-//     make openDbi fail; this store silently becomes an "old" one and the corpus scan hides it.
+// V2Store decides whether a readonly store predates the embedding index from getDbiNames(): the
+// verdict is that `_embedding_idx` is not in the root db, so nothing else can be mistaken for it.
+// A null handle is a supported state — embeddingIndexReady returns false and resolveEmbeddings
+// falls back to a full corpus scan — which is why the two states are otherwise indistinguishable:
+// both stores open, both answer every query, and the one without an index just costs more. The
+// store's own field, read back by reflection, is the only observable difference.
 
 import org.lmdbjava.ByteArrayProxy;
 import org.lmdbjava.Dbi;
@@ -64,8 +44,8 @@ public class TestEmbeddingIndexOpen {
         }
     }
 
-    /// The other half, and the one the old catch could destroy silently: a store whose index IS
-    /// there must come up WITH it, not with a null that reads as an old database.
+    /// The other half: a store whose index is there comes up with it, rather than with a null that
+    /// reads as an old database.
     @Test
     void testAnIndexThatIsThereIsOpened(TestStore ts) throws Exception {
         Path db = ts.buildDbFile(FRAMES, "has-index.lmdb");
@@ -76,10 +56,10 @@ public class TestEmbeddingIndexOpen {
         }
     }
 
-    /// The measurement quoted in the header, kept executable: a map re-created WITHOUT
-    /// MDB_DUPSORT/MDB_DUPFIXED still opens with them, because LMDB 0.9 ignores the flags of an
-    /// existing named db. This is why there is no "corrupt index refuses" test — the fixture exists,
-    /// it just is not corrupt as far as mdb_dbi_open is concerned.
+    /// LMDB 0.9 does not validate the flags passed to mdb_dbi_open against an existing named db —
+    /// it loads the stored MDB_db over them — so a map re-created without MDB_DUPSORT/MDB_DUPFIXED
+    /// still opens as if it had them. There is therefore no "present but unopenable" state to test
+    /// for: the fixture exists, it just is not corrupt as far as mdb_dbi_open is concerned.
     @Test
     void testFlagsAreNotValidatedAgainstAnExistingMap(TestStore ts) throws Exception {
         Path db = ts.buildDbFile(FRAMES, "plain-index.lmdb");
@@ -91,9 +71,7 @@ public class TestEmbeddingIndexOpen {
         }
     }
 
-    // ---------------------------------------------------------------- fixture surgery
-
-    /// Drop `_embedding_idx` from a closed store, optionally re-creating it as a PLAIN map.
+    /// Drop `_embedding_idx` from a closed store, optionally re-creating it as a plain map.
     /// Map size and max-dbs match `V2Store`'s so this opens the same environment it does.
     private static void editEmbIdx(Path db, boolean recreatePlain) {
         Env<byte[]> env = Env.create(ByteArrayProxy.PROXY_BA)
@@ -119,9 +97,7 @@ public class TestEmbeddingIndexOpen {
         }
     }
 
-    /// The store's own handle. Reflection because the field is protected and the state under test is
-    /// not otherwise observable: both stores answer every query, and the difference is only what the
-    /// next resolveEmbeddings has to pay.
+    /// The store's own handle. Reflection because the field is protected.
     private static Object embIdx(Store s) throws Exception {
         Field f = AbstractLmdbStore.class.getDeclaredField("embIdx");
         f.setAccessible(true);

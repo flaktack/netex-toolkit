@@ -2,18 +2,11 @@ package toolkit.transform.epip;
 
 // The EPIP line generator.
 //
-// Config note: the authority-reference switch is read from EpipConfig.AUTHORITY_REFERENCE, not
-// from the generatorDefaults argument, which this generator never touches.
-//
-// Binding decisions:
-//  - Line's brandingRef, typeOfServiceRef, typeOfProductCategoryRef, operatorRef and authorityRef
-//    are all PLAIN fields, so clearing one is a plain setter call.
-//  - additionalOperators.transportOrganisationRef is the ONE choice-group site: a
-//    List<JAXBElement<? extends TransportOrganisationRefStructure>> substitution-group list. The
-//    append wraps the ref object in its typed ObjectFactory element (createOperatorRef /
-//    createAuthorityRef) so the serialized element names are right; both OperatorRefStructure and
-//    AuthorityRef extend the list's bound.
-//  - the guard is container present AND list non-empty.
+// additionalOperators.transportOrganisationRef is the one choice-group site: a
+// List<JAXBElement<? extends TransportOrganisationRefStructure>> substitution-group list. The append
+// wraps the ref object in its typed ObjectFactory element (createOperatorRef / createAuthorityRef)
+// so the serialized element names are right; both OperatorRefStructure and AuthorityRef extend the
+// list's bound.
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.model.Line;
@@ -31,15 +24,14 @@ public final class EpipLines {
 
     private EpipLines() {}
 
-    /// Re-emit every Line with branding/type-of-service/
-    /// type-of-product-category refs dropped; when a Line carries BOTH an operatorRef and an
-    /// authorityRef, one of them moves into additionalOperators (appending when the list
-    /// already exists, else creating it) and is cleared — which one is moved is decided by
-    /// [EpipConfig#AUTHORITY_REFERENCE]: `true` keeps the Authority primary and
-    /// demotes the Operator; `false` the reverse.
+    /// Re-emit every Line with branding/type-of-service/type-of-product-category refs dropped; when
+    /// a Line carries BOTH an operatorRef and an authorityRef, one of them moves into
+    /// additionalOperators (appending when the list already exists, else creating it) and is
+    /// cleared — which one is moved is decided by [EpipConfig#AUTHORITY_REFERENCE]: `true` keeps the
+    /// Authority primary and demotes the Operator; `false` the reverse.
     ///
-    /// Yield order: each Line in class-map order, processed lazily as it is pulled.
-    /// `generatorDefaults` is accepted and unused; the config read is static (see the header note).
+    /// Yield order: each Line in class-map order, processed lazily as it is pulled. The switch is
+    /// read statically.
     public static Iterator<Object> epipLineGenerator(
             Store dbRead, Txn txnRead, GeneratorDefaults generatorDefaults) {
         Iterator<Object> lines = dbRead.iterOnlyObjects(txnRead, Line.class).iterator();
@@ -64,11 +56,9 @@ public final class EpipLines {
         line.setTypeOfProductCategoryRef(null);
         if (line.getOperatorRef() != null && line.getAuthorityRef() != null) {
             if (EpipConfig.AUTHORITY_REFERENCE) {
-                // demote the Operator into additionalOperators; the Authority stays primary
                 appendAdditionalOperator(line, FACTORY.createOperatorRef(line.getOperatorRef()));
                 line.setOperatorRef(null);
             } else {
-                // demote the Authority into additionalOperators; the Operator stays primary
                 appendAdditionalOperator(line, FACTORY.createAuthorityRef(line.getAuthorityRef()));
                 line.setAuthorityRef(null);
             }

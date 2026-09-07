@@ -29,19 +29,19 @@ import java.util.TreeSet;
 /// resolve to.
 ///
 /// [RecursiveAttributes#toRef] names a reference's target class from its `nameOfRefClass`
-/// attribute when registered, else from the reference's JAVA class. Across the corpus that
-/// attribute is usually ABSENT, so anything reading a stored fragment without unmarshalling it has
+/// attribute when registered, else from the reference's Java class. Across the corpus that
+/// attribute is usually absent, so anything reading a stored fragment without unmarshalling it has
 /// only the element name to go on. This index is the missing half.
 ///
-/// A candidate SET, not a function: some NeTEx element names are declared with different types in
-/// different parents, so the name alone does not determine the class. Rather than guess, this
-/// returns every possibility, and the caller must reach the same verdict for ALL of them or fall
-/// back to the unmarshal. An unknown name returns `null` — "no idea, decode it".
+/// A candidate set, not a function: some NeTEx element names are declared with different types in
+/// different parents, so the name alone does not determine the class. Every possibility is
+/// returned, and the caller must reach the same verdict for all of them or fall back to the
+/// unmarshal. An unknown name returns `null` — "no idea, decode it".
 ///
-/// COMPLETENESS is the safety property: a missing candidate could let a caller skip an object it
+/// Completeness is the safety property: a missing candidate could let a caller skip an object it
 /// should have repaired. So every way this model can name an element is enumerated — the
 /// `ObjectFactory`'s `@XmlElementDecl`s, which cover substitution groups, and every field annotated
-/// `@XmlElement(s)` / `@XmlElementRef(s)`. A ref-typed field with NO element annotation binds to an
+/// `@XmlElement(s)` / `@XmlElementRef(s)`. A ref-typed field with no element annotation binds to an
 /// element named after the field, JAXB's field-access default; those are recorded and counted.
 public final class RefElementIndex {
 
@@ -93,23 +93,23 @@ public final class RefElementIndex {
 
     /// Every target-class name a reference element with this local name could resolve to, or
     /// `null` when the model declares no such reference element (caller must unmarshal).
-    /// Namespaces are deliberately merged: two same-named elements in different namespaces yield
-    /// both candidates, which can only make a caller more conservative.
+    /// Namespaces are merged: two same-named elements in different namespaces yield both
+    /// candidates.
     public static synchronized String[] candidates(String localName) {
         if (byElement == null) build();
         return byElement.get(localName);
     }
 
-    /// The target-class names a reference element named `elementName` can have when it is a
-    /// DIRECT child of an object of class `owner` — `null` when `owner` does not
-    /// fix the type and the caller must fall back to [#candidates(String)].
+    /// The target-class names a reference element named `elementName` can have when it is a direct
+    /// child of an object of class `owner` — `null` when `owner` does not fix the type and the
+    /// caller must fall back to [#candidates(String)].
     ///
     /// This disambiguates the shared names: `FromPointRef` means several different things across
     /// NeTEx, but a `ServiceLink`'s `FromPointRef` is declared `ScheduledStopPointRefStructure` and
     /// nothing else, and the owner class of a depth-1 reference is the stored object's own class,
     /// which the full_key already gives.
     ///
-    /// Only fields whose annotation FIXES the type count — `@XmlElement` / `@XmlElements`, and
+    /// Only fields whose annotation fixes the type count — `@XmlElement` / `@XmlElements`, and
     /// unannotated fields. `@XmlElementRef` fields are deliberately excluded: their element name
     /// resolves through the global declaration and may be substituted by a subtype, so the field's
     /// own bound is not authoritative; those names fall back to the global candidate set. Within one
@@ -138,7 +138,7 @@ public final class RefElementIndex {
                     } else if (es != null) {
                         for (XmlElement x : es.value()) record(acc, x.name(), valueType(x.type()));
                     } else if (v != null && VersionOfObjectRefStructure.class.isAssignableFrom(v)) {
-                        record(acc, f.getName(), v); // JAXB FIELD-access default naming
+                        record(acc, f.getName(), v); // JAXB field-access default naming
                     }
                 }
             }
@@ -185,7 +185,7 @@ public final class RefElementIndex {
                 XmlElementRefs ers = f.getAnnotation(XmlElementRefs.class);
                 if (ers != null) for (XmlElementRef x : ers.value()) named |= record(out, x.name(), valueType(x.type()));
                 if (isRef && !named) {
-                    // JAXB FIELD-access default: the element is named after the field itself.
+                    // JAXB field-access default: the element is named after the field itself.
                     record(out, f.getName(), v);
                     un++;
                 }

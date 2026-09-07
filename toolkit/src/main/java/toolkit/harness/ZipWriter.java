@@ -14,16 +14,13 @@ import java.util.zip.ZipOutputStream;
 /// A zip an export writes entry by entry, with the entry metadata pinned and the byte/object totals
 /// kept. No NeTEx and no profile knowledge: it takes names and bytes.
 ///
-/// PINNED buys comparable metadata, not a reproducible archive. Every entry is stamped at the DOS
-/// epoch, so the headers carry no wall clock; the CONTENT still does, in each entry's
+/// Pinning buys comparable metadata, not a reproducible archive. Every entry is stamped at the DOS
+/// epoch, so the headers carry no wall clock; the content still does, in each entry's
 /// `<PublicationTimestamp>`, and so therefore do the deflated bytes. Compare exports with
 /// `tools/diff/export_zip.py`, which normalises that field — never by hash.
 ///
 /// `setTimeLocal`, not `setTime`: the latter round-trips through a timezone, so the same instant
 /// lands on a different DOS field depending on where the exporter runs.
-///
-/// The per-entry totals live here because this is the only place both halves are known: the caller
-/// counts objects, this counts bytes.
 public final class ZipWriter implements AutoCloseable {
 
     /// The DOS epoch: 1980-01-01 00:00:00, the earliest timestamp a zip entry can carry.
@@ -78,7 +75,7 @@ public final class ZipWriter implements AutoCloseable {
 
     /// One more object emitted into the open entry. Separate from [#write] because a fragment goes
     /// out as one array, but so do the container tags around it and the frame wrapper, and only the
-    /// caller knows which of those is an object.
+    /// caller knows which of those is an object — the caller counts objects, this counts bytes.
     public void countObject() {
         entryObjects++;
     }

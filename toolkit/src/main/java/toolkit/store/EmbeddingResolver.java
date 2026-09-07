@@ -24,18 +24,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/// The SECOND resolution pass: references whose target is an EMBEDDED object — one that carries an
+/// The second resolution pass: references whose target is an embedded object — one that carries an
 /// id but owns no row of its own, only its container does — wired to the container that holds it.
 ///
-/// Not part of the engine it sits on: everything below is a statement about the NeTEx object model
-/// — which classes can contain which, what counts as an embedded entity, how close a near-match
-/// must be before a reference is rewritten to reach it.
-///
-/// The transaction is NOT ours: `AbstractLmdbStore.resolveEmbeddings()` opens it and commits, so
+/// The transaction is not ours: `AbstractLmdbStore.resolveEmbeddings()` opens it and commits, so
 /// [StoreResolve]'s "never call this under an open rwTxn" rule has exactly one subject.
 ///
-/// [BlobRepair] arrives from the store rather than being constructed here, because its patcher's
-/// counters are cumulative across BOTH passes.
+/// [BlobRepair] must arrive from the store rather than be constructed here: its patcher's counters
+/// are cumulative across both passes.
 final class EmbeddingResolver {
 
     /// -Dtoolkit.embIndexTrust=false: ignore a complete index and take the corpus scan. The
@@ -57,17 +53,8 @@ final class EmbeddingResolver {
 
     /// Mutable state of one resolveEmbeddings pass (shared with the per-class scan).
     ///
-    /// `unresolvedPairs` holds a PRIMITIVE referrer set per target key, and that is what makes this
-    /// pass runnable on a converted corpus at all. Its rows are already resident in the store's own
-    /// columns at 12 bytes each (`unresSrc` long + `unresKeyId` int); a `LinkedHashSet<Long>` costs
-    /// a boxed `Long` plus a map entry on top of that, ~64 B, so the pass used to build a copy of
-    /// the whole unresolved map several times larger than the map itself. On the post-EPIP national
-    /// store — 83,894,176 rows over 10,653,250 distinct target keys — that copy is what exhausted a
-    /// 16 GB heap in `XbDbToDb` and is why this pass has never run there.
-    ///
-    /// `LongLinkedOpenHashSet` and not `LongOpenHashSet`: iteration order is load-bearing here (see
-    /// [#resolveEmbeddings]), and only the linked variant keeps insertion order the way the
-    /// `LinkedHashSet` it replaces did.
+    /// `unresolvedPairs` must stay a linked primitive set: iteration order is load-bearing (see
+    /// [#resolveEmbeddings]), so `LongOpenHashSet` is not a substitute.
     private static final class EmbState {
         final LinkedHashMap<BytesKey, LongLinkedOpenHashSet> unresolvedPairs = new LinkedHashMap<>();
         final LinkedHashMap<BytesKey, List<BytesKey>> unresolvedById = new LinkedHashMap<>();
@@ -79,13 +66,13 @@ final class EmbeddingResolver {
         long exactResolved;
     }
 
-    /// Exact container binding, the ORDER-SENSITIVE near-match queue, and the phase-B reference
+    /// Exact container binding, the order-sensitive near-match queue, and the phase-B reference
     /// repair with blob rewrite.
     ///
-    /// Order matters. Unresolved rows are taken in cursor order, so the bucket insertion
-    /// order that decides which variant wins a near-match is fixed; class maps are visited
-    /// size-ascending with ties broken by class idx, and containers within a map in ascending key
-    /// order, index-driven discovery included. The almost-queue is last-write-wins.
+    /// The order is load-bearing. Unresolved rows are taken in cursor order, so the bucket
+    /// insertion order that decides which variant wins a near-match is fixed; class maps are
+    /// visited size-ascending with ties broken by class idx, and containers within a map in
+    /// ascending key order, index-driven discovery included. The almost-queue is last-write-wins.
     long resolveEmbeddings(AbstractLmdbStore.LmdbTxn t) {
         EmbState s = new EmbState();
         Set<Class<?>> missingClasses = new LinkedHashSet<>();
@@ -114,9 +101,9 @@ final class EmbeddingResolver {
         Set<Class<?>> clazzes = new LinkedHashSet<>();
         for (Set<Class<?>> parents : index.values()) clazzes.addAll(parents);
 
-        // Container discovery: with a COMPLETE persisted embedding index, one id-prefix
-        // range-scan per unresolved id selects every relevant container; otherwise fall back
-        // to the candidate-class corpus scan. Only which rows are deserialised changes.
+        // Container discovery: with a complete persisted embedding index, one id-prefix range-scan
+        // per unresolved id selects every relevant container; otherwise fall back to the
+        // candidate-class corpus scan.
         if (embeddingIndexReady(t)) {
             s.containersByClass = new HashMap<>();
             Map<Integer, Set<BytesKey>> byClass = new HashMap<>();
@@ -195,7 +182,7 @@ final class EmbeddingResolver {
             scanEmbeddingClass(t, e.getKey(), e.getValue(), s);
         }
         if (!s.unresolvedPairs.isEmpty() && !skippedScoped.isEmpty()) {
-            // The scoped prefilter is exact only for EXACT matches; rescan the skipped parents so
+            // The scoped prefilter is exact only for exact matches; rescan the skipped parents so
             // id-based near-match repairs are not lost.
             Log.info("[resolve_embeddings] %d rows remain; rescanning %d scoped-skipped class maps for near-match repairs",
                     s.unresolvedPairs.size(), skippedScoped.size());
@@ -264,9 +251,8 @@ final class EmbeddingResolver {
         if (stored == null) return false;
         String want = store.embeddingScopeTag();
         if (!stored.equals(want)) {
-            // Complete for a DIFFERENT scope than this store was opened with, so it has no rows for
-            // the classes that scope added. Fall back: the scan is correct, and re-running the load
-            // rewrites the marker.
+            // Complete for a different scope than this store was opened with, so it has no rows for
+            // the classes that scope added. Re-running the load rewrites the marker.
             Log.warn("[resolve_embeddings] embedding index was built for a different scope, "
                     + "falling back to the corpus scan (stored %s, want %s)", stored, want);
             return false;
@@ -289,7 +275,7 @@ final class EmbeddingResolver {
         Dbi<byte[]> d = store.classDbi(t, cIdx, false);
         if (d == null) return;
         if (s.containersByClass == null) {
-            // The break on an emptied unresolved set is the NORMAL exit — close the cursor.
+            // The break on an emptied unresolved set is the normal exit — close the cursor.
             try (AbstractLmdbStore.RowIterator<ObjectRow> rows =
                          (AbstractLmdbStore.RowIterator<ObjectRow>) store.iterObjects(t, clazz).iterator()) {
                 while (rows.hasNext()) {
@@ -320,11 +306,9 @@ final class EmbeddingResolver {
             Variant v = variantOfCandidate(cand, emb, embVersion, s);
             if (v == null) continue;
             if (v.versionChange() == null && v.classChange() == null) {
-                // Exact: wire every referrer of the MATCHED row onto the container and drain it.
+                // Exact: wire every referrer of the matched row onto the container and drain it.
                 LongLinkedOpenHashSet referrers = s.unresolvedPairs.remove(v.matchedRow());
                 if (referrers == null) continue;
-                // LongIterator, not the enhanced for: this drain runs once per unresolved ROW —
-                // tens of millions on a converted corpus — and Iterable<Long> would box every one.
                 for (LongIterator it = referrers.iterator(); it.hasNext();) {
                     long r = it.nextLong();
                     store.putEdge(t, r, containerFk);
@@ -338,7 +322,7 @@ final class EmbeddingResolver {
                     if (remaining <= 0) s.stillMissing.remove(resolvedCls);
                 }
             } else {
-                // The queue is keyed by the matched ROW while the guard checks the CANDIDATE key,
+                // The queue is keyed by the matched row while the guard checks the candidate key,
                 // so the guard is always true: last write wins.
                 if (!s.almostQueue.containsKey(new BytesKey(cand))) {
                     s.almostQueue.put(v.matchedRow(),

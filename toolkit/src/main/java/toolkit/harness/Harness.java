@@ -9,12 +9,6 @@ import toolkit.util.Strictness;
 import java.util.Map;
 
 /// The tail every driver sandwich runs, in one place.
-///
-/// Report the reference fallbacks, report the bind events, decide the `bindEvents` concern, print
-/// the effective policy.
-///
-/// NOT a base class: the sandwiches are static entry points with genuinely different middles and no
-/// shared state. What they share is a suffix, and a suffix is a call.
 final class Harness {
 
     private Harness() {}
@@ -26,13 +20,13 @@ final class Harness {
         toolkit.codec.BindEvents.report(tag);
         Strictness.require(Strictness.BIND_EVENTS, "bindEvents", toolkit.codec.BindEvents.total(),
                 tag, "source values did not parse into their bound type and were left empty");
-        // The half BindEvents CANNOT see: an unparseable date/time becomes a carrier, the adapter
+        // The half BindEvents cannot see: an unparseable date/time becomes a carrier, the adapter
         // returns an object, no ValidationEvent is raised and the line above counts zero.
         Log.info("[%s] unparsed date/time values: %s", tag, noi.netex.time.UnparsedTally.summary());
         Strictness.require(Strictness.UNPARSED_TIME, "unparsedTime",
                 noi.netex.time.UnparsedTally.total(), tag,
-                // Deliberately does not claim the bytes changed: an unparsed carrier re-marshals
-                // verbatim. What is lost is the VALUE, at every arithmetic site, silently.
+                // The bytes are unchanged: an unparsed carrier re-marshals verbatim. What is lost
+                // is the value, at every arithmetic site, silently.
                 "date/time values did not parse and are held as raw text, so every "
                 + "toLocalTime()/toLocalDateTime()/toDuration() on them returns null");
         Strictness.report();

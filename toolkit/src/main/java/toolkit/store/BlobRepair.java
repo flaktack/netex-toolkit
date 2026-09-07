@@ -13,23 +13,20 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
-/// Persisting an object whose ONLY change is `version`/`nameOfRefClass` on some of its
+/// Persisting an object whose only change is `version`/`nameOfRefClass` on some of its
 /// references — the shared write end of both resolve passes.
 ///
-/// ONE INSTANCE PER STORE, because the numbers have two lifetimes: [#patchStats] is a per-STAGE
-/// tally reset by [#logPatchStats], while the [RefPatcher]'s refusal and odd-name diagnostics belong
-/// to the patcher instance and are cumulative over the store.
-///
-/// What it needs from the store is three members — `classDbi`, `codec` and `idxForName`. Nothing
-/// here reads the edge index or the id index.
+/// One instance per store: [#patchStats] is a per-stage tally reset by [#logPatchStats], while the
+/// [RefPatcher]'s refusal and odd-name diagnostics belong to the patcher instance and are
+/// cumulative over the store.
 final class BlobRepair {
 
-    /// -Dtoolkit.refPatch=false reverts resolve() to the whole-blob re-marshal (the
-    /// measurement/neutering knob; the two paths must produce the same graph dump).
+    /// -Dtoolkit.refPatch=false reverts resolve() to the whole-blob re-marshal; the two paths must
+    /// produce the same graph dump.
     private static final boolean REF_PATCH = Conf.on(Conf.REF_PATCH);
 
-    /// -Dtoolkit.inventNameOfRefClass=false stops resolve() from ADDING a `nameOfRefClass`
-    /// attribute to references whose source never carried one. It changes only whether an ABSENT
+    /// -Dtoolkit.inventNameOfRefClass=false stops resolve() from adding a `nameOfRefClass`
+    /// attribute to references whose source never carried one. It changes only whether an absent
     /// attribute is invented; one that exists is corrected either way.
     private static final boolean INVENT_NAME_OF_REF_CLASS =
             Conf.on(Conf.INVENT_NAME_OF_REF_CLASS);
@@ -44,9 +41,9 @@ final class BlobRepair {
         this.store = store;
     }
 
-    /// The store's ONE patcher, for the blob sweep's decode-free read
-    /// (`ReferenceResolver.mayNeedBlobRepair`). Handed out rather than wrapped because the refusal
-    /// counters it accumulates must be the same ones the write path fills.
+    /// The store's one patcher, for the blob sweep's decode-free read
+    /// (`ReferenceResolver.mayNeedBlobRepair`). The refusal counters it accumulates must be the
+    /// same ones the write path fills.
     RefPatcher patcher() {
         return refPatcher;
     }
@@ -72,24 +69,18 @@ final class BlobRepair {
                 NulKeyCodec.classIdxBytes(store.idxForName(name)), true);
     }
 
-    /// Re-marshal a repaired object over its stored blob — the FALLBACK path.
-    ///
-    /// LOSSY: it replaces the source-captured bytes with a marshalled fragment, which is what
-    /// [#writeRepairedBlob] exists to avoid. Used whenever the byte-level patch cannot be proven
-    /// safe.
+    /// Re-marshal a repaired object over its stored blob — the fallback path, used whenever the
+    /// byte-level patch cannot be proven safe. Lossy: it replaces the source-captured bytes with a
+    /// marshalled fragment.
     private void writeBlob(AbstractLmdbStore.LmdbTxn t, long fullKey, Object obj) {
         int idx = NulKeyCodec.fullKeyClassIdx(fullKey);
         store.classDbi(t, idx, true).put(t.tx,
                 NulKeyCodec.u32le(NulKeyCodec.fullKeyLocal(fullKey)), store.codec.encode(obj));
     }
 
-    /// Persist an object whose ONLY change is `version`/`nameOfRefClass` on some of its
+    /// Persist an object whose only change is `version`/`nameOfRefClass` on some of its
     /// references — by rewriting those start-tag attributes in the stored bytes rather than
-    /// re-marshalling the whole fragment ([RefPatcher] explains why).
-    ///
-    /// Three outcomes, all counted: nothing changed, so the stored bytes are already correct and no
-    /// write happens; the patch applied; or the patch could not be proven safe and [#writeBlob]'s
-    /// re-marshal is used.
+    /// re-marshalling the whole fragment.
     void writeRepairedBlob(AbstractLmdbStore.LmdbTxn t, long fullKey, Object obj,
                            List<RecursiveAttributes.Ref> refs, String[][] before) {
         if (!REF_PATCH) {
@@ -126,8 +117,7 @@ final class BlobRepair {
     }
 
     /// One line per resolve stage so the fallback rate is visible in every load log. The per-stage
-    /// outcome counters are reset here; the RefPatcher's refusal/odd-name diagnostics are not (they
-    /// belong to the patcher instance and are cumulative over the store).
+    /// outcome counters are reset here; the [RefPatcher]'s diagnostics are not.
     void logPatchStats(String stage) {
         Log.info("[%s] blob repair: %d patched in place, %d needed no write, %d re-marshal "
                         + "fallbacks (%d attribute conflicts, %d missing blobs); %d odd-named ref elements",

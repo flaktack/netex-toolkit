@@ -42,22 +42,7 @@ import java.util.Set;
 /// RecursiveAttributes reference extraction. Format-specific pieces (edge/unresolved storage, meta
 /// layout, clone) are abstract.
 ///
-/// The domain logic over the NeTEx object model is NOT here. It is four package-private classes,
-/// each holding one `AbstractLmdbStore`:
-///
-/// - [ReferenceResolver] — the tier loop, its memo, the bind-time repair, the sweep;
-/// - [EmbeddingResolver] — container binding and the near-match queue;
-/// - [BlobRepair] — the write path both passes share (ONE instance per store);
-/// - [ClosureQueries] — the CSR and the export closure.
-///
-/// [#resolve()] and [#resolveEmbeddings()] open and commit the rwTxn here and hand the open
-/// [LmdbTxn] to the pass: this store owns LMDB's single-writer lock, which is what keeps
-/// [StoreResolve]'s deadlock rule about one place.
-///
-/// One subclass, [toolkit.store.v2.V2Store]; the abstract hooks below are where a second format
-/// would attach.
-///
-/// Storage facts, shared with V2Store:
+/// Storage facts, shared with the v2 format:
 ///
 /// - class maps are PLAIN byte-ordered dbs keyed by 4-byte LE local key, NOT INTEGERKEY;
 /// - class-map NAMES are the raw 2-byte LE class idx. LMDB db names are C strings, so a trailing
@@ -81,7 +66,8 @@ public abstract class AbstractLmdbStore implements Store {
 
     protected Dbi<byte[]> idIdx;
     protected Dbi<byte[]> meta;
-    /// Persisted scoped embedding index (A7): encoded embedded key -&gt; container full_key. Null on old dbs.
+    /// Persisted scoped embedding index: encoded embedded key -&gt; container full_key. Null on old
+    /// dbs.
     protected Dbi<byte[]> embIdx;
     private final Map<Integer, Dbi<byte[]>> classDbis = new HashMap<>();
     private final Set<Integer> existingClassMaps = new HashSet<>();
@@ -92,17 +78,16 @@ public abstract class AbstractLmdbStore implements Store {
     /// Class-scoped duplicate-merge policies (see [Store#setMergePolicy]); session state, empty by default.
     private final Map<Class<?>, Store.MergeFn> mergePolicies = new HashMap<>();
 
-    /// WHICH classes get an embedding-index row — injected at construction, never decided here, so
-    /// no NeTEx class is named below this point.
+    /// Which classes get an embedding-index row, injected at construction.
     ///
     /// `classNames` is curated, and [AbstractLmdbStore#inEmbeddingScope] matches it against the
     /// JAXB SIMPLE NAME of the object the parser built — not always the profile's element name,
     /// which is why a list may need entries that look redundant. The other half is the generative
     /// `TypeOf*`-but-not-`*Ref` rule, versioned by [#RULE].
     ///
-    /// A scope is a VALUE and [#tag()] is its identity on disk. The tag MUST change whenever the
-    /// answer to "is this class indexed?" changes in either half — everything the completion marker
-    /// guarantees rests on that.
+    /// A scope is a value and [#tag()] is its identity on disk. The tag must change whenever the
+    /// answer to "is this class indexed?" changes in either half; the completion marker guarantees
+    /// nothing otherwise.
     public record EmbeddingScope(Set<String> classNames) {
 
         /// Version of the generative half. Bump it when the `TypeOf*` predicate changes shape;
@@ -120,11 +105,8 @@ public abstract class AbstractLmdbStore implements Store {
                     || (simpleName.startsWith("TypeOf") && !simpleName.endsWith("Ref"));
         }
 
-        /// The identity of this scope, stored as the completion marker's value. Recording the scope
-        /// rather than a present/absent flag is what makes an index built under a widened allowlist
-        /// degrade to the corpus scan instead of silently asserting completeness.
-        ///
-        /// Human-readable, not digested: one short `_meta` row.
+        /// The identity of this scope, stored as the completion marker's value: an index built
+        /// under a widened allowlist reads as incomplete and degrades to the corpus scan.
         public String tag() {
             List<String> names = new ArrayList<>(classNames);
             names.sort(Comparator.naturalOrder());
@@ -140,9 +122,9 @@ public abstract class AbstractLmdbStore implements Store {
         return embScope;
     }
 
-    /// The DEFAULT profile's curated names, i.e. `Stores.NETEX_EMBEDDING_SCOPE`'s. NOT the answer
-    /// to "what is this store indexed under" — that is [#embeddingScope()], and the two differ
-    /// exactly when a caller injected a scope.
+    /// The default profile's curated names, i.e. `Stores.NETEX_EMBEDDING_SCOPE`'s. What a given
+    /// store is indexed under is [#embeddingScope()]; the two differ exactly when a caller injected
+    /// a scope.
     public static Set<String> embeddingIndexClassNames() {
         return Stores.NETEX_EMBEDDING_SCOPE.classNames();
     }
@@ -218,15 +200,10 @@ public abstract class AbstractLmdbStore implements Store {
         openExistingClassMaps();
     }
 
-    /// A WRITABLE open of a store whose index was built under a DIFFERENT scope drops that store's
-    /// completeness marker, before any insert can run. Inserts feed the index through THIS store's
-    /// scope and touch no marker, so opening a scope-A store with scope B and inserting would leave
-    /// A rows and B rows under a marker still saying A. A marker survives only while every row
-    /// behind it was written under the scope it names. The read side needs no such guard —
-    /// [#embeddingIndexReady] refuses a tag it did not write.
-    ///
-    /// Writes nothing in the ordinary case — same scope, marker intact. It does clear the bare
-    /// `"1"` of a pre-scope store.
+    /// A writable open of a store whose index was built under a different scope drops that store's
+    /// completeness marker, before any insert can run: a marker survives only while every row
+    /// behind it was written under the scope it names, and inserts feed the index through THIS
+    /// store's scope while touching no marker. The bare `"1"` of a pre-scope store is cleared too.
     private void retractForeignScopeMarker() {
         try (LmdbTxn t = (LmdbTxn) rwTxn()) {
             String stored = markerValue(t, Marker.EMBEDDING_IDX_DONE);
@@ -244,8 +221,8 @@ public abstract class AbstractLmdbStore implements Store {
     /// Open every class map the database already holds in ONE committing transaction, before this
     /// constructor returns and therefore before any caller's transaction exists.
     ///
-    /// A lifetime rule, not a warm-up. `mdb_dbi_open` publishes a handle to the ENVIRONMENT only
-    /// when the opening transaction commits, and this hits both consequences:
+    /// `mdb_dbi_open` publishes a handle to the ENVIRONMENT only when the opening transaction
+    /// commits, and this hits both consequences:
     ///
     /// - a handle opened inside a READ txn dies with it — lmdbjava's `Txn.close()` aborts, closing
     ///    the handle and recycling its slot — while the cache outlives the txn;
@@ -653,9 +630,9 @@ public abstract class AbstractLmdbStore implements Store {
         // Fallback prefix scan: prefer the row whose class trailer matches the declared class,
         // else the first (smallest) row for the bare id wins, deterministically.
         //
-        // DETERMINISTIC IS NOT CORRECT: with a null classTrailer the loop returns the smallest
-        // id-index row for the BARE id, ignoring the requested class and version, so a reference
-        // can be answered with the wrong type or version. The CHOICE must not change; byte
+        // Deterministic is not correct: with a null classTrailer the loop returns the smallest
+        // id-index row for the bare id, ignoring the requested class and version, so a reference
+        // can be answered with the wrong type or version. The choice must not change — byte
         // identity of every store built through this path depends on it.
         long seen = REF_FALLBACKS.sum();
         REF_FALLBACKS.increment();
@@ -706,11 +683,9 @@ public abstract class AbstractLmdbStore implements Store {
         REF_FALLBACKS.reset();
     }
 
-    /// The per-run line; a clean run still says so in one INFO line.
-    ///
-    /// Its own concern, deliberately not `UNRESOLVED_REFS`. That table holds references that
-    /// matched nothing; this one matched something, possibly of the wrong class and version, and
-    /// returned it.
+    /// The per-run line; a clean run still says so in one INFO line. Distinct from
+    /// `UNRESOLVED_REFS`, which counts references that matched nothing: these matched something,
+    /// possibly of the wrong class and version, and returned it.
     public static void reportRefFallbacks(String tag) {
         long n = REF_FALLBACKS.sum();
         if (n == 0) {
@@ -809,7 +784,7 @@ public abstract class AbstractLmdbStore implements Store {
         insertAnyObjects(txn, objects);
     }
 
-    /// Delete id-index rows pointing into this class (the \_purge_class_side_rows id half).
+    /// Delete id-index rows pointing into this class.
     private void purgeIdRows(LmdbTxn t, int classIdx) {
         List<byte[]> stale = new ArrayList<>();
         try (CursorIterable<byte[]> ci = idIdx.iterate(t.tx)) {
@@ -827,9 +802,9 @@ public abstract class AbstractLmdbStore implements Store {
     /// Objects inserted this run, indexed by class idx; grown on demand, because the class table is
     /// not fully populated until the first insert of each class.
     ///
-    /// Per STORE, not static, and not reset by a commit: the question it answers is "what did this
-    /// stage write", and a stage may commit many times. The single-writer discipline (one rw txn at
-    /// a time, the store owns the lock) is what makes an unsynchronised array safe here.
+    /// Per store, and not reset by a commit: it answers "what did this stage write", and a stage
+    /// may commit many times. Unsynchronised, so safe only while the single-writer discipline holds
+    /// — one rw txn at a time, this store owning LMDB's writer lock.
     private long[] insertedByIdx = new long[0];
 
     /// Rows copied VERBATIM by `cloneFrom`, indexed by class idx. Counted apart from inserts
@@ -852,7 +827,7 @@ public abstract class AbstractLmdbStore implements Store {
     }
 
     /// Objects inserted this run, by class name, highest first, zero-count classes omitted. For an
-    /// IN-PLACE fix this is the only measure of what ran: it re-emits objects under their existing
+    /// in-place fix this is the only measure of what ran: it re-emits objects under their existing
     /// (id, version), so a before/after row count is flat however much was rewritten.
     public java.util.LinkedHashMap<String, Long> insertedByClass() {
         return byClass(insertedByIdx);
@@ -950,9 +925,8 @@ public abstract class AbstractLmdbStore implements Store {
         }
         // A reference whose target is an EMBEDDED child misses here and lands in the unresolved map:
         // the id index holds first-class rows, and an embedded object has none. Wiring it to its
-        // container is toolkit.store.EmbeddingResolver's job, and it is deliberately not attempted
-        // here — this path sees the store as of THIS insert, so it cannot tell "no row" from "no row
-        // yet", and an edge written on that guess is one resolve() can never revisit.
+        // container is EmbeddingResolver's job and must not be attempted here — this path sees the
+        // store as of THIS insert, so it cannot tell "no row" from "no row yet".
         for (RecursiveAttributes.Ref ref : ex.references()) {
             int targetIdx = idxForName(ref.targetClassName());
             byte[] unresolvedValue = NulKeyCodec.encodeKey(
@@ -1040,13 +1014,13 @@ public abstract class AbstractLmdbStore implements Store {
 
     // ------------------------------------------------- reference repair without re-marshalling
 
-    /// The blob-repair write path of BOTH resolve passes — the byte-level attribute patch, its
+    /// The blob-repair write path of both resolve passes — the byte-level attribute patch, its
     /// re-marshal fallback, and the per-stage line that reports which of the two ran.
     ///
-    /// Constructed ONCE per store: the patcher's refusal and odd-name counters are cumulative over
-    /// the store while the outcome tally resets per stage.
+    /// One instance per store: the patcher's refusal and odd-name counters are cumulative over the
+    /// store while the outcome tally resets per stage.
     ///
-    /// Declared ahead of the two resolvers: both take this instance in their own field
+    /// Must stay declared ahead of the two resolvers: both take this instance in their own field
     /// initialisers, and Java runs those in textual order.
     private final BlobRepair blobRepair = new BlobRepair(this);
 

@@ -42,42 +42,27 @@ import org.xml.sax.SAXParseException;
 
 /// `nx xsd` — XSD validation of a NeTEx export zip, aggregated to a baseline-and-diff ledger.
 ///
-/// ## Not a correctness gate
-///
-/// Both arms carry hundreds of thousands of schema issues, so a pass/fail threshold is dead on
-/// arrival. NeTEx makes nearly everything optional — a missing `TransportMode` is `minOccurs="0"`,
-/// a timezone in `@srsName` validates because the type is `anyURI`, `@version` is `use="optional"`
-/// — so a schema validator is blind to data LOSS. It sees malformation.
-///
-/// ## What it is for
-///
-/// One orthogonal class no other gate can see: ELEMENT SEQUENCE ORDER — the export A/B
-/// canonicalises sibling order away, the round trip absorbs it, and JAXB readers accept it
-/// silently — plus lexical validity of ids and simple types, and the "both arms agree and both are
-/// wrong" case an A/B comparator can never reach.
-///
-/// ## Shape
-///
 /// ```
 /// nx xsd scan --zip <export.zip> [--schema PATH|1.15.2|2.0.0] [--workers N] --out FILE
 /// nx xsd diff <baseline.tsv> <new.tsv>      # exit 1 on a NEW row or a count increase
 /// ```
 ///
+/// Advisory, never a gate. NeTEx makes nearly everything optional — a missing `TransportMode` is
+/// `minOccurs="0"`, a timezone in `@srsName` validates because the type is `anyURI`, `@version` is
+/// `use="optional"` — so a schema validator sees malformation and not data loss. What it does see
+/// is element sequence order, which the export A/B canonicalises away and JAXB readers accept
+/// silently; lexical validity of ids and simple types; and the "both arms agree and both are wrong"
+/// case an A/B comparator cannot reach.
+///
 /// One TSV row per (arm, entry, cvc-class, message-signature) with a count and one verbatim
 /// sample, never per occurrence. Locations are not carried: an arm that writes one line of XML
 /// reports every error at line 2 with a column in the hundreds of millions.
 ///
-/// ## Implementation constraints
-///
-/// - STREAMING, never `byte[]`. Both arms have an entry larger than `Integer.MAX_VALUE`, which
-///    rules out any validator whose API takes a byte array.
-/// - The NO-CONSTRAINT schema root by default. The constrained root carries hundreds of key,
-///    keyref and unique constraints, costs an order of magnitude in wall, grows memory with
-///    document size, and is wrong per entry: the export is split across many files, so every
-///    cross-entry reference reports as a dangling keyref.
-/// - No new dependencies: the JDK validator against the schemas vendored beside the model, which
-///    are the tree the model was generated from, so a finding is a statement about the EMITTER
-///    rather than about schema/model version skew.
+/// - Streaming, never `byte[]`: both arms have an entry larger than `Integer.MAX_VALUE`.
+/// - The `-NoConstraint` schema root by default. Identity constraints are wrong per entry on a
+///    split export: every cross-entry reference reports as a dangling keyref.
+/// - The schemas vendored beside the model are the tree the model was generated from, so a finding
+///    is a statement about the emitter rather than about schema/model version skew.
 ///
 /// Launchable standalone with no classpath at all: it touches nothing outside the JDK.
 public final class XsdCmd {
@@ -86,7 +71,6 @@ public final class XsdCmd {
     private static final int SIG_CARDINALITY_CAP = 5000;
     private static final int SAMPLE_MAX = 400;
 
-    /// Default schema root — see the class comment on why `-NoConstraint` is not optional.
     private static final String DEFAULT_SCHEMA_VERSION = "1.15.2";
     private static final String SCHEMA_LEAF = "NeTEx_publication-NoConstraint.xsd";
 
@@ -198,7 +182,7 @@ public final class XsdCmd {
                 VERSION, zip.toAbsolutePath(), Files.size(zip), schemaFile, arm, workers);
         if (constrained) {
             log.println("  !! --constrained: identity constraints ON. 13x wall, unbounded memory, and");
-            log.println("     per-entry FALSE dangling keyrefs on a split export. NETEX_VALIDATION §3.1.");
+            log.println("     per-entry FALSE dangling keyrefs on a split export.");
         }
 
         MemSampler mem = new MemSampler();
@@ -304,7 +288,7 @@ public final class XsdCmd {
         sb.append("# zip_sha256      ").append(sha).append('\n');
         sb.append("# zip_mtime       ").append(Files.getLastModifiedTime(zip)).append('\n');
         sb.append("# schema          ").append(schemaFile).append('\n');
-        sb.append("# identity_constraints ").append(constrained ? "ON (see NETEX_VALIDATION 3.1 -- this is wrong per-entry)" : "off").append('\n');
+        sb.append("# identity_constraints ").append(constrained ? "ON (wrong per-entry)" : "off").append('\n');
         sb.append("# entries         ").append(results.size()).append('\n');
         sb.append("# uncompressed_B  ").append(totalBytes).append('\n');
         sb.append("# workers         ").append(workers).append('\n');
@@ -635,7 +619,7 @@ public final class XsdCmd {
         if (spec.endsWith(".xsd")) {
             p = Path.of(spec);
         } else {
-            // resolve relative to this source file's tree: scratch/nx/ -> ../../model/schemas
+            // resolve relative to this source file's tree: ../../model/schemas
             Path root = Path.of("model", "schemas", spec);
             if (!Files.isDirectory(root)) root = Path.of("..", "..", "model", "schemas", spec);
             p = root.resolve(leaf);
@@ -644,7 +628,7 @@ public final class XsdCmd {
             System.err.println("nx xsd: no schema at " + p.toAbsolutePath());
             System.err.println("        run from the repository root, or pass --schema <path to .xsd>");
             System.err.println("        note: the EPIP profile XSD is NOT vendored here, and per");
-            System.err.println("        NETEX_VALIDATION §3.2 it is unmaintained and pinned to NeTEx 1.3.1 —");
+            System.err.println("        report it is unmaintained and pinned to NeTEx 1.3.1 —");
             System.err.println("        advisory only, never a gate, and label the skew if you use it.");
             return null;
         }
@@ -663,7 +647,7 @@ public final class XsdCmd {
         return sb.toString();
     }
 
-    /// Peak heap and peak RSS, sampled — the two numbers the report has to quote honestly.
+    /// Peak heap and peak RSS, sampled.
     private static final class MemSampler {
         private volatile boolean run = true;
         private volatile long peakHeap, peakRss;

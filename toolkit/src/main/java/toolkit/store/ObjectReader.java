@@ -1,16 +1,11 @@
 package toolkit.store;
 
-/// **Role: object reads.** Every way to get an object (or its undecoded blob) out of a class
-/// map — whole-map iteration, key-only scans, point loads by local key, by full_key and by
-/// reference.
+/// Role: object reads. Every way to get an object (or its undecoded blob) out of a class map —
+/// whole-map iteration, key-only scans, point loads by local key, by full_key and by reference.
 ///
-/// Excludes the id index and the edge index: everything here is addressed by a key the caller
-/// ALREADY holds. Turning an `id` into a key is [IdIndex]'s question, following an edge is
-/// [RefGraph]'s. [#loadObjectByReference] is the exception because its ANSWER is an object — it
-/// does the id-index hop internally and never shows the caller a full_key.
-///
-/// A holder cannot write, open a txn or name a class: it is handed a [Txn] and a [Class] and can
-/// only read.
+/// Everything here is addressed by a key the caller already holds; turning an `id` into a key is
+/// [IdIndex]'s question, following an edge is [RefGraph]'s. [#loadObjectByReference] is the
+/// exception: it does the id-index hop internally and never shows the caller a full_key.
 public interface ObjectReader {
 
     /// All (localKey, object) rows of a class map, decode included; empty when the map is absent.

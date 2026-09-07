@@ -36,11 +36,8 @@ public final class TimetabledPassingTimesProfile {
     /// SHORT by this many stops, which no consumer can distinguish from a journey that really
     /// calls at fewer stops than its pattern lists.
     ///
-    /// Both mismatch arms are KNOWN-UNFINISHED (OPEN.md §16) — they log and skip rather than
-    /// resolving which of the two refs is right. Reported and reset by [#reportDropped].
-    ///
-    /// Atomic rather than a plain long because it is static, so a second caller could reach it from
-    /// another thread.
+    /// Both mismatch arms are KNOWN-UNFINISHED — they log and skip rather than resolving which of
+    /// the two refs is right. Reported and reset by [#reportDropped].
     private static final AtomicLong ORDER_MISMATCH = new AtomicLong();
 
     /// Report the aggregate under the `droppedOutput` concern and reset it, returning what was
@@ -71,8 +68,7 @@ public final class TimetabledPassingTimesProfile {
                 (PointInJourneyPatternRefStructure) NetexUtils.getRef(pattern.get(call.getOrder()))));
         // PURE COPIES: XmlTime carriers assigned straight across, so an after-midnight 24:09:00
         // stays 24:09:00 and an offset-bearing 18:51:00+01:00 keeps its offset. Do NOT normalise
-        // here — toLocalTime() would fold hour 24 to 00 and drop the offset. Normalisation belongs
-        // at SEMANTIC boundaries; this is a serialization copy.
+        // here — toLocalTime() would fold hour 24 to 00 and drop the offset.
         if (call.getArrival() != null) {
             tpt.setArrivalTime(call.getArrival().getTime());
             tpt.setArrivalDayOffset(call.getArrival().getDayOffset());
@@ -102,8 +98,7 @@ public final class TimetabledPassingTimesProfile {
     }
 
     /// The stringified value of a bean property: a null object or a missing accessor is `""`, and a
-    /// present-but-null value is the literal `"None"`. Its only caller is [#refRepr], so those two
-    /// spellings reach LOG TEXT and nothing else.
+    /// present-but-null value is the literal `"None"`. Both spellings reach LOG TEXT only.
     public static String getProperty(Object obj, String attr) {
         if (obj == null) return "";
         String cap = Character.toUpperCase(attr.charAt(0)) + attr.substring(1);
@@ -122,7 +117,7 @@ public final class TimetabledPassingTimesProfile {
         Map<BigInteger, PointInLinkSequence_VersionedChildStructure> pattern = new HashMap<>();
         for (PointInLinkSequence_VersionedChildStructure x : journeyPattern.getPointsInSequence()
                 .getPointInJourneyPatternOrStopPointInJourneyPatternOrTimingPointInJourneyPattern()) {
-            pattern.put(x.getOrder(), x);   // {x.order: x} — duplicate orders last-win
+            pattern.put(x.getOrder(), x);   // duplicate orders last-win
         }
 
         List<TimetabledPassingTime> ttpt = new ArrayList<>();
@@ -132,7 +127,7 @@ public final class TimetabledPassingTimesProfile {
             String callRef = call.getScheduledStopPointRef().getValue().getRef();
             if (pis instanceof TimingPointInJourneyPattern_VersionedChildStructure tp) {
                 String pisRef = tp.getTimingPointRef().getValue().getRef();
-                if (!Objects.equals(pisRef, callRef)) {   // KNOWN GAP (OPEN.md §16)
+                if (!Objects.equals(pisRef, callRef)) {   // KNOWN GAP
                     ORDER_MISMATCH.incrementAndGet();
                     Log.warn("%s order does not match %s order (%s vs %s)",
                             journeyPattern.getId(), sj.getId(),
@@ -146,7 +141,7 @@ public final class TimetabledPassingTimesProfile {
                 StopPointInJourneyPattern_VersionedChildStructure spp =
                         (StopPointInJourneyPattern_VersionedChildStructure) pis;
                 String pisRef = spp.getScheduledStopPointRef().getValue().getRef();
-                if (!Objects.equals(pisRef, callRef)) {   // KNOWN GAP (OPEN.md §16)
+                if (!Objects.equals(pisRef, callRef)) {   // KNOWN GAP
                     ORDER_MISMATCH.incrementAndGet();
                     Log.warn("%s order does not match %s order (%s vs %s)",
                             journeyPattern.getId(), sj.getId(),
@@ -160,8 +155,6 @@ public final class TimetabledPassingTimesProfile {
 
         return ttpt;
     }
-
-    // ---------------------------------------------------------------- plumbing
 
     /// A readable stand-in for a ref: JAXB beans have no useful toString.
     private static String refRepr(Object refStructure) {

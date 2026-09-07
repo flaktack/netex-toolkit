@@ -1,21 +1,14 @@
 package toolkit.transform.epip;
 
-// Covers EpipSanitize.stripOrphanLevelRefs. Clearing the dangling LevelRefs is a DECISION: EPIP
-// requires an internal LevelRef to resolve in the same document, while its absence is conformant,
-// so a ref to a Level that is not there is removed rather than emitted.
+// Covers EpipSanitize.stripOrphanLevelRefs. EPIP requires an internal LevelRef to resolve in the
+// same document and treats its absence as conformant, so a ref to a Level the document does not
+// define is removed rather than emitted.
 //
-// THE GUARD IS THE SUBJECT OF MOST OF THIS FILE, because nothing downstream can see this change:
-// no consumer reads LevelRef, so the export A/B and the OTP gate are both blind to a wrong strip.
-// The only instrument that can catch one is the G1-G6 guard inside the transform. Hence the two
-// sabotage tests, one per direction:
+// Two shapes carry one: a SiteComponent's `levelRef`, and a `<LevelRef>` sitting directly in a
+// Site's `<levels>` (containment by reference), which is where a Parking carries it.
 //
-//   clear-all  must fail on `intact`  — and the <Level>-count invariant stays GREEN under it,
-//                                       which is why `intact` has to be asserted;
-//   clear-none must fail on `cleared`.
-//
-// Both shapes are covered: a Quay's SiteComponent `levelRef`, and a <LevelRef> sitting directly in
-// a Site's <levels> (containment by reference), which is where a Parking carries it. A
-// StopPlace-only strip leaves the export's shared-06 entry non-conformant.
+// No consumer reads LevelRef, so the export A/B comparison and the OTP gate are both blind to a
+// wrong strip; the G1-G7 guard inside the transform is the only instrument that catches one.
 
 import jakarta.xml.bind.JAXBElement;
 import jakarta.xml.bind.annotation.XmlElement;
@@ -51,10 +44,9 @@ public class TestEpipLevelRefs {
 
     /// Both shapes at once, with a control on each: the StopPlace defines one Level, one quay
     /// points at it (must survive) and one points at a Level nobody defines (must go); its
-    /// `<levels>` carries a containment-by-reference `<LevelRef>` at a Level nobody
-    /// defines (must go); and a bare `<QuayRef>` member of `<quays>` carries no
-    /// levelRef at all and must be counted as nothing. The Parking is the shape a StopPlace-only
-    /// strip would miss, in a document of its own.
+    /// `<levels>` carries a containment-by-reference `<LevelRef>` at a Level nobody defines (must
+    /// go); and a bare `<QuayRef>` member of `<quays>` carries no levelRef at all and must be
+    /// counted as nothing. The Parking carries the second shape.
     private static final String BOTH_SHAPES = """
         <SiteFrame id="site" version="1"><stopPlaces>
           <StopPlace id="at:49:975" version="1"><Name>Wien Testplatz</Name>
@@ -75,7 +67,7 @@ public class TestEpipLevelRefs {
         </parkings></SiteFrame>
         """;
 
-    /// The Parking shape ALONE — the entry a StopPlace-only strip leaves non-conformant.
+    /// The Parking shape alone.
     private static final String PARKING_ONLY = """
         <SiteFrame id="site" version="1"><parkings>
           <Parking id="at:45:50290:3" version="1"><Name>P+R</Name>
@@ -85,8 +77,8 @@ public class TestEpipLevelRefs {
         """;
 
     /// Two StopPlaces, one defining a Level and the other's quay referencing it — the shape G6
-    /// exists to refuse. Per Site the second one's ref is an orphan; per DOCUMENT, which is what
-    /// `Level_KeyRef`'s selector actually says, it resolves.
+    /// refuses. Per Site the second one's ref is an orphan; per document, which is what
+    /// `Level_KeyRef`'s selector says, it resolves.
     private static final String SHARED_LEVEL_ID = """
         <SiteFrame id="site" version="1"><stopPlaces>
           <StopPlace id="at:49:975" version="1"><Name>A</Name>
@@ -97,12 +89,6 @@ public class TestEpipLevelRefs {
         </stopPlaces></SiteFrame>
         """;
 
-    /// `<Entrance>` and `<AccessSpace>` carry the SAME
-    /// `SiteComponent_VersionStructure.levelRef` member a `<Quay>` does, so a Quay-only traversal
-    /// reaches none of them.
-    ///
-    /// Against a Quay-only traversal this fixture reports `refs=1 cleared=0 intact=1` and passes
-    /// G1-G6 clean, which is why the counts below are asserted.
     private static final String SITE_COMPONENTS_BEYOND_QUAYS = """
         <SiteFrame id="site" version="1"><stopPlaces>
           <StopPlace id="at:49:975" version="1"><Name>Wien Testplatz</Name>
@@ -122,15 +108,14 @@ public class TestEpipLevelRefs {
         </stopPlaces></SiteFrame>
         """;
 
-    /// The `SitePathLink`'s own `levelRef` and its `From`/`To` ends, which the reflective carrier
-    /// test only pins as DECLARED by the model, not as HANDLED by the pass — and which clear
-    /// nothing on the corpus, so a defect in either arm is invisible to every output comparison.
-    /// They are also the arms whose class 2.0 splits, so this fixture drives both with a control.
+    /// The `SitePathLink`'s own `levelRef` and its `From`/`To` ends, each driven with a control.
+    /// The reflective carrier test pins these as declared by the model, not as handled by the pass,
+    /// and they clear nothing on the corpus.
     ///
-    /// The `<From>` end points at the Level this StopPlace defines and must survive; the
-    /// `<To>` end and the link's own `<LevelRef>` point at one nobody defines and must
-    /// go. The `<PlaceRef>`s are required by the schema and carry no levelRef, so they also
-    /// serve as the "counted as nothing" control the `<QuayRef>` plays in [#BOTH_SHAPES].
+    /// The `<From>` end points at the Level this StopPlace defines and must survive; the `<To>` end
+    /// and the link's own `<LevelRef>` point at one nobody defines and must go. The `<PlaceRef>`s
+    /// are required by the schema and carry no levelRef, so they also serve as the "counted as
+    /// nothing" control the `<QuayRef>` plays in [#BOTH_SHAPES].
     private static final String SITE_PATH_LINK_ENDS = """
         <SiteFrame id="site" version="1"><stopPlaces>
           <StopPlace id="at:49:975" version="1"><Name>Wien Testplatz</Name>
@@ -150,22 +135,19 @@ public class TestEpipLevelRefs {
         </stopPlaces></SiteFrame>
         """;
 
-    /// THE FIFTH CARRIER, WHICH ONLY EXISTS AT 2.0. `<LevelInStructure>` is a `+v2.0` element whose
-    /// content group carries a **mandatory** `<LevelRef>`. It is TWO hops from a Site, not one —
+    /// The fifth carrier, which only exists at 2.0. `<LevelInStructure>` is a `+v2.0` element whose
+    /// content group carries a mandatory `<LevelRef>`. It is two hops from a Site, not one —
     /// `Site.siteStructures` &rarr; `SiteStructure` &rarr; `levelsInStructure` &rarr;
     /// `LevelInStructure` — and `SiteStructure_VersionStructure` extends
-    /// `DataManagedObjectStructure`, so it is not itself a Site and the pass reaches it only because
-    /// the walker descends generically. This fixture would fail if navigation were ever narrowed
-    /// back to named containers.
+    /// `DataManagedObjectStructure`, so it is not itself a Site and the pass reaches it only
+    /// because the walker descends generically. Navigation narrowed to named containers fails here.
     ///
-    /// THE CLEAR IS A REMOVAL, hence its own fixture. For the other four carriers the repair is
-    /// `setLevelRef(null)`; here the field is `required = true`, so nulling it would trade a
-    /// `Level_KeyRef` violation for a content-model violation. The whole `<LevelInStructure>` goes,
-    /// and an emptied `<levelsInStructure>` goes with it — `maxOccurs="unbounded"` at the default
-    /// `minOccurs=1` makes an empty container invalid too.
+    /// The clear is a removal. For the other four carriers the repair is `setLevelRef(null)`; here
+    /// the field is `required = true`, so nulling it would trade a `Level_KeyRef` violation for a
+    /// content-model violation, and the whole `<LevelInStructure>` goes instead.
     ///
     /// A 1.15.2-authored feed cannot contain a 2.0-only element and be schema-valid, so this arm
-    /// clears nothing today and exists for the same reason [#SITE_PATH_LINK_ENDS] does.
+    /// clears nothing today.
     private static final String LEVEL_IN_STRUCTURE = """
         <SiteFrame id="site" version="1"><stopPlaces>
           <StopPlace id="at:49:975" version="1"><Name>Wien Testplatz</Name>
@@ -206,7 +188,7 @@ public class TestEpipLevelRefs {
         </stopPlaces></SiteFrame>
         """;
 
-    /// The Parking case G6 is deliberately NOT scoped to: its target IS a Level, in a StopPlace.
+    /// The Parking case G6 is not scoped to: its target is a Level, in a StopPlace.
     private static final String PARKING_POINTS_INTO_A_STOPPLACE = """
         <SiteFrame id="site" version="1"><stopPlaces>
           <StopPlace id="at:49:975" version="1"><Name>A</Name>
@@ -222,7 +204,7 @@ public class TestEpipLevelRefs {
 
     // ---------------------------------------------------------------- driver
 
-    /// One rw txn for reads and writes, then commit — the in-place fix idiom the phase uses.
+    /// One rw txn for reads and writes, then commit.
     private static EpipSanitize.LevelRefResult strip(TestStore db) {
         try (Txn txn = db.store.rwTxn()) {
             EpipSanitize.LevelRefResult r = EpipSanitize.stripOrphanLevelRefs(db.store, txn);
@@ -300,14 +282,10 @@ public class TestEpipLevelRefs {
 
     /// The `SitePathLink` carriers, driven both ways.
     ///
-    /// The executable half of the seam `noi.netex.sites.PathLinkEnds`: the two `From`/`To` arms go
-    /// through it because 2.0 moves `levelRef` off `PathLinkEndStructure` onto
-    /// `SitePathLinkEndStructure`. It also covers `SitePathLink_VersionStructure.levelRef`, which
-    /// the seam does NOT touch — that member keeps its class at 2.0.
-    ///
-    /// With `PathLinkEnds.isEnd` forced to `false` this is the only test in the file that goes red,
-    /// and it goes red through `G7 reach`, so the seam is bound by a guard whose denominator comes
-    /// from outside it and not only by the numbers in this method.
+    /// The two `From`/`To` arms go through the seam `noi.netex.sites.PathLinkEnds`, because 2.0
+    /// moves `levelRef` off `PathLinkEndStructure` onto `SitePathLinkEndStructure`. The link's own
+    /// `SitePathLink_VersionStructure.levelRef` is also covered and the seam does not touch it —
+    /// that member keeps its class at 2.0.
     @Test
     void testSitePathLinkEndsAndTheLinksOwnLevelRef(TestStore db) throws Exception {
         db.loadNetex(SITE_PATH_LINK_ENDS);
@@ -326,9 +304,9 @@ public class TestEpipLevelRefs {
 
         StopPlace sp = one(db, StopPlace.class);
         Check.that(sp.getPathLinks() != null, "the <pathLinks> container survives");
-        // Reached by WALK, not by the container's accessor: `sitePathLinks_RelStructure`'s member
-        // list is not the same at both schema versions, so the navigation here goes through the
-        // same walker the pass uses.
+        // Reached by walking, not by the container's accessor: `sitePathLinks_RelStructure`'s
+        // member list is not the same at both schema versions, so the navigation here goes through
+        // the same walker the pass uses.
         List<SitePathLink_VersionStructure> links = new ArrayList<>();
         RecursiveAttributes.walk(sp, new RecursiveAttributes.Visitor() {
             @Override public void reference(noi.netex.model.VersionOfObjectRefStructure ref) {}
@@ -345,8 +323,7 @@ public class TestEpipLevelRefs {
         Check.isNull(pl.getLevelRef(), "and the link's own orphan levelRef is cleared too");
     }
 
-    /// THE SCOPE CORRECTION, on its own. A StopPlace-only strip reports a clean run over this
-    /// store and leaves the export entry that holds it non-conformant.
+    /// A store whose only Site is a Parking.
     @Test
     void testTheParkingShapeIsCoveredOnItsOwn(TestStore db) throws Exception {
         db.loadNetex(PARKING_ONLY);
@@ -359,11 +336,11 @@ public class TestEpipLevelRefs {
                 "the emptied container is dropped rather than left as a bare <levels/>");
     }
 
-    /// The asymmetry G6 is scoped for. This Parking's target IS a Level — inside a StopPlace — so
-    /// the store-wide intersection is NOT empty, and the pass must still clear it and must NOT
-    /// fail. What licenses that is document scope: the exporter puts Parking in the closure entry
-    /// and StopPlaces in the sites entry, so the ref is orphaned in its own document whatever the
-    /// store holds. Assert the collision is SEEN and reported, not asserted on.
+    /// The asymmetry G6 is scoped for. This Parking's target is a Level, inside a StopPlace, so the
+    /// store-wide intersection is not empty, and the pass must still clear it without failing. What
+    /// licenses that is document scope: the exporter puts Parking in the closure entry and
+    /// StopPlaces in the sites entry, so the ref is orphaned in its own document whatever the store
+    /// holds. The collision is reported rather than refused.
     @Test
     void testParkingIsClearedEvenWhenItsTargetIsALevelElsewhere(TestStore db) throws Exception {
         db.loadNetex(PARKING_POINTS_INTO_A_STOPPLACE);
@@ -395,10 +372,9 @@ public class TestEpipLevelRefs {
 
     // ---------------------------------------------------------------- the guard, negatively
 
-    /// NEGATIVE TEST 1 — clear-all. The seam makes the strip pass clear EVERY LevelRef, including
-    /// the one the StopPlace can resolve. What stays green: the `<Level>` count is unchanged, no
-    /// orphan survives, and a second pass would clear nothing — every invariant except the ones
-    /// that count what was LEFT, which is why `intact` is asserted.
+    /// Sabotage, clear-all: the seam makes the strip pass clear every LevelRef, including the one
+    /// the StopPlace can resolve. The `<Level>` count, soundness and the second pass all stay green
+    /// under it — only the arms that count what was left move, which is why `intact` is asserted.
     @Test
     void testGuardFiresOnClearAll(TestStore db) throws Exception {
         db.loadNetex(BOTH_SHAPES);
@@ -424,7 +400,7 @@ public class TestEpipLevelRefs {
         Check.equals(4L, r.cleared(), "the sabotage really did clear all four refs");
     }
 
-    /// NEGATIVE TEST 2 — clear-none. Nothing is removed, and `cleared` is what catches it.
+    /// Sabotage, clear-none: nothing is removed, and `cleared` is the arm that catches it.
     @Test
     void testGuardFiresOnClearNone(TestStore db) throws Exception {
         db.loadNetex(BOTH_SHAPES);
@@ -446,8 +422,7 @@ public class TestEpipLevelRefs {
                 "and under-stripping does not move the <Level> count either");
     }
 
-    /// A green from counters that are all zero has checked nothing; pin that the
-    /// fixture exercises every arm the guard compares.
+    /// Pins that the fixture exercises every arm the guard compares, none of them over zeroes.
     @Test
     void testTheCountersAreNotVacuouslyZero(TestStore db) throws Exception {
         db.loadNetex(BOTH_SHAPES);
@@ -462,10 +437,9 @@ public class TestEpipLevelRefs {
 
     // -------------------------------------------------- reach, and the guard on reach
 
-    /// Every `SiteComponent` carries the same `levelRef`, so the pass must reach an
-    /// `<Entrance>`'s and an `<AccessSpace>`'s and not only a `<Quay>`'s. The store's OWN byte
-    /// census is asserted beside the traversal's count, which is what makes this a completeness
-    /// claim.
+    /// Every `SiteComponent` carries the same `levelRef`, so the pass must reach an `<Entrance>`'s
+    /// and an `<AccessSpace>`'s and not only a `<Quay>`'s. The store's own byte census is asserted
+    /// beside the traversal's count.
     @Test
     void testReachesEverySiteComponentNotOnlyQuays(TestStore db) throws Exception {
         db.loadNetex(SITE_COMPONENTS_BEYOND_QUAYS);
@@ -487,10 +461,10 @@ public class TestEpipLevelRefs {
         Check.equals(0L, r.nestedSites(), "and no Site nested inside a Site, so own(s) is defined");
     }
 
-    /// NEGATIVE TEST 3 — the one G1-G6 CANNOT do, and the reason G7 exists. The reach seam hides
-    /// every `<Entrance>` from BOTH the pre-pass and the strip, so the two bean traversals still
-    /// agree with each other and every G1-G6 arm is green over the part of the store they can see.
-    /// Only the store's own byte count disagrees.
+    /// Sabotage, narrowed reach — the arm G7 exists for. The reach seam hides every `<Entrance>`
+    /// from both the pre-pass and the strip, so the two bean traversals still agree with each other
+    /// and every G1-G6 arm is green over the part of the store they can see. Only the store's own
+    /// byte count disagrees.
     @Test
     void testG7FiresWhenTheTraversalIsNarrowerThanTheStore(TestStore db)
             throws Exception {
@@ -521,20 +495,18 @@ public class TestEpipLevelRefs {
         Check.equals(4L, r.storeRefsBefore(), "while the store's bytes still held 4");
     }
 
-    /// THE PIN UNDER THE TRAVERSAL. The pass handles the carriers by TYPE rather than by container
-    /// name, which is only complete while those types are all the model declares. A model upgrade
-    /// that adds one fails here instead of silently halving the pass's reach.
+    /// The pass handles the carriers by type rather than by container name, which is complete only
+    /// while those types are all the model declares. A model upgrade that adds one fails here
+    /// instead of silently halving the pass's reach.
     ///
-    /// ONE CARRIER IS NAMED THROUGH THE SEAM, NOT AS A LITERAL. 2.0 splits `PathLinkEndStructure`
-    /// and moves `levelRef` to `SitePathLinkEndStructure`, so a literal here would be true at one
-    /// schema version and quietly false at the other. `PathLinkEnds.CARRIER` is this tree's own
-    /// answer to "which class carries it here", so the expectation and the reach cannot disagree.
+    /// One carrier is named through the seam rather than as a literal: 2.0 splits
+    /// `PathLinkEndStructure` and moves `levelRef` to `SitePathLinkEndStructure`, so a literal here
+    /// would be true at one schema version and quietly false at the other. `PathLinkEnds.CARRIER`
+    /// is this tree's answer to which class carries it, so the expectation and the reach cannot
+    /// disagree.
     ///
-    /// The 2.0-only fifth carrier is `LevelInStructure_VersionStructure.levelRef`, so this pin is
-    /// VERSION-AWARE without becoming a tautology: the sweep asks "which fields have type
-    /// `LevelRefStructure`", the expectation asks whether the class
-    /// `LevelInStructure_VersionStructure` exists at all, and the two must agree. A model that grew
-    /// a sixth carrier, or that kept the class and dropped its `levelRef`, fails.
+    /// The fifth carrier, `LevelInStructure_VersionStructure.levelRef`, exists only at 2.0, so the
+    /// expectation is built from whether the model declares that class rather than from a count.
     @Test
     void testModelDeclaresExactlyFiveLevelRefCarriers(TestStore db) throws Exception {
         Set<String> carriers = new TreeSet<>();
@@ -557,9 +529,7 @@ public class TestEpipLevelRefs {
                 PathLinkEnds.CARRIER.getSimpleName() + ".levelRef",
                 "SiteComponent_VersionStructure.levelRef",
                 "SitePathLink_VersionStructure.levelRef"));
-        // ...plus the +v2.0 one, expected EXACTLY WHEN the model declares the class that owns it.
-        // The discriminator is class EXISTENCE, a different question from the sweep's "which fields
-        // are LevelRefStructure", so this is agreement between two readings of the model.
+        // ...plus the +v2.0 one, expected exactly when the model declares the class that owns it.
         boolean v20Carrier = false;
         for (Class<?> c : ModelRegistry.allModelClasses()) {
             if (c.getSimpleName().equals("LevelInStructure_VersionStructure")) v20Carrier = true;
@@ -580,12 +550,10 @@ public class TestEpipLevelRefs {
 
     /// The `+v2.0` carrier, driven end to end. Three things at once:
     ///
-    /// - the walker REACHES it, two hops down through a class that is not a Site;
-    /// - the orphan is removed as a WHOLE `<LevelInStructure>` — the mandatory
-    ///    `<LevelRef>` makes clearing the field the wrong repair;
-    /// - G7 reconciles, so the fifth carrier is inside the denominator and not beside it. This
-    ///    is the arm that would have fired on the unextended pass: with the carrier unhandled
-    ///    the bean traversal reaches 1 and the store's bytes hold 3.
+    /// - the walker reaches it, two hops down through a class that is not a Site;
+    /// - the orphan is removed as a whole `<LevelInStructure>`, the mandatory `<LevelRef>` making
+    ///    clearing the field the wrong repair;
+    /// - G7 reconciles, so the fifth carrier is inside the denominator and not beside it.
     @Test
     void testReachesTheV20LevelInStructureCarrier(TestStore db) throws Exception {
         db.loadNetex(LEVEL_IN_STRUCTURE);
@@ -644,7 +612,6 @@ public class TestEpipLevelRefs {
                 "a longer name, a plural, a suffix match and a bare word count for nothing");
     }
 
-    // ---------------------------------------------------------------- helper
 
     /// The single object of a class in the store.
     private static <T> T one(TestStore db, Class<T> clazz) {

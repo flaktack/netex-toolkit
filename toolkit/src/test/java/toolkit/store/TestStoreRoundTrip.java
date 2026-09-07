@@ -1,27 +1,10 @@
 package toolkit.store;
 
-// THE STORE CONTRACT, END TO END, ON BEANS RATHER THAN ON A FEED.
-//
-// Every other store test in this suite enters through TestStore.loadNetex, i.e. through the
-// loader, which wires most references AT INSERT because the targets precede the referrer in the
-// document. That is the easy path and it hides the one this file walks: objects inserted BEFORE
-// their targets, so the references land in _unresolved and only resolve() can wire them.
-//
-// FOUR THINGS THAT HAD NO ASSERTION ANYWHERE:
-//
-//   * BOTH RESOLVE TIERS IN ONE PASS. resolve() has three tiers; the suite pinned the exact-key
-//     one and the version-repair one (TestRefPatcher). The version-LESS reference — a *Ref with no
-//     `version` at all, which is what the id-only tier exists for — was not covered, and its
-//     failure mode is a row that stays in _unresolved while the export loses the edge.
-//   * CLONE CARRIES THE EDGES. cloneFrom is tested for blobs (TestBlobSweepScan), for provenance
-//     (TestProvenance) and for the write tally (TestWriteTally) — never for the reference indexes,
-//     whose absence a db-to-db target only reveals at export time.
-//   * AN OVERWRITE RE-EXTRACTS. Re-inserting an existing (id, version, class) replaces the row AND
-//     must re-derive its references: one row, not two, and the same edge count afterwards. This is
-//     what makes every in-place phase safe to run twice.
-//   * THE FOREIGN-TXN GUARD. A Txn belongs to ONE store's environment. Handing store A's txn to
-//     store B must throw, because the alternative is not an error — it is reading B's request
-//     against A's maps and getting plausible, wrong rows back.
+// The store contract end to end, on beans rather than on a feed. Every other store test in this
+// suite enters through TestStore.loadNetex, which wires most references at insert because the
+// targets precede the referrer in the document. This file inserts objects before their targets, so
+// the references land in _unresolved and only resolve() can wire them — the versioned reference
+// through the exact-key tier, the version-less one through the id-only tier.
 
 import noi.netex.model.Operator;
 import noi.netex.model.OperatorRefStructure;
@@ -42,8 +25,6 @@ import java.util.Map;
 import java.util.Set;
 
 public class TestStoreRoundTrip {
-
-    // ---------------------------------------------------------------- the fixture
 
     /// SJ:1 -> Operator O:1 (versioned, tier 1) and -> TrainNumber TN:1 (version-less, tier 3).
     private static ServiceJourney sj() {
@@ -76,7 +57,7 @@ public class TestStoreRoundTrip {
         return tn;
     }
 
-    /// A populated, CLOSED store: the journey is inserted FIRST, so neither reference can be wired
+    /// A populated, closed store: the journey is inserted first, so neither reference can be wired
     /// at insert time and both go through resolve(). Returns the path.
     private static Path seeded(TestStore ts, String name) throws Exception {
         Path dir = ts.tempPath(name);
@@ -89,8 +70,6 @@ public class TestStoreRoundTrip {
         }
         return dir;
     }
-
-    // ---------------------------------------------------------------- the tests
 
     /// Before resolve(): two unresolved rows and no edges. resolveEmbeddings then has nothing to do.
     @Test
@@ -110,11 +89,9 @@ public class TestStoreRoundTrip {
         }
     }
 
-    /// The mirror image, and the case a loaded feed almost always is: the targets are already in the
-    /// id index when the referrer arrives, so insertAnyObjects wires the edges itself and resolve()
-    /// has nothing left to do. The suite asserts the OUTCOME of this (TestFeedToDbArms: no unresolved
-    /// rows after a load) but never that the wiring happened at insert — and the difference is a
-    /// national-scale resolve pass over rows that need not have existed.
+    /// The mirror image, and the case a loaded feed almost always is: the targets are already in
+    /// the id index when the referrer arrives, so insertAnyObjects wires the edges itself and
+    /// resolve() has nothing left to do.
     @Test
     void testAReferenceInsertedAfterItsTargetIsWiredImmediately(TestStore ts) throws Exception {
         ServiceJourney sj = sj();
@@ -176,9 +153,8 @@ public class TestStoreRoundTrip {
         }
     }
 
-    /// cloneFrom into a fresh, empty, same-format store. The edges are the assertion that matters:
-    /// a clone that carried only the class maps and the id index would pass every blob check and
-    /// then export a database with no references in it.
+    /// cloneFrom into a fresh, empty, same-format store: the edges, the blobs, the id index and the
+    /// local-key sequence all come across.
     @Test
     void testACloneCarriesTheEdgesTheBlobsAndTheSequence(TestStore ts) throws Exception {
         Path srcDir = seeded(ts, "clone-src.lmdb");
@@ -233,7 +209,7 @@ public class TestStoreRoundTrip {
         }
     }
 
-    /// A Txn addresses ONE store's environment. Passing another store's txn must be refused: the
+    /// A Txn addresses one store's environment, so another store's txn is refused by identity. The
     /// alternative is reading this store's request against that store's maps, which returns rows
     /// rather than an error.
     @Test
@@ -249,7 +225,6 @@ public class TestStoreRoundTrip {
                     store.iterOnlyObjects(otherTxn, Operator.class).iterator().hasNext();
                     throw new AssertionError("a foreign transaction was accepted");
                 } catch (IllegalArgumentException expected) {
-                    // the point: refused by identity, not answered from the wrong environment
                 }
             }
         }

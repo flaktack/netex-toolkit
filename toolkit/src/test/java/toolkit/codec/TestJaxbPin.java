@@ -1,17 +1,11 @@
 package toolkit.codec;
 
-// A JVM-level allocation defect in jaxb-runtime.
-//
-// `java.lang.ThreadLocal$ThreadLocalMap$Entry` is a top allocated class in the large stages, and
-// every one of those allocation samples carries `Coordinator.pushCoordinator`: JAXB's per-event
-// push/pop leaves `old == null`, so `popCoordinator` calls `ThreadLocal.remove()` and the next
-// `get()` has to build a fresh Entry. toolkit.codec.JaxbPin keeps a sentinel Coordinator pushed
-// for the life of the thread so `old` is never null and the entry is never removed.
+// Regression test for toolkit.codec.JaxbPin, the sentinel Coordinator that stops jaxb-runtime
+// re-creating a `ThreadLocalMap.Entry` on every XML event.
 //
 // NEUTER PROOF: run with -Dtoolkit.jaxbPin=false and testSentinelSurvivesADecode /
 // testSentinelSurvivesAMarshal / testPinIsIdempotent fail; the two value tests
-// (testDecodeIsUnchangedByThePin, testMarshalIsUnchangedByThePin) keep passing, because the pin
-// is an allocation shape and must never touch a byte.
+// (testDecodeIsUnchangedByThePin, testMarshalIsUnchangedByThePin) keep passing.
 
 import noi.netex.model.Line;
 import org.glassfish.jaxb.runtime.v2.runtime.Coordinator;
@@ -41,9 +35,6 @@ public class TestJaxbPin {
         Check.that(first == Coordinator._getInstance(), "pin() is idempotent — one sentinel only");
     }
 
-    /// THE regression test. Without the sentinel, the unmarshal's last popCoordinator() calls
-    /// ThreadLocal.remove() and this reads back null — which is exactly the state that makes the
-    /// next event allocate an Entry.
     @Test
     void testSentinelSurvivesADecode() {
         FragmentCodec codec = new FragmentCodec();
@@ -72,10 +63,8 @@ public class TestJaxbPin {
         Check.equals("bus", line.getTransportMode().value(), "TransportMode survives");
     }
 
-    /// ... and so must the re-marshalled bytes. The literal is JAXB's own output shape (its
-    /// namespace declarations, its attribute order), NOT the source spelling — the point is that
-    /// the pin does not move a single byte of it. Run this test with and without
-    /// -Dtoolkit.jaxbPin=false: it must pass identically both ways.
+    /// ... and so must the re-marshalled bytes. The literal is JAXB's own output shape — its
+    /// namespace declarations, its attribute order — not the source spelling.
     @Test
     void testMarshalIsUnchangedByThePin() {
         FragmentCodec codec = new FragmentCodec();

@@ -8,7 +8,7 @@ import java.util.Arrays;
 /// Key layout: `id_utf8 . NUL . version_utf8 . NUL [. class_idx (2 bytes, fixed width LE)]`.
 /// Ids/versions come from XML attribute values and XML 1.0 forbids NUL, so the separator can never
 /// occur inside a fragment. `version in (null, "any")` is encoded as the empty string (the
-/// two NULs are adjacent). The class idx is a FIXED-WIDTH 2-byte trailer, never separator-parsed
+/// two NULs are adjacent). The class idx is a fixed-width 2-byte trailer, never separator-parsed
 /// (its bytes are an arbitrary little-endian counter that may itself contain NUL).
 ///
 /// full_key: `class_idx << 32 | local_key`, stored 8-byte LE.
@@ -55,8 +55,6 @@ public final class NulKeyCodec {
 
     private static final byte[] EMPTY = new byte[0];
 
-    // -- fixed-width class-idx trailer helpers ---------------------------------------------------
-
     /// The `id.NUL.version.NUL` prefix length of a key that carries a class trailer.
     public static int stripClazzLen(byte[] key) {
         return key.length - CLASS_IDX_LEN;
@@ -101,8 +99,7 @@ public final class NulKeyCodec {
         return (int) (fullKey & 0xFFFFFFFFL);
     }
 
-    /// A full_key from a class idx and a local key.
-    /// Byte-lexicographic order of two full keys AS STORED (little-endian), for deterministic
+    /// Byte-lexicographic order of two full keys as stored (little-endian), for deterministic
     /// re-insert orders.
     public static int compareFullKeysLe(long a, long b) {
         return Long.compareUnsigned(Long.reverseBytes(a), Long.reverseBytes(b));

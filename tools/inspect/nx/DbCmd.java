@@ -31,8 +31,8 @@ import java.util.regex.Pattern;
 ///
 /// ## The tier split
 ///
-/// Which store machinery a question needs is a property of the question, so the split is structural
-/// rather than a `--raw` flag, and every command prints its own tier.
+/// Which store machinery a question needs is a property of the question; every command prints its
+/// own tier.
 ///
 /// | tier | commands | what it opens |
 /// |---|---|---|
@@ -44,30 +44,19 @@ import java.util.regex.Pattern;
 ///   discarded; O(1) heap, no intern table. It opens `V2Store` but never `loadEdgeState`, which
 ///   is lazy on a read-only store. |
 /// | CSR | `path`, and the opt-in `--csr` arm | `loadEdgeState()` plus `Csr.build` — gigabytes and
-///   tens of seconds at national scale. Here because breadth-first search wants random-access
-///   adjacency, which a scan per hop cannot give. |
+///   tens of seconds at national scale. |
 ///
-/// `refs`/`rrefs` are SCAN, not CSR, because `_edge_blocks` is not indexed by referrer on disk: any
-/// answer about one key costs a pass either way. `V2Store` pays for that pass by building in-memory
-/// columns and per-referrer indexes to support O(out-degree) mutation; a read-only question about
-/// one key is a filter over a sequential read. The `--csr` arm stays for agreement — proving the
-/// raw reader against `Csr.out`/`Csr.in` on the same store.
+/// `_edge_blocks` is not indexed by referrer on disk, so any answer about one key costs a pass
+/// either way; that is why `refs`/`rrefs` are SCAN. The `--csr` arm is agreement only — the raw
+/// reader against `Csr.out`/`Csr.in` on the same store.
 ///
 /// [RawStore] serves the POINT tier and `check`'s first phase: the embedding index is not in the
-/// SPI, `MDB_stat` entry counts and raw dbi names are internal to the engine, `_meta` carries the
-/// completeness marker and the store's OWN class table (which may name classes this JVM's registry
-/// does not have), and the block-key probe behind `check`'s negative control is a question about
-/// block KEYS rather than an SPI question.
+/// SPI, `MDB_stat` entry counts and raw dbi names are internal to the engine, and `_meta` carries
+/// the completeness marker and the store's own class table, which may name classes this JVM's
+/// registry does not have.
 ///
-/// ## A diagnostic, not a gate
-///
-/// No pass/fail, no threshold, no baseline. `stat --diff` in particular looks like a gate: it
-/// prints what moved between two stores and says nothing about whether moving was correct.
-///
-/// A zero here is a statement about the store you pointed at, not about the corpus. Three have
-/// store-specific causes this prints rather than assumes: a store predating the embedding index has
-/// no rows at all, a resolved store has no unresolved rows left, and a single-feed store cannot
-/// show a cross-feed duplicate.
+/// A diagnostic, not a gate: no pass/fail, no threshold, no baseline. A zero here is a statement
+/// about the store you pointed at, not about the corpus.
 public final class DbCmd {
 
     static final String VERSION = "nx-db/1";
@@ -105,9 +94,8 @@ public final class DbCmd {
             System.err.println("nx db " + cmd + ": " + e.getMessage());
             return 2;
         } catch (IllegalArgumentException | IllegalStateException e) {
-            // The refusals ARE the answer — "not a store directory", "a v1 database holds
-            // pickles, not fragments" — and a stack trace would bury them. Both readers' refusals
-            // land here, from RawStore and from the format sniff.
+            // The refusals are the answer — "not a store directory", "a v1 database holds pickles,
+            // not fragments". Both RawStore's and the format sniff's land here.
             System.err.println("nx db " + cmd + ": " + e.getMessage());
             return 2;
         }
@@ -128,7 +116,7 @@ public final class DbCmd {
                            entries per sub-database, with CLASS NAMES not 0x7403.  --diff is two
                            stores side by side and what moved: EMBEDDING_SCOPE's #100 gate was
                            literally "of 351 sub-databases, exactly 9 moved".  --tsv emits
-                           tools/task100/DbiCount.java's exact rows, so the GATES.md §2.4 pin still
+                           the older raw counter's exact rows, so that pin still
                            reproduces from here.  --edges counts the PAIRS inside _edge_blocks (its
                            entry count is BLOCKS) and is the SCAN tier.
                   get      <id>[@ver] [--class C] --db S [--pick N] [--paths|--hex] [--head N]
@@ -159,7 +147,7 @@ public final class DbCmd {
                            rrefs is the capability nothing else in this repository can do.  Csr.in()
                            has existed since A4 and has never been reachable from a command line.
                   unres    --db S [--referrer <addr>] [--target <id>] [--class C] [--limit N]
-                           _edge_blocks kind 1 + _unres_keys, with GraphDump's target rendering.
+                           _edge_blocks kind 1 + _unres_keys, with the graph dump's target rendering.
                   versions --audit --db S [--class C] [--top N]                _id_idx
                            #105's duplicate-id audit over the whole id index in one pass.  The index
                            sorts by id, so the group-by needs O(one id group) of heap, not O(ids).
@@ -192,8 +180,8 @@ public final class DbCmd {
                            THE PIN.  Store.scanEdges/scanUnresolved (streaming, one block resident)
                            against Store.iterEdges/iterUnresolved (loadEdgeState's materialised
                            slot arrays), on an ORDER-SENSITIVE digest.  Order is the point: past
-                           block 255 cursor order is not numeric order (FORMAT §4.2's u32 LE block
-                           number in a byte-ordered map) and STORE_SPI §2.8 makes edge order a
+                           block 255 cursor order is not numeric order (a u32 LE block
+                           number in a byte-ordered map) and the store SPI makes edge order a
                            recorded property.  It REFUSES to call itself a pass on a store with
                            <=255 blocks of both kinds, and carries a negative control that must
                            show this store's block numbers reorder under cursor order.
@@ -216,9 +204,8 @@ public final class DbCmd {
     /// Entry count per sub-database, and the two-store diff.
     ///
     /// `--tsv` reproduces the older raw counter's rows exactly — same labels, same text-or-hex name
-    /// rendering, same sort, same trailers — so a gate pinned on that output still reproduces.
-    /// Without it, a hex class-map name is resolved to its class through `_meta` and two stores can
-    /// be put side by side.
+    /// rendering, same sort, same trailers — so a transcript pinned on that output still
+    /// reproduces. Without it, a hex class-map name is resolved to its class through `_meta`.
     private static int stat(String[] argv) {
         Args a = Args.parse(argv, Set.of("--tsv", "--all", "--edges"),
                 Set.of("--db", "--diff", "--classes"));
@@ -237,8 +224,6 @@ public final class DbCmd {
         for (Path db : dbs) {
             try (RawStore s = new RawStore(db)) {
                 if (tsv) {
-                    // Row-for-row agreement with the older raw counter, so a transcript pinned on it
-                    // still reproduces from here.
                     List<Row> rs = rows(s);
                     long total = 0;
                     for (Row r : rs) {
@@ -252,8 +237,8 @@ public final class DbCmd {
                     statHuman(s, o, all, topClasses);
                 }
             }
-            // OUTSIDE the RawStore block on purpose: --edges reads the edges through the SPI now,
-            // and LMDB does not support two environments over one file in one process.
+            // Outside the RawStore block: --edges reads the edges through the SPI, and LMDB does
+            // not support two environments over one file in one process.
             if (!tsv && a.flag("--edges")) {
                 edgeCounts(db, o);
                 o.println();
@@ -269,7 +254,7 @@ public final class DbCmd {
         boolean isClassMap() { return classIdx >= 0; }
     }
 
-    /// Every sub-database, rendered and sorted exactly as `DbiCount` does.
+    /// Every sub-database, rendered and sorted exactly as the older raw counter did.
     private static List<Row> rows(RawStore s) {
         List<Row> out = new ArrayList<>();
         for (byte[] n : s.dbiNames()) {
@@ -283,7 +268,8 @@ public final class DbCmd {
         return out;
     }
 
-    /// DbiCount.render, byte for byte: text if it is text, else `0x` + lowercase hex.
+    /// The older raw counter's name rendering, byte for byte: text if it is text, else `0x` plus
+    /// lowercase hex.
     private static String render(byte[] n) {
         boolean text = n.length > 0;
         for (byte b : n) if (b < 0x20 || b >= 0x7F) { text = false; break; }
@@ -316,7 +302,7 @@ public final class DbCmd {
         o.printf("  %-16s %,14d   #DBIS %d%n", "#TOTAL", total, rs.size());
         o.println();
 
-        // The embedding index is the one map whose ABSENCE is a finding rather than a zero.
+        // The embedding index is the one map whose absence is a finding rather than a zero.
         if (!s.hasDbi("_embedding_idx")) {
             o.println("  NOTE  no _embedding_idx: this store predates A7's persisted embedding index.");
             o.println("        `nx db emb` has nothing to read here, and that is a property of the");
@@ -340,11 +326,9 @@ public final class DbCmd {
         }
     }
 
-    /// Live record counts per `_edge_blocks` kind. Opt-in: it is the one part of `stat` that reads
-    /// the whole map rather than `MDB_stat`'s O(1) counters.
-    ///
-    /// Read through the SPI's streaming readers rather than a decoder in this tree. The open is a
-    /// `V2Store` open, but neither call triggers `loadEdgeState`, so the heap stays O(1).
+    /// Live record counts per `_edge_blocks` kind. Opt-in: the one part of `stat` that reads the
+    /// whole map rather than `MDB_stat`'s O(1) counters. The open is a `V2Store` open, but neither
+    /// call triggers `loadEdgeState`, so the heap stays O(1).
     private static void edgeCounts(Path db, PrintStream o) {
         long[] live = new long[2];
         long t0 = System.nanoTime();
@@ -362,22 +346,21 @@ public final class DbCmd {
 
     // ================================================================== resident
 
-    /// CSR tier, and the only command whose SUBJECT is the cost rather than the answer.
+    /// CSR tier, and the only command whose subject is the cost rather than the answer.
     ///
     /// `loadEdgeState()` materialises both columns — resolved edges into `edgeSrc`/`edgeDst`,
     /// unresolved rows into `unresSrc`/`unresKeyId` over the `_unres_keys` intern table — plus a
     /// per-referrer slot index for each. All of it is heap for as long as the store is open, so a
     /// stage's working set includes it whether or not that stage ever reads an edge.
     ///
-    /// The two columns do NOT cost the same per row, which is why this measures instead of
-    /// multiplying: an edge is two longs, while an unresolved row is a long plus an intern id and
-    /// the table behind it holds one byte[] per DISTINCT target key. Wiring a reference MOVES a row
-    /// from the second column to the first and may drop an intern entry with it, so the sign of the
-    /// change is not readable off the row counts.
+    /// The two columns do not cost the same per row: an edge is two longs, while an unresolved row
+    /// is a long plus an intern id and the table behind it holds one byte[] per distinct target
+    /// key. Wiring a reference moves a row from the second column to the first and may drop an
+    /// intern entry with it, so the sign of the change is not readable off the row counts.
     ///
     /// Heap is read after `System.gc()`, which is a request and not a guarantee, so this is a
-    /// measurement of one JVM on one run rather than a constant. Give it the `-Xmx` you are actually
-    /// asking about: the collector's slack scales with the heap it was handed.
+    /// measurement of one JVM on one run. Give it the `-Xmx` you are actually asking about: the
+    /// collector's slack scales with the heap it was handed.
     private static int resident(String[] argv) {
         Args a = Args.parse(argv, Set.of("--csr"), Set.of("--db"));
         List<Path> dbs = a.paths("--db");
@@ -396,8 +379,8 @@ public final class DbCmd {
         long unres = 0;
         long t0 = System.nanoTime();
         try (Store st = Stores.open(db, true); toolkit.store.Txn tx = st.roTxn()) {
-            // iterEdges/iterUnresolved are the MATERIALISED views, not the streaming ones: the
-            // first of them pays loadEdgeState, which is the whole point of this command.
+            // iterEdges/iterUnresolved are the materialised views: the first of them pays
+            // loadEdgeState, which is what this command measures.
             for (long[] ignored : st.iterEdges(tx)) edges++;
             for (toolkit.store.UnresolvedRow ignored : st.iterUnresolved(tx)) unres++;
             long loaded = usedHeap();
@@ -426,7 +409,7 @@ public final class DbCmd {
     }
 
     /// Used heap after asking for a collection. Three rounds because one `System.gc()` need not
-    /// have finished tracing by the time it returns, and the reading is the whole output here.
+    /// have finished tracing by the time it returns.
     private static long usedHeap() {
         Runtime r = Runtime.getRuntime();
         for (int i = 0; i < 3; i++) {
@@ -453,8 +436,7 @@ public final class DbCmd {
         };
     }
 
-    /// Two stores, per-dbi, and what moved — the question when two stores were built by jars with
-    /// different capabilities and the difference has to be localised.
+    /// Two stores, per-dbi, and what moved.
     private static int statDiff(Path aPath, Path bPath, boolean all, PrintStream o) {
         try (RawStore sa = new RawStore(aPath); RawStore sb = new RawStore(bPath)) {
             o.println(VERSION + "   " + java.time.Instant.now());
@@ -557,13 +539,12 @@ public final class DbCmd {
 
     // ================================================================== versions
 
-    /// Every stored version of an id, and — with `--audit` — the whole store's duplicate-id
-    /// census in one `_id_idx` pass.
+    /// Every stored version of an id, and — with `--audit` — the whole store's duplicate-id census
+    /// in one `_id_idx` pass.
     ///
     /// Duplicate ids are legal: the primary key is (id, version), `version` is an optional string
     /// whose ordering the schema delegates to "agreed-upon rules", and `ValidBetween` carries no
-    /// uniqueness constraint. So the audit counts them and says what they are rather than treating
-    /// them as errors.
+    /// uniqueness constraint.
     private static int versions(String[] argv) {
         Args a = Args.parse(argv, Set.of("--audit"), Set.of("--db", "--class", "--top"));
         Path db = one(a.paths("--db"));
@@ -627,9 +608,8 @@ public final class DbCmd {
         }
     }
 
-    /// The duplicate-id audit, whole store, one pass. `_id_idx` sorts by id bytes first, so an
-    /// id's rows are adjacent and the group-by needs O(one id group) of memory rather than a map of
-    /// every id in the store.
+    /// The duplicate-id audit, whole store, one pass. `_id_idx` sorts by id bytes first, so an id's
+    /// rows are adjacent and the group-by needs O(one id group) of memory.
     private static int audit(RawStore s, PrintStream o, String classFilter, int top) {
         Map<Integer, long[]> perClass = new HashMap<>(); // idx -> {rows, ids, dupIds, maxCopies}
         long[] totals = new long[4];
@@ -637,7 +617,6 @@ public final class DbCmd {
         long[] crossClassIds = new long[1];
         long t0 = System.nanoTime();
 
-        // group accumulator for the current id
         final String[] curId = {null};
         final Map<Integer, Integer> curByClass = new LinkedHashMap<>();
         final long[] curRows = {0};
@@ -765,7 +744,7 @@ public final class DbCmd {
         }
         if (s.metaRow("emb_idx_done") == null) {
             o.println("  WARNING  _embedding_idx exists but emb_idx_done is NOT set: the index is");
-            o.println("           INCOMPLETE (FORMAT §4.1; clone retracts the marker when a source");
+            o.println("           INCOMPLETE (clone retracts the marker when a source");
             o.println("           lacks it). resolve_embeddings falls back to the corpus scan on");
             o.println("           this store, so an absence below proves nothing.");
         }
@@ -796,8 +775,8 @@ public final class DbCmd {
             o.printf("  %-34s %-34s %,12d%n", nameOf(s, ei), nameOf(s, ci), e.getValue()[0]);
         }
         o.println(RULE);
-        // Print SCOPE against OBSERVED, not observed alone: a class that should be in scope and is
-        // not shows up only in the difference between those two columns.
+        // A class that should be in scope and is not shows up only in the difference between the
+        // scope column and the observed column.
         Set<String> scope = new java.util.TreeSet<>(AbstractLmdbStore.embeddingIndexClassNames());
         Set<String> observed = new java.util.TreeSet<>();
         for (Integer i : byEmb.keySet()) observed.add(nameOf(s, i));
@@ -823,17 +802,15 @@ public final class DbCmd {
         return 0;
     }
 
-    /// The whole read surface `nx db` needs, in three methods, answerable from EITHER handle: an
-    /// address to `_id_idx` rows, a class idx to its name, a full_key to that row's stored bytes.
-    /// [RawStore] answers all three from `_meta`, the id index and a class-map point lookup; the
-    /// SPI answers them through `lookupById`, `classForIdx` and `loadRawObject`. Every command is
-    /// written against this rather than a concrete store.
+    /// The read surface `nx db` needs, answerable from either handle: an address to `_id_idx` rows,
+    /// a class idx to its name, a full_key to that row's stored bytes. [RawStore] answers all three
+    /// from `_meta`, the id index and a class-map point lookup; the SPI answers them through
+    /// `lookupById`, `classForIdx` and `loadRawObject`.
     ///
     /// The class-less address matters: `lookupFullKey` needs a class before it looks at anything,
     /// so without `lookupById` a SCAN command would have to resolve its address through [RawStore]
-    /// and CLOSE that handle before opening the SPI store — LMDB refuses two environments over one
-    /// file in one process. `check` still runs in two phases, its block-KEY probe not being an SPI
-    /// question.
+    /// and close that handle before opening the SPI store — LMDB refuses two environments over one
+    /// file in one process.
     interface Meta {
         /// Every `_id_idx` row of this address; `className`/`version` filter, both nullable.
         List<RawStore.Hit> lookup(String id, String version, String className);
@@ -865,8 +842,8 @@ public final class DbCmd {
                     System.arraycopy(k, 0, body, 0, body.length);
                     int ci = NulKeyCodec.classTrailer(k);
                     String name = className(ci);
-                    // The class filter is applied here, not by the SPI: lookupById returns every
-                    // row at the prefix and leaves the choice among them to the caller.
+                    // lookupById returns every row at the prefix and leaves the choice among them
+                    // to the caller, so the class filter is applied here.
                     if (cn != null && !cn.equals(name)) continue;
                     out.add(new RawStore.Hit(NulKeyCodec.idPart(body), NulKeyCodec.versionPart(body),
                             ci, name == null ? "?idx" + ci : name, r.fullKey(),
@@ -887,12 +864,10 @@ public final class DbCmd {
         };
     }
 
-    /// The SPI store, with [RawStore]'s first refusal kept.
-    ///
-    /// `Stores.sniffFormat` refuses a v1 or non-toolkit database with a good message, but it opens
-    /// an `Env` to find out, and a container with no `data.mdb` at all fails inside lmdbjava with a
-    /// message about a missing file rather than about what the operator pointed at. So the cheap
-    /// check comes first.
+    /// The SPI store, with [RawStore]'s first refusal kept. `Stores.sniffFormat` refuses a v1 or
+    /// non-toolkit database with a good message, but a container with no `data.mdb` at all fails
+    /// inside lmdbjava with a message about a missing file rather than about what the operator
+    /// pointed at, so that check comes first.
     private static Store openSpi(Path db) {
         if (!java.nio.file.Files.exists(db.resolve("data.mdb"))) {
             throw new IllegalArgumentException(db + ": no data.mdb (not a store directory)");
@@ -954,15 +929,12 @@ public final class DbCmd {
 
     // ================================================================== refs / rrefs
 
-    /// Forward and **reverse** reference lookup.
+    /// Forward and reverse reference lookup.
     ///
     /// A single reverse lookup does not need an adjacency structure, so `rrefs` answers without
-    /// paying `loadEdgeState`: the pass is `Store.scanEdges`/`Store.scanUnresolved` and this command
-    /// carries no reader of its own. `--csr` runs the `Csr` arm beside it, for agreement.
-    ///
-    /// One reader: the address comes from `Store.lookupById` on the same handle as the pass. LMDB
-    /// does not support two environments over one file in one process, so a class-less `_id_idx`
-    /// lookup is what makes that possible.
+    /// paying `loadEdgeState`: the pass is `Store.scanEdges`/`Store.scanUnresolved`, on the same
+    /// handle that `Store.lookupById` resolved the address on. `--csr` runs the `Csr` arm beside
+    /// it, for agreement.
     private static int refs(String[] argv, boolean reverse) throws Exception {
         Args a = Args.parse(argv, Set.of("--no-labels", "--csr", "--by-class"),
                 Set.of("--db", "--class", "--pick", "--limit"));
@@ -989,10 +961,9 @@ public final class DbCmd {
                 scanned++;
                 if (reverse ? e[1] == fk : e[0] == fk) scanHits.add(reverse ? e[0] : e[1]);
             }
-            // rrefs is a kind-0 question, so it does NOT take the kind-1 pass: scanUnresolved
-            // resolves each row's interned target key by a point lookup into _unres_keys, which at
-            // scale dominates the run, and a question that never looks at a target must not pay for
-            // one.
+            // scanUnresolved resolves each row's interned target key by a point lookup into
+            // _unres_keys, which dominates the run at scale. rrefs is a kind-0 question and never
+            // looks at a target, so it does not take this pass.
             if (!reverse) {
                 for (toolkit.store.UnresolvedRow r : st.scanUnresolved(tx)) {
                     scanned++;
@@ -1051,17 +1022,15 @@ public final class DbCmd {
                 o.println("  Nothing references this object IN THIS STORE. In a single-feed store");
                 o.println("  that is routine; the referrers may live in a feed you did not load.");
             }
-            // The --csr arm runs on THIS handle now. It used to reopen the store, because the
-            // address had come from a RawStore that had to be closed first; one reader means one
-            // open, and loadEdgeState still happens no earlier than the csr(tx) call below.
+            // The --csr arm runs on this handle, and loadEdgeState still happens no earlier than
+            // the csr(tx) call below.
             if (a.flag("--csr")) return csrCrossCheck(st, tx, fk, reverse, scanHits, o);
             return 0;
         }
     }
 
-    /// The `Csr` arm, opt-in, printed beside the scan arm. The only place in `nx db` where
-    /// `refs`/`rrefs` pay `loadEdgeState`, and its purpose is agreement rather than answers. It
-    /// runs on the caller's already-open handle.
+    /// The `Csr` arm, opt-in, printed beside the scan arm and run on the caller's already-open
+    /// handle. The only place where `refs`/`rrefs` pay `loadEdgeState`.
     private static int csrCrossCheck(Store st, toolkit.store.Txn tx, long fk, boolean reverse,
                                      List<Long> scanHits, PrintStream o) {
         o.println();
@@ -1098,9 +1067,8 @@ public final class DbCmd {
 
     // ================================================================== unres
 
-    /// The unresolved rows — `_edge_blocks` kind 1 plus `_unres_keys`, with GraphDump's
-    /// target rendering (`Class|id|version`) so a label from here and a label from a graph dump
-    /// are the same string.
+    /// The unresolved rows — `_edge_blocks` kind 1 plus `_unres_keys`, with the `Class|id|version`
+    /// target rendering, so a label from here and a label from a graph dump are the same string.
     private static int unres(String[] argv) throws Exception {
         Args a = Args.parse(argv, Set.of(),
                 Set.of("--db", "--referrer", "--target", "--class", "--limit", "--pick"));
@@ -1112,9 +1080,6 @@ public final class DbCmd {
         try (Store st = openSpi(db); toolkit.store.Txn tx = st.roTxn()) {
             header(o, "unres", "SCAN", db, st);
             Meta m = meta(st, tx);
-            // One reader since #149: the address is Store.lookupById's question now, so it comes off
-            // the same handle as the pass. This used to open RawStore and close it first, because
-            // LMDB does not support two environments over one file in one process.
             long referrer = -1;
             if (a.get("--referrer") != null) {
                 referrer = resolveOne(m, parseAddr(a.get("--referrer"), null), a.getInt("--pick", 0), o);
@@ -1160,7 +1125,7 @@ public final class DbCmd {
                 }
                 return 0;
             }
-            o.println("  rows (Class|id|version is GraphDump's decodeTarget rendering):");
+            o.println("  rows (Class|id|version is the graph dump's target rendering):");
             for (String r : shown) o.println("    " + r);
             if (matched > shown.size()) {
                 o.printf("    ... %,d more (--limit N)%n", matched - shown.size());
@@ -1186,7 +1151,7 @@ public final class DbCmd {
         return decodeTarget(meta(s), v);
     }
 
-    /// GraphDump's decodeTarget, byte for byte, so labels from the two tools are comparable.
+    /// The graph dump's target decoding, byte for byte, so labels from the two tools compare.
     private static String decodeTarget(Meta s, byte[] v) {
         if (v == null) return "(no _unres_keys row for this intern id)";
         byte[] body = Arrays.copyOf(v, v.length - 2);
@@ -1318,9 +1283,8 @@ public final class DbCmd {
 
     // ================================================================== path
 
-    /// "Why is this reachable" — BFS over the CSR. **The one command here that pays
-    /// `loadEdgeState`**, because a search wants random-access adjacency and a scan per hop
-    /// does not give it that.
+    /// "Why is this reachable" — BFS over the CSR. The one command here that pays `loadEdgeState`,
+    /// because a search wants random-access adjacency and a scan per hop does not give it that.
     private static int path(String[] argv) {
         Args a = Args.parse(argv, Set.of("--undirected"),
                 Set.of("--db", "--from", "--to", "--from-class", "--to-class", "--max-depth"));
@@ -1332,9 +1296,8 @@ public final class DbCmd {
         PrintStream o = System.out;
         o.println(VERSION + "   " + java.time.Instant.now());
         o.println("path   tier=CSR   " + db.toAbsolutePath());
-        // Both endpoints are resolved BEFORE csr(tx) is called: a typo in an id must not cost the
-        // whole edge state before it is reported. loadEdgeState is lazy on a read-only store, so
-        // the cheap arm costs only the open and the expensive one starts at csr(tx) below.
+        // Both endpoints are resolved before csr(tx) is called, so a typo in an id costs the open
+        // and not the whole edge state. loadEdgeState is lazy on a read-only store.
         long t0 = System.nanoTime();
         try (Store st = openSpi(db); toolkit.store.Txn tx = st.roTxn()) {
             long open = (System.nanoTime() - t0) / 1_000_000;
@@ -1392,9 +1355,6 @@ public final class DbCmd {
             o.printf("  PATH of %d hop(s):%n", chain.size() - 1);
             for (long k : chain) {
                 Class<?> c = st.classForIdx(NulKeyCodec.fullKeyClassIdx(k));
-                // The chain is a handful of objects, so decoding them for their ids is the right
-                // trade here -- unlike everywhere else in this file, where a decode over a corpus
-                // would be the wrong shape.
                 String id = "?";
                 try {
                     Object obj = st.loadObjectByFullKey(tx, k);
@@ -1421,26 +1381,25 @@ public final class DbCmd {
 
     // ================================================================== check
 
-    /// The pin: the SPI against itself. `Store.scanEdges`/`scanUnresolved` hold ONE BLOCK at a time
+    /// The pin: the SPI against itself. `Store.scanEdges`/`scanUnresolved` hold one block at a time
     /// and recover block order by galloping binary search; `Store.iterEdges`/`iterUnresolved`
     /// concatenate every block through `loadEdgeState`'s `TreeMap`. `Store.scanEdges` specifies the
     /// two as order-identical, and this says whether they are.
     ///
-    /// The hazard is block ordering: FORMAT §4.2's block number is u32 **LE** in a byte-ordered
-    /// map, so past block 255 cursor order stops being numeric order. `V2Store.loadEdgeState`
-    /// buckets by parsed number for that reason, and `STORE_SPI` §2.8 makes edge order part of
-    /// `fetchAllReferencesByClass`'s recorded determinism.
+    /// The hazard is block ordering: a block number is u32 LE in a byte-ordered map, so past block
+    /// 255 cursor order stops being numeric order. `V2Store.loadEdgeState` buckets by parsed number
+    /// for that reason, and edge order is part of `fetchAllReferencesByClass`'s recorded
+    /// determinism.
     ///
     /// Both readers are reduced to an order-sensitive rolling digest plus a count and the first
-    /// rows of each — digests rather than lists, so a large store's edges are not held twice. The
-    /// streaming arm runs first, before anything can materialise edge state for it to be answered
-    /// out of.
+    /// rows of each. The streaming arm runs first, before anything can materialise edge state for
+    /// it to be answered out of.
     ///
-    /// Two refusals. It prints the per-kind block counts and refuses to call itself a pass on a
-    /// store with less than 256 blocks of both kinds, where the two orders coincide and the check
-    /// is vacuous. And it carries a negative control: the block numbers this store holds, permuted
-    /// into LMDB cursor order, must be a DIFFERENT sequence from their numeric order. That is read
-    /// off the 5-byte keys ([RawStore#edgeBlockKeys]) and never off a pair.
+    /// Two refusals. It refuses to call itself a pass on a store with less than 256 blocks of both
+    /// kinds, where the two orders coincide and the check is vacuous. And it carries a negative
+    /// control: the block numbers this store holds, permuted into LMDB cursor order, must be a
+    /// different sequence from their numeric order. That is read off the 5-byte keys
+    /// ([RawStore#edgeBlockKeys]) and never off a pair.
     private static int check(String[] argv) {
         Args a = Args.parse(argv, Set.of("--no-negative"), Set.of("--db", "--head"));
         Path db = one(a.paths("--db"));
@@ -1452,8 +1411,8 @@ public final class DbCmd {
         o.println("  Store.scanEdges/scanUnresolved (streaming, one block resident) against");
         o.println("  Store.iterEdges/iterUnresolved (loadEdgeState's materialised slot arrays),");
         o.println("  IN ORDER. Order is the thing being checked: past block 255 cursor order is not");
-        o.println("  numeric order (FORMAT 4.2's u32 LE block number in a byte-ordered map), and");
-        o.println("  STORE_SPI 2.8 makes edge order a recorded property.");
+        o.println("  numeric order (a u32 LE block number in a byte-ordered map), and");
+        o.println("  the store SPI makes edge order a recorded property.");
         o.println(RULE);
 
         // Phase 1, keys only: does this store exercise the hazard at all? RawStore is closed
@@ -1549,9 +1508,9 @@ public final class DbCmd {
         return edgesOk && unresOk ? 0 : 1;
     }
 
-    /// True when `nos` (ascending) is NOT the order a byte-ordered map would return the same
-    /// block numbers in — i.e. when this store can tell a numeric-order reader from a cursor-order
-    /// one. The key is `[kind][block# u32 LE]`, so the comparison is low byte first.
+    /// True when `nos` (ascending) is not the order a byte-ordered map would return the same block
+    /// numbers in — i.e. when this store can tell a numeric-order reader from a cursor-order one.
+    /// The key is `[kind][block# u32 LE]`, so the comparison is low byte first.
     private static boolean cursorOrderDiffers(int[] nos) {
         Integer[] c = new Integer[nos.length];
         for (int i = 0; i < nos.length; i++) c[i] = nos[i];
@@ -1598,8 +1557,7 @@ public final class DbCmd {
         String cn = classOpt;
         if (cn == null) {
             // The spec's ':Class' suffix, accepted only when the trailing segment really resolves
-            // to a model class -- NeTEx ids are colon-heavy, so this is otherwise a trap. Same
-            // rule as LensCmd, deliberately.
+            // to a model class -- NeTEx ids are colon-heavy. Same rule as LensCmd.
             int c = id.lastIndexOf(':');
             if (c > 0) {
                 String tail = id.substring(c + 1);
@@ -1616,7 +1574,7 @@ public final class DbCmd {
         return hits(meta(s), ad, o);
     }
 
-    /// Every `_id_idx` match, printed. Duplicates are never silently collapsed (§2.1 hazard 1).
+    /// Every `_id_idx` match, printed. Duplicates are never silently collapsed.
     private static List<RawStore.Hit> hits(Meta s, Addr ad, PrintStream o) {
         if (ad.isFullKey()) {
             int idx = NulKeyCodec.fullKeyClassIdx(ad.fullKey());
@@ -1654,9 +1612,8 @@ public final class DbCmd {
         return hs.get(Math.min(pick, hs.size() - 1)).fullKey();
     }
 
-    /// `Class|id|version` for a full_key, by POINT LOOKUP: read that one class-map row, inflate it,
-    /// take the root element's `@id`/`@version`. One row each, for the tens or hundreds of keys a
-    /// `refs`/`rrefs` answer contains.
+    /// `Class|id|version` for a full_key, by point lookup: read that one class-map row, inflate it,
+    /// take the root element's `@id`/`@version`.
     private static String label(RawStore s, FragmentCodec codec, long fk, Map<Long, String> cache) {
         return label(meta(s), codec, fk, cache);
     }
@@ -1682,9 +1639,7 @@ public final class DbCmd {
         });
     }
 
-    /// Every command says which tier it is on, in its own output. The two non-CSR tiers differ in
-    /// cost by orders of magnitude at national scale and neither opens `V2Store`; saying so on
-    /// every run is cheaper than expecting the operator to remember the table in `--help`.
+    /// Every command says which tier it is on, in its own output.
     private static void header(PrintStream o, String cmd, String tier, Path db, RawStore s) {
         o.println(VERSION + "   " + java.time.Instant.now());
         o.printf("%s   tier=%s   %s   format=%s%n", cmd, tier, db.toAbsolutePath(), s.formatMarker());
@@ -1694,7 +1649,7 @@ public final class DbCmd {
                         + " loadEdgeState is NOT run."));
     }
 
-    /// The same header for a command that opens the SPI store and nothing else (#149).
+    /// The same header for a command that opens the SPI store and nothing else.
     private static void header(PrintStream o, String cmd, String tier, Path db, Store st) {
         o.println(VERSION + "   " + java.time.Instant.now());
         o.printf("%s   tier=%s   %s   format=%s%n", cmd, tier, db.toAbsolutePath(), st.formatMarker());
@@ -1748,9 +1703,8 @@ public final class DbCmd {
         BadUsage(String m) { super(m); }
     }
 
-    /// The option parser. Deliberately strict: an unknown option is an error rather than a silently
-    /// ignored word, because the failure mode of a lenient parser here is a command that reads a
-    /// different store than the operator thinks it does.
+    /// The option parser. Strict: an unknown option is an error rather than a silently ignored
+    /// word, so a mistyped `--db` cannot leave a command reading a different store.
     static final class Args {
         private final Map<String, List<String>> opt = new LinkedHashMap<>();
         private final Set<String> flags = new LinkedHashSet<>();

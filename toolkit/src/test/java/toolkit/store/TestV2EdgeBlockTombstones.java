@@ -1,33 +1,17 @@
 package toolkit.store;
 
-// THE DIRTY-BLOCK STATE BELOW THE COMPACTION THRESHOLD, AND WHAT SURVIVES A CLOSE.
-//
 // V2Store keeps edges and unresolved rows as dense slot arrays serialised into fixed-size blocks.
-// A delete does not move anything: it writes a (-1,-1) TOMBSTONE into the slot and rewrites only
+// A delete does not move anything: it writes a (-1,-1) tombstone into the slot and rewrites only
 // the block that slot lives in. Compaction — rewriting the kind from its live slots and renumbering
-// every block — happens only once dead slots reach COMPACT_DEAD_FRACTION (25 %) of the kind.
+// every block — happens only once dead slots reach COMPACT_DEAD_FRACTION (25 %) of the kind. The
+// intern table holds the encoded target key of every unresolved row, and is pruned by compaction
+// rather than tombstoned.
 //
-// TestScanEdges covers the ABOVE-threshold half: it resolves exactly half the references, the 50 %
-// dead fraction compacts both kinds clean, and every assertion it then makes is on a tombstone-FREE
-// store (`Check.equals(0, s[1])`, `Check.equals(0, s[4])`) — which is what makes its slot/block
-// correspondence exact. So the state a real store spends most of its life in — a few tombstones,
-// no compaction due, blocks whose slot numbering has holes in it — was never written to disk and
-// read back by any test. Nor was the intern table, which holds the encoded target key of every
-// unresolved row and is the one structure that is pruned by compaction rather than tombstoned.
-//
-// Three things are asserted here that nothing else asserts:
-//
-//   * a below-threshold delete leaves the tombstones in place, and they are STILL there after
-//     close and reopen — a reload that dropped them would renumber the live slots and every
-//     full key already handed out would address a different row;
-//   * the intern table tracks the live unresolved rows and shrinks when they compact away;
-//   * purging a class (insertObjects with an empty iterator and empty=true) takes every edge and
-//     every unresolved row of that class with it, compacting BOTH kinds and the intern table to
-//     nothing — while the class maps it does not name are untouched.
-//
-// Runner sets blockPairs = 128 for the whole suite, so the 700 rows below span six blocks; the
-// block-count assertions are written against the property rather than a literal, so raising it
-// fails here instead of quietly reducing this to a single-block test.
+// The state pinned here is the one below that threshold: a few tombstones, no compaction due,
+// blocks whose slot numbering has holes in it, written to disk and read back. Runner sets
+// blockPairs = 128 for the whole suite, so the 700 rows below span six blocks; the block-count
+// assertions are written against the property rather than a literal, so raising it fails here
+// instead of quietly reducing this to a single-block test.
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.model.PassengerStopAssignment;
@@ -123,10 +107,11 @@ public class TestV2EdgeBlockTombstones {
         }
     }
 
-    /// One more target arrives and its referrer is overwritten. That is one resolved row out of 350
-    /// — far below the 25 % threshold — so nothing compacts: the overwrite tombstones the old edge,
-    /// the resolve tombstones the drained unresolved row, and BOTH must still be there after the
-    /// store is closed and reopened.
+    /// One more target arrives and its referrer is overwritten: one resolved row out of 350, far
+    /// below the 25 % threshold, so nothing compacts. The overwrite tombstones the old edge, the
+    /// resolve tombstones the drained unresolved row, and both are still there after a close and
+    /// reopen — a reload that dropped them would renumber the live slots, and every full key
+    /// already handed out would address a different row.
     @Test
     void testTombstonesBelowTheThresholdSurviveAReopen(TestStore ts) throws Exception {
         Path dir = seeded(ts);
@@ -154,8 +139,7 @@ public class TestV2EdgeBlockTombstones {
     }
 
     /// Purging the referrer class: every edge and every unresolved row belonged to it, so both kinds
-    /// and the intern table compact to nothing. The Quay map is not named and must be untouched —
-    /// a purge that reached further would be indistinguishable here from one that worked.
+    /// and the intern table compact to nothing. The Quay map is not named and must be untouched.
     @Test
     void testPurgingTheReferrerClassEmptiesBothKinds(TestStore ts) throws Exception {
         Path dir = seeded(ts);

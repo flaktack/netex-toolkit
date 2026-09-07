@@ -1,13 +1,8 @@
 package toolkit.model;
 
-// The reflective id/ref/projection MECHANISM over the JAXB beans. Nothing here names a class, a
-// rule, a profile or a vendor: the only NeTEx-specific knowledge is the model's naming convention.
-// The WRITE side of the reflection whose read side is RecursiveAttributes.
-//
-// Profile config stays out: a codespace and a version are chosen by a profile, so the sugar that
-// binds them lives in toolkit.transform.epip.
-//
-// NAME MAPPING: an object's XML element name IS its class simple name. The whole toolkit relies on it.
+// The reflective id/ref/projection mechanism over the JAXB beans. The only NeTEx-specific
+// knowledge here is the model's naming convention: an object's XML element name is its class simple
+// name. The whole toolkit relies on that.
 
 import noi.netex.model.Codespace;
 import noi.netex.model.OrderedVersionOfObjectRefStructure;
@@ -24,19 +19,14 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class NetexUtils {
 
-    // Taken from ModelRegistry rather than written as a literal: refClassOf() feeds it to
-    // Class.forName, so a spelling that disagreed with the compiled imports would resolve nothing
-    // with no build signal. Trailing dot because every use concatenates a simple name onto it.
+    // Trailing dot: every use concatenates a simple name onto it.
     private static final String MODEL_PKG = ModelRegistry.MODEL_PKG + ".";
 
     private NetexUtils() {}
 
-    // ------------------------------------------------------------------ getId
-
-    /// getId: {@code "{codespace.xmlns}:{ClassName}:{id with ':' replaced by '-'}"}.
-    /// EVERY colon in the local id is sanitized to a dash (so composed ids like
-    /// `"IT:x:1"` become one local token `"IT-x-1"`); the class name is the model class's
-    /// SIMPLE name, not its binary name. Callers stringify the id.
+    /// getId: {@code "{codespace.xmlns}:{ClassName}:{id with ':' replaced by '-'}"}. Every colon in
+    /// the local id is sanitized to a dash, so a composed id like `"IT:x:1"` becomes one local token
+    /// `"IT-x-1"`; the class name is the model class's simple name, not its binary name.
     public static String getId(Codespace codespace, Class<?> clazz, String id) {
         return codespace.getXmlns() + ":" + clazz.getSimpleName() + ":" + id.replace(":", "-");
     }
@@ -57,8 +47,8 @@ public final class NetexUtils {
     /// The ref class derived from the object's class name: the model spells its ref beans `XxxRef`
     /// or, usually, `XxxRefStructure`, and both are tried in that order.
     ///
-    /// MEMOISED per object class — the `XxxRef` miss costs a full classloader delegation plus a
-    /// `ClassNotFoundException`. The probe ORDER must not be swapped; see [#refClassOf].
+    /// Memoised per object class: the `XxxRef` miss costs a full classloader delegation plus a
+    /// `ClassNotFoundException`.
     public static VersionOfObjectRefStructure getRef(Object obj) {
         Class<?> objClass = obj.getClass();
         Object looked = REF_CLASSES.get(objClass);
@@ -79,11 +69,11 @@ public final class NetexUtils {
     /// - `ref` = the object's `id` if it has one (an id-bearing entity), else its
     ///    `ref` (making a ref from a ref); either must be non-null; neither present →
     ///    error ("Object does not have an id or ref").
-    /// - `order` is copied ONLY when both sides have it (Java: the ref is an
+    /// - `order` is copied only when both sides have it (the ref is an
     ///    [OrderedVersionOfObjectRefStructure] and the object has `getOrder`).
     /// - `version` is always assigned: the object's version, or null when absent
     ///    (every VersionOfObjectRefStructure has the attribute).
-    /// - `nameOfRefClass` is set ONLY when the ref-class name does not prefix-match the object's:
+    /// - `nameOfRefClass` is set only when the ref-class name does not prefix-match the object's:
     ///    `UicOperatingPeriod` → `OperatingPeriodRef` carries it, `Operator` → `OperatorRef` does
     ///    not. The object name is its simple name with a trailing "RefStructure" shortened to
     ///    "Ref" — the ref-of-a-ref rule.
@@ -123,9 +113,9 @@ public final class NetexUtils {
     /// project: a new `targetClass` instance populated from `source`, then
     /// `overrides` applied on top. Copy rules:
     ///
-    /// - Iterate the TARGET's properties — setters, plus getter-only [List]s — and pull the
+    /// - Iterate the target's properties — setters, plus getter-only [List]s — and pull the
     ///    same-named value from the source where it has one. JAXBElement and List values copy by
-    ///    REFERENCE, aliasing included; a List property has no setter, so its ELEMENTS are aliased
+    ///    reference, aliasing included; a List property has no setter, so its elements are aliased
     ///    through addAll, one level shallower than aliasing the list itself.
     /// - Target properties the source lacks stay null.
     /// - id rewrite: when the target has an id, `":SourceClass:"` in the copied value becomes
@@ -133,7 +123,7 @@ public final class NetexUtils {
     ///    source class name.
     /// - `overrides` keys are bean property names; an unknown key throws. Values go through the
     ///    same setter path, null allowed.
-    /// - A source value whose runtime type does not fit the target setter is SKIPPED and left
+    /// - A source value whose runtime type does not fit the target setter is skipped and left
     ///    null; the call site must set the field itself.
     public static <T> T project(Object source, Class<T> targetClass, Map<String, Object> overrides) {
         T target;
@@ -144,7 +134,7 @@ public final class NetexUtils {
         }
 
         // Target setters by property name (decapitalized, e.g. setIsAvailable -> isAvailable), and
-        // the property walk order — computed ONCE per target class.
+        // the property walk order — computed once per target class.
         TargetPlan plan = plan(targetClass);
         Map<String, Method> setters = plan.setters();
         Class<?> sourceClass = source.getClass();
@@ -158,7 +148,7 @@ public final class NetexUtils {
             if (value == null) continue;                       // fresh bean fields are already null
             Class<?> param = plan.writableParam()[i];
             if (param.isInstance(value)) invoke(setter, target, value);
-            // else: statically-untypeable copy — skipped (see Javadoc).
+            // else: statically-untypeable copy — skipped.
         }
 
         // Getter-only List properties: element-aliasing copy.
@@ -200,22 +190,22 @@ public final class NetexUtils {
         return target;
     }
 
-    /// [Class, Map)][#project(Object,] without overrides.
+    /// The same, without overrides.
     public static <T> T project(Object source, Class<T> targetClass) {
         return project(source, targetClass, null);
     }
 
-    // project() copies JAXB's DEFAULTED GETTERS into real target FIELDS, so a projected bean would
-    // marshal attributes that must never reach the wire. That is enforced at MARSHAL time instead;
-    // see toolkit/codec/SchemaDefaults.
+    // project() copies JAXB's defaulted getters into real target fields, so a projected bean would
+    // marshal attributes that must never reach the wire. SchemaDefaults suppresses them at marshal
+    // time instead.
 
     // ---------------------------------------------------------------- plumbing
 
-    // ---- reflection caches. PERF ONLY: every lookup returns what the uncached call returned.
-    // Nothing here calls setAccessible, so handing out the SHARED Method rather than getMethod's
-    // fresh copy is unobservable; ConcurrentHashMaps publish it safely.
+    // ---- reflection caches. Every lookup returns what the uncached call returned. Handing out the
+    // shared Method rather than getMethod's fresh copy is unobservable only while nothing here calls
+    // setAccessible.
 
-    /// Stored for "no such public zero-arg method" — the NEGATIVE result is cached too.
+    /// Stored for "no such public zero-arg method" — the negative result is cached too.
     private static final Method NO_SUCH_METHOD;
     static {
         try {
@@ -245,17 +235,13 @@ public final class NetexUtils {
     /// The `XxxRef` / `XxxRefStructure` probe behind [#getRef(Object)], run once
     /// per object class.
     ///
-    /// THE ORDER IS NOT SWAPPED. A number of model classes carry BOTH names, and in every one
+    /// The order must not be swapped. A number of model classes carry both names, and in every one
     /// `XxxRef extends XxxRefStructure`, so trying `RefStructure` first would hand back the
-    /// SUPERtype — a different XML element, and a ClassCastException at any call site casting to
+    /// supertype — a different XML element, and a ClassCastException at any call site casting to
     /// `XxxRef`.
     ///
     /// Returns the resolved [Class], or the `RefStructure` [ClassNotFoundException] to stand as
     /// the cause of the caller's IllegalArgumentException.
-    ///
-    /// NOT [ModelRegistry#classForName]: the registry holds only [noi.netex.model.EntityStructure]
-    /// subclasses, and `VersionOfObjectRefStructure` extends nothing, so every name this probe
-    /// looks for comes back null there. The two name spaces are disjoint by construction.
     private static Object refClassOf(Class<?> objClass) {
         String base = MODEL_PKG + objClass.getSimpleName();
         try {
@@ -323,12 +309,9 @@ public final class NetexUtils {
         }
     }
 
-    /// Public zero-arg method, or null.
-    /// Memoised per (class, name), NEGATIVES INCLUDED.
-    ///
-    /// Public only for the CACHE, so a caller doing its own reflective property lookup shares this
-    /// one table. Its one caller, [toolkit.transform.epip.TimetabledPassingTimesProfile], is in a
-    /// different package.
+    /// Public zero-arg method, or null. Memoised per (class, name), negatives included. Public only
+    /// for the cache, so a caller in another package doing its own reflective property lookup shares
+    /// this one table.
     public static Method method(Class<?> clazz, String name) {
         ConcurrentHashMap<String, Method> byName = METHODS.get(clazz);
         if (byName == null) byName = METHODS.computeIfAbsent(clazz, c -> new ConcurrentHashMap<>());
@@ -344,8 +327,8 @@ public final class NetexUtils {
         return m == NO_SUCH_METHOD ? null : m;
     }
 
-    /// Source getter for a property suffix: getX, then isX (JAXB Boolean getters use isX).
-    /// Memoised on the RESOLVED pair so the common case is ONE map lookup.
+    /// Source getter for a property suffix: getX, then isX (JAXB Boolean getters use isX). Memoised
+    /// on the resolved pair, so the common case is one map lookup.
     private static Method sourceGetter(Class<?> clazz, String suffix) {
         ConcurrentHashMap<String, Method> bySuffix = SOURCE_GETTERS.get(clazz);
         if (bySuffix == null) {

@@ -2,16 +2,10 @@ package toolkit.harness;
 
 // The EXPORT sandwich and the three pieces it is built from.
 //
-// COVERAGE GAP, stated: TestFragmentOrder is the only test that reaches the EPIP export driver, and
-// it reaches it for the child-order normalisation alone. Nothing here asserts the driver's entry
-// names, ordering or colocation; equivalence of an export across a refactor is checked out-of-band
-// with tools/diff/export_zip.py, which is not the same as a test.
-//
-// What this file asserts is the part that has no EPIP in it: that entry timestamps are pinned
-// rather than a wall clock, that the totals the "done" line reports are the ones actually written,
-// that the envelope takes its two profile strings from its Options rather than from a literal, that
-// a FAILED export leaves neither a half-written zip nor a .tmp beside it, and that FrameWriter
-// applies its profile hook to every emitted fragment and to nothing else.
+// COVERAGE GAP: nothing here asserts the EPIP export driver's entry names, ordering or colocation.
+// TestFragmentOrder reaches that driver for the child-order normalisation alone; equivalence of an
+// export across a refactor is checked out-of-band with tools/diff/export_zip.py, which is not the
+// same as a test.
 
 import org.junit.jupiter.api.Test;
 import toolkit.test.Check;
@@ -44,8 +38,7 @@ public class TestDbToZip {
         """;
 
     /// Every entry carries the 1980 DOS epoch, not the clock. This is the ONLY reproducibility the
-    /// exporter offers — the entry CONTENT still holds a live PublicationTimestamp — and a
-    /// regression here is invisible in any content comparison.
+    /// exporter offers: the entry CONTENT still holds a live PublicationTimestamp.
     @Test
     void testEveryEntryCarriesThePinnedTimestamp() throws Exception {
         Path zip = Files.createTempFile("zipwriter-", ".zip");
@@ -69,9 +62,8 @@ public class TestDbToZip {
         Files.deleteIfExists(zip);
     }
 
-    /// The totals are per ENTRY and then summed — bytes counted by the writer, objects counted by
-    /// the caller — because an export that emitted an empty entry and one that emitted a full one
-    /// are otherwise indistinguishable from the outside.
+    /// The totals are per ENTRY and then summed: bytes counted by the writer, objects counted by
+    /// the caller.
     @Test
     void testTotalsCountBytesWrittenAndObjectsDeclared() throws Exception {
         Path zip = Files.createTempFile("zipwriter-", ".zip");
@@ -197,8 +189,7 @@ public class TestDbToZip {
     }
 
     /// A FAILED export must leave nothing behind — not a truncated zip under the final name, and
-    /// not the `.tmp` either. The rename is what makes the first impossible; the
-    /// `catch (Throwable)` is what makes the second.
+    /// not the `.tmp` either.
     @Test
     void testAFailedExportLeavesNeitherAZipNorATmp(TestStore ts) throws Exception {
         Path db = ts.buildDbFile(FRAMES, "src.lmdb");
@@ -276,9 +267,8 @@ public class TestDbToZip {
                  ZipWriter out, NetexEnvelope env) throws Exception;
     }
 
-    /// The default writer emits the STORED bytes. This is the property the no-hook constructor
-    /// exists for, and the one conv/DbToZipRaw depends on: an export that wants the fragments as
-    /// the feed wrote them must be able to have them.
+    /// The default writer emits the STORED bytes. This is what the no-hook constructor exists for,
+    /// and what scripts/DbToZipRaw depends on.
     @Test
     void testTheDefaultWriterEmitsTheStoredBytes(TestStore ts) throws Exception {
         String xml = emitted(ts, (fw, db, tx, out, env) -> {
@@ -294,10 +284,6 @@ public class TestDbToZip {
 
     /// The hook is applied to EVERY emitted fragment and to nothing else — once per object, with
     /// the object's own class, and its return value is what is written.
-    ///
-    /// This is the assertion the extraction of FrameWriter needed: the normalisation used to be a
-    /// call inside each emit method, so "did every path apply it" was a question about six call
-    /// sites. It is now one, and this pins it there.
     @Test
     void testTheHookSeesEveryEmittedFragmentAndNothingElse(TestStore ts)
             throws Exception {

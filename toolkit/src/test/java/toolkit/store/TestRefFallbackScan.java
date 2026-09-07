@@ -1,25 +1,11 @@
 package toolkit.store;
 
-// DETERMINISTIC IS NOT CORRECT.
-//
 // AbstractLmdbStore.loadObjectByReference resolves a reference on its exact (id, version, class)
 // key. When the class trailer cannot be derived it falls through to a prefix scan over the bare id
-// and returns THE SMALLEST ROW -- ignoring the class the caller asked for AND the version. It is
-// perfectly reproducible and it is perfectly capable of handing back the wrong object.
-//
-// These tests pin the aggregate that counts those fallbacks, and the shape of the answer the
-// fallback gives, so the two are documented together: the count is only interesting BECAUSE the row
-// is a guess.
-//
-// Which row wins is unchanged: every store built through this path depends on it byte for byte, so
-// the fallback still takes the first matching-trailer row, else the smallest, and
-// testTheFallbackStillReturnsTheSmallestRow is the control that says so.
-//
-// NEUTER PROOF:
-//   * testTheFallbackStillReturnsTheSmallestRow -- change the tie-break in the scan loop.
-//   * testAnExactKeyCostsNoFallback             -- count on entry instead of at the fallback.
-//   * testFallbacksAreCountedAndReported        -- drop the LongAdder, or the reportRefFallbacks
-//     call in DbToDb/InPlace; the transcript stops carrying the number again.
+// and takes the first matching-trailer row, else the smallest — ignoring both the class the caller
+// asked for and the version. The answer is reproducible and can still be the wrong object, so
+// these tests pin the shape of that answer together with the counter that reports how often it was
+// taken.
 
 import noi.netex.model.Line;
 import noi.netex.model.Operator;
@@ -67,8 +53,6 @@ public class TestRefFallbackScan {
         return r;
     }
 
-    // ----------------------------------------------------------------
-
     /// The exact (id, version, class) key never touches the fallback, so it must never count.
     @Test
     void testAnExactKeyCostsNoFallback(TestStore ts) {
@@ -86,9 +70,9 @@ public class TestRefFallbackScan {
         }
     }
 
-    /// A reference with no derivable class is answered by a row chosen for its
-    /// position in the id index, not for matching anything the caller asked. The count is what makes
-    /// that visible across a run.
+    /// A reference with no derivable class is answered by a row chosen for its position in the id
+    /// index rather than for matching anything the caller asked. The count is what makes that
+    /// visible across a run.
     @Test
     void testAClasslessRefFallsBackAndIsCounted(TestStore ts) {
         fill(ts);
@@ -101,9 +85,8 @@ public class TestRefFallbackScan {
         }
     }
 
-    /// The control on the choice: three rows carry X:1, and the fallback returns the FIRST at the
-    /// prefix regardless of class or version. Pinned so the instrumentation above cannot be mistaken
-    /// for a behaviour change, and so a future fix has to state which row it moves to.
+    /// Three rows carry X:1, and the fallback returns the first at the prefix regardless of class
+    /// or version. Every store built through this path depends on that choice byte for byte.
     @Test
     void testTheFallbackStillReturnsTheSmallestRow(TestStore ts) {
         fill(ts);
@@ -160,9 +143,8 @@ public class TestRefFallbackScan {
         String text = Files.readString(log);
         Check.that(text.contains("[reftest]"), "the stage is named: " + text);
         Check.that(text.contains("2"), "…with the aggregate, not a line per reference: " + text);
-        // refFallback, NOT unresolvedRefs. The two are opposite failures: an unresolved reference
-        // is a hole, countable and edge-losing; this one RESOLVED, possibly to the wrong class and
-        // version. Sharing a flag would let a clean _unresolved table vouch for this.
+        // refFallback rather than unresolvedRefs: an unresolved reference is a hole, countable and
+        // edge-losing, while this one resolved, possibly to the wrong class and version.
         Check.that(text.contains("-Dtoolkit.strict.refFallback=true"),
                 "…and the flag that refuses it: " + text);
     }

@@ -12,13 +12,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/// A parsed XML fragment, in **document order**: element name, the attributes as they were written,
-/// the text, the children in the order they occurred.
+/// A parsed XML fragment in document order: element name, the attributes as they were written, the
+/// text, the children in the order they occurred.
 ///
-/// Attributes are never sorted and siblings are never reordered — every other instrument in the
-/// stack canonicalises order away, so a schema-invalid sibling order is visible only here. Text is
-/// kept verbatim, with no trim and no collapse, so a padded and an unpadded lexical stay different
-/// values.
+/// Attributes are never sorted and siblings are never reordered. Text is kept verbatim, with no
+/// trim and no collapse, so a padded and an unpadded lexical stay different values.
 public final class XmlDoc {
 
     public static final class Node {

@@ -7,27 +7,20 @@ import java.util.regex.Pattern;
 
 /// Carrier for `xs:time`.
 ///
-/// PROV-CAP: adapters-lossless — this carrier and its XmlDate/XmlDateTime/XmlDuration
-/// siblings ARE that capability; a store written by a jar without them has already lost the offsets,
-/// the raw hour 24..47 and the sub-second durations from its stored fragments.
+/// PROV-CAP: adapters-lossless — this carrier and its [XmlDateTime] and [XmlDuration] siblings are
+/// that capability.
 ///
-/// A SERIALIZATION CARRIER, not a value type: it holds everything the source lexical form said,
-/// including the two things [LocalTime] cannot — an hour of 24 or more, and a timezone offset —
-/// so a re-marshal is byte-exact and no consumer has to guess what was discarded.
+/// A serialization carrier: it holds everything the source lexical form said, including the two
+/// things [LocalTime] cannot — an hour of 24 or more, and a timezone offset — so a re-marshal is
+/// byte-exact. The hour is stored raw: `24:09:00` reports [#getHour()] 24 and [#getDayOffset()] 1,
+/// while [#toLocalTime()] normalises.
 ///
-/// NORMALISE BEFORE COMPARING, and never put a carrier in a Set. Two carriers holding the same
-/// instant may differ in lexical form, offset presence and raw hour, so comparing carriers is
-/// always a bug. [#hashCode()] therefore throws, turning a silent wrong answer into a failure;
-/// `equals` is left as identity.
+/// Normalise before comparing, and never put a carrier in a Set: two carriers holding the same
+/// instant may differ in lexical form, offset presence and raw hour. [#hashCode()] therefore
+/// throws, turning a silent wrong answer into a failure; `equals` is left as identity.
 ///
-/// The hour is stored RAW: `24:09:00` reports [#getHour()] 24 and [#getDayOffset()] 1. A consumer
-/// reading the day must ask [#isXsdValid()] first — an hour-24 value is a legal time only as
-/// exactly `24:00:00`.
-///
-/// Unparseable input is NOT an error: the carrier keeps the raw text, reports [#isUnparsed()] and
-/// returns null from [#toLocalTime()]. It is counted
-/// in [UnparsedTally], which is the ONLY place it is visible — the adapter returned an object, so
-/// JAXB raises nothing.
+/// Unparseable input is not an error: the carrier keeps the raw text, reports [#isUnparsed()] and
+/// returns null from [#toLocalTime()]. It is counted in [UnparsedTally].
 public final class XmlTime {
 
     /// `hh:mm:ss[.fraction][Z|±hh:mm]`, with the hour deliberately unbounded.
@@ -100,9 +93,9 @@ public final class XmlTime {
                 null, null, false);
     }
 
-    /// The one place an unparsed `xs:time` carrier is built, which is why the count is taken
-    /// here: the carrier raises no `ValidationEvent` (the adapter returned an object, so JAXB
-    /// saw a success), so `toolkit.codec.BindEvents` cannot see this value at all.
+    /// The one place an unparsed `xs:time` carrier is built, which is why the count is taken here:
+    /// the carrier raises no `ValidationEvent` — the adapter returned an object, so JAXB saw a
+    /// success — so `toolkit.codec.BindEvents` cannot see this value at all.
     private static XmlTime unparsed(String raw) {
         UnparsedTally.record(UnparsedTally.Kind.TIME, raw);
         return new XmlTime(0, 0, 0, 0, null, raw, true);
@@ -110,7 +103,7 @@ public final class XmlTime {
 
     // ------------------------------------------------------------------ normalisation
 
-    /// THE one normalisation method: wall-clock time, day offset and zone offset discarded.
+    /// Wall-clock time, day offset and zone offset discarded.
     ///
     /// @return `null` if this carrier is [unparsed][#isUnparsed()].
     public LocalTime toLocalTime() {
@@ -119,7 +112,7 @@ public final class XmlTime {
 
     // ------------------------------------------------------------------ accessors
 
-    /// The hour **as written**: 24, 25, 30 are returned unreduced.
+    /// The hour as written: 24, 25, 30 are returned unreduced.
     public int getHour() {
         return hour;
     }
@@ -129,15 +122,14 @@ public final class XmlTime {
         return hour / 24;
     }
 
-    /// Whether this value is a legal `xs:time` — and therefore whether the source holds
-    /// it as a value at all.
+    /// Whether this value is a legal `xs:time`.
     ///
     /// XSD admits hour 24 only as the midnight-end-of-day form — zero minute, second and fraction
-    /// — and no hour above 24. This carrier parses BOTH, which is how it re-marshals them
-    /// byte-exactly, so a consumer that needs the distinction has to ask for it here.
+    /// — and no hour above 24. This carrier parses both, so a consumer that needs the distinction
+    /// has to ask for it here.
     ///
-    /// @return `false` for an [unparsed][#isUnparsed()] carrier, for any hour above 24,
-    ///         and for hour 24 with a non-zero minute, second or fraction; `true` otherwise.
+    /// @return `false` for an [unparsed][#isUnparsed()] carrier, for any hour above 24, and for
+    ///         hour 24 with a non-zero minute, second or fraction; `true` otherwise.
     public boolean isXsdValid() {
         if (unparsed || hour > 24) {
             return false;

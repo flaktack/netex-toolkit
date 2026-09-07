@@ -33,7 +33,7 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /// A per-test writable store in a temporary directory, populated from a NeTEx fragment string
-/// through the REAL loader.
+/// through the real loader.
 ///
 /// Fixture strings are plain NeTEx; the wrapper is a fixed skeleton.
 public final class TestStore implements AutoCloseable {
@@ -99,7 +99,7 @@ public final class TestStore implements AutoCloseable {
         return dir.resolve(name);
     }
 
-    /// A populated, CLOSED store file for drivers that open their inputs themselves. Same format
+    /// A populated, closed store file for drivers that open their inputs themselves. Same format
     /// as this store.
     public Path buildDbFile(String framesXml, String name) throws Exception {
         Path path = dir.resolve(name);
@@ -114,7 +114,7 @@ public final class TestStore implements AutoCloseable {
     /// Run a 4-arg transform from this store into a fresh same-format target; the target is closed
     /// with this TestStore.
     public TestStore runDbToDb(DbToDb.ApplyFn transform) throws Exception {
-        // The child owns its OWN subdirectory: closing it must never delete the parent's live db.
+        // The child owns its own subdirectory: closing it must never delete the parent's live db.
         Path childDir = Files.createDirectories(dir.resolve("target-" + (nameCounter++)));
         TestStore target = new TestStore(Stores.create(childDir.resolve("target.lmdb"), format), format, childDir);
         children.add(target);
@@ -122,7 +122,7 @@ public final class TestStore implements AutoCloseable {
             transform.apply(store, stx, target.store, dtx);
             dtx.commit();
         }
-        target.store.resolveEmbeddings(); // resolveEmbeddings only
+        target.store.resolveEmbeddings();
         return target;
     }
 
@@ -185,7 +185,7 @@ public final class TestStore implements AutoCloseable {
         gf.setMembers(members);
         PublicationDeliveryStructure pd = new PublicationDeliveryStructure()
                 .withVersion("ntx:1.1")
-                // SYNTHESIZED, so the carrier holds no lexical and re-emits canonically.
+                // Synthesized, so the carrier holds no lexical and re-emits canonically.
                 .withPublicationTimestamp(XmlDateTime.from(LocalDateTime.of(2026, 1, 1, 0, 0, 0)))
                 .withParticipantRef("PyNeTExConv")
                 .withDataObjects(new PublicationDeliveryStructure.DataObjects()

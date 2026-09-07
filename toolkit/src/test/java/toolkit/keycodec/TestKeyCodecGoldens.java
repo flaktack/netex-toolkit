@@ -1,18 +1,14 @@
 package toolkit.keycodec;
 
-// THE ON-DISK KEY SHAPE, AS BYTES.
+// The on-disk key shape, as bytes.
 //
 // NulKeyCodec is the only thing that decides what a stored key IS: `id NUL version NUL [classIdx]`,
-// classIdx a u16 LE trailer, and the u64 LE full key that splits into (classIdx, local). Every
-// other test in this suite reaches those bytes through a store, so all of them would keep passing
-// after a change that altered the encoding CONSISTENTLY on both sides — write and read stay in
-// agreement and every assertion about lookups, edges and prefixes still holds. What such a change
-// breaks is not this process but the next one: an existing database, and every other
-// reader, which does not go through this class at all.
+// classIdx a u16 LE trailer, and the u64 LE full key that splits into (classIdx, local). A change
+// that altered the encoding CONSISTENTLY on both sides breaks no test that reaches those bytes
+// through a store; what it breaks is an existing database, and every other reader.
 //
-// So the vectors below are written out by hand from the key-codec specification rather than
-// derived from the code. They are the only assertions in the suite that a self-consistent
-// re-encoding cannot satisfy.
+// The vectors below are therefore written out by hand from the key-codec specification, never
+// derived from the code.
 //
 // The version-less arm is not cosmetic: `version = null` and `version = "any"` must both encode to
 // EMPTY between the two NULs, because that is the id-only key an unversioned *Ref resolves against

@@ -25,13 +25,13 @@ import java.util.TreeMap;
 /// into edges, the bind-time blob repair that follows a tier-2/3 match, and the one-shot
 /// marker-gated sweep over already-resolved referrers.
 ///
-/// The four measurement knobs ([#TIER_MEMO], [#TIER_NULL], [#BLOB_SWEEP], [#SWEEP_SCAN]) each have
-/// to change nothing but the wall clock, and two of them (`-Dtoolkit.resolve.tierMemo.verify`,
+/// The four measurement knobs ([#TIER_MEMO], [#TIER_NULL], [#BLOB_SWEEP], [#SWEEP_SCAN]) must
+/// change nothing but the wall clock; two of them (`-Dtoolkit.resolve.tierMemo.verify`,
 /// `-Dtoolkit.blobSweep.verify`) run the fast and slow paths together and fail on the first
 /// disagreement. Run those after touching anything here.
 ///
-/// The transaction is NOT ours: `AbstractLmdbStore.resolve()` opens it, calls [#resolve] and
-/// commits. Nothing here opens or commits a transaction.
+/// The transaction belongs to the caller: `AbstractLmdbStore.resolve()` opens it, calls [#resolve]
+/// and commits. Nothing here opens or commits a transaction.
 ///
 /// [BlobRepair] arrives from the store because its patcher's counters are cumulative across both
 /// passes.
@@ -45,9 +45,6 @@ final class ReferenceResolver {
         this.blobRepair = blobRepair;
     }
 
-    /// The three-tier id-index match wiring edges, PLUS the bind-time blob class/version repair on
-    /// tier-2/3 matches, PLUS the one-shot marker-gated blob sweep.
-    ///
     /// Rows are processed in cursor order — (unsigned referrer full_key, byte-ordered
     /// target key) — grouped by referrer so each repaired blob is rewritten once.
     ///
@@ -150,15 +147,12 @@ final class ReferenceResolver {
     /// `-Dtoolkit.resolve.tierMemo=false` reverts [#resolve]'s tier loop to one
     /// [#tierResolveDetailed] call per unresolved ROW. **Default true.**
     ///
-    /// Nothing inside `resolve()`'s write transaction writes `_id_idx` — the only writers are on
-    /// the insert path — so the tier probe is a pure function of the encoded target key for the
-    /// whole loop, and one answer serves every row sharing a key.
+    /// Valid only while nothing inside `resolve()`'s write transaction writes `_id_idx` — the only
+    /// writers are on the insert path — which makes the tier probe a pure function of the encoded
+    /// target key for the whole loop, so one answer serves every row sharing a key.
     ///
     /// Keyed by intern id, not key bytes. A producer that cannot supply one passes `-1` and falls
     /// through to a direct probe.
-    ///
-    /// It declines to allocate when it cannot pay: redundancy is counted from a bitset before the
-    /// arrays exist, so a corpus below 2 rows per distinct key runs as before.
     private static final boolean TIER_MEMO = Conf.on(Conf.RESOLVE_TIER_MEMO);
 
     /// `-Dtoolkit.resolve.tierMemo.verify=true` re-probes every memoised row and fails loudly on
@@ -194,8 +188,8 @@ final class ReferenceResolver {
             this.distinctKeys = distinctKeys;
         }
 
-        /// Sizes the memo and counts the loop's DISTINCT keys exactly. Both happen here, before
-        /// the timed loop and in EVERY arm, so memo-on and memo-off differ only inside the loop.
+        /// Sizes the memo and counts the loop's distinct keys exactly; both run before the timed
+        /// loop and in every arm, so memo-on and memo-off differ only inside the loop.
         static TierMemo forRows(AbstractLmdbStore store, List<UnresolvedRow> rows) {
             int n = store.internedUnresolvedKeyCount();
             long distinct = -1;
@@ -385,8 +379,7 @@ final class ReferenceResolver {
                     }
                 }
                 if (dirty && scanClean) {
-                    // The one direction that matters: the scan may over-report ("maybe dirty" on a
-                    // clean object costs a decode), never under-report.
+                    // The scan may over-report, never under-report.
                     throw new IllegalStateException("blob-sweep scan/unmarshal disagree on full_key "
                             + Long.toUnsignedString(referrerFk) + " (" + obj.getClass().getSimpleName()
                             + "): the fragment scan cleared an object the unmarshal repaired");
@@ -409,14 +402,13 @@ final class ReferenceResolver {
     /// `-Dtoolkit.resolve.blobSweep=false` — skip the one-shot sweep entirely and set its
     /// marker as if it had run. **Default true.**
     ///
-    /// After a pure-INSERT load the sweep finds nothing: it repairs a reference only when (a) the
-    /// exact id-index key built from its declared class+version misses AND (b) an id-prefix match
-    /// exists, and on the insert path (a) implies an unresolved row that the tier loop has already
-    /// processed in the SAME txn.
+    /// After a pure-insert load the sweep finds nothing: every reference it could repair leaves an
+    /// unresolved row that the tier loop has already processed in the same txn.
     ///
-    /// NOT SOUND AFTER A SKIPPING CLONE: [ObjectWriter#cloneFrom] copies edge and unresolved rows
-    /// rather than re-deriving them, so a clone that SKIPS a target drops that target's edge
-    /// without leaving an unresolved row, leaving a reference only the sweep can repair.
+    /// Skipping it is not sound after a skipping clone: [ObjectWriter#cloneFrom] copies edge and
+    /// unresolved rows rather than re-deriving them, so a clone that skips a target drops that
+    /// target's edge without leaving an unresolved row, leaving a reference only the sweep can
+    /// repair.
     ///
     /// The marker is persisted, so a skip is never retried by a later stage.
     private static final boolean BLOB_SWEEP =
@@ -430,7 +422,7 @@ final class ReferenceResolver {
     /// loudly on the first disagreement. Strictly slower than either path alone, so off by default.
     private static final boolean SWEEP_VERIFY = Conf.on(Conf.BLOB_SWEEP_VERIFY);
 
-    /// `nameOfRefClass` is the one adapted attribute of the three (see the model).
+    /// `nameOfRefClass` is the one adapted attribute of the three.
     private static final jakarta.xml.bind.annotation.adapters.CollapsedStringAdapter NAME_ADAPTER =
             new jakarta.xml.bind.annotation.adapters.CollapsedStringAdapter();
 
@@ -440,10 +432,10 @@ final class ReferenceResolver {
     /// fragment's reference attributes ([RefPatcher#scan]) and the id index alone — no
     /// unmarshal, no reflection walk.
     ///
-    /// Exact, because the sweep changes a reference only when BOTH (a) the exact id-index key
-    /// built from its declared class+version misses and (b) the first id-prefix match's
-    /// class/version differ from the declared ones. Both inputs are the reference's own
-    /// `ref`/`version`/`nameOfRefClass`, which the fragment carries verbatim.
+    /// The sweep changes a reference only when both (a) the exact id-index key built from its
+    /// declared class+version misses and (b) the first id-prefix match's class/version differ from
+    /// the declared ones. Both inputs are the reference's own `ref`/`version`/`nameOfRefClass`,
+    /// which the fragment carries verbatim.
     ///
     /// What the fragment does not spell out is the declared class of a reference whose
     /// `nameOfRefClass` is absent or unregistered, since it is then derived from the reference's
@@ -451,9 +443,8 @@ final class ReferenceResolver {
     /// taken only when all of them agree. Anything else — no such element, candidates disagree, a
     /// fragment that will not parse — returns "maybe" and is decided by the unmarshal.
     ///
-    /// Conservatism runs ONE WAY: [RefPatcher#scan] reports a superset of the references JAXB
-    /// binds and every open question answers "maybe", so a wrong answer costs a decode and a missed
-    /// repair is unreachable.
+    /// [RefPatcher#scan] reports a superset of the references JAXB binds and every open question
+    /// answers "maybe", so the predicate over-reports and never under-reports.
     private boolean mayNeedBlobRepair(AbstractLmdbStore.LmdbTxn t, Cursor<byte[]> icur, long referrerFk) {
         int classIdx = NulKeyCodec.fullKeyClassIdx(referrerFk);
         Class<?> referrerClass = store.idxToClass.get(classIdx);
@@ -476,7 +467,7 @@ final class ReferenceResolver {
     /// One reference of [#mayNeedBlobRepair]; `r` = {ref, version, nameOfRefClass,
     /// elementLocalName}.
     ///
-    /// The id-prefix test runs FIRST: it needs no target class, so a reference whose stored
+    /// The id-prefix test runs first: it needs no target class, so a reference whose stored
     /// class+version already agree with its target is settled without ever naming the declared
     /// class. Only when the values differ does the exact-key guard decide.
     private boolean mayNeedRefRepair(AbstractLmdbStore.LmdbTxn t, Cursor<byte[]> icur, Class<?> referrerClass,

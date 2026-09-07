@@ -1,29 +1,22 @@
 package noi.netex.time;
 
-// The blind spot underneath the instrument.
-//
-// XmlTime / XmlDateTime / XmlDuration answer an unparseable lexical with an UNPARSED CARRIER: the
+// XmlTime / XmlDateTime / XmlDuration answer an unparseable lexical with an unparsed carrier: the
 // raw text is kept, a re-marshal is byte-exact, and toLocalTime()/toLocalDateTime()/toDuration()
-// return null. Storage and export are therefore unharmed — and that is why it was silent. From
-// JAXB's point of view the adapter SUCCEEDED and returned an object, so no ValidationEvent is
+// return null. Storage and export are therefore unharmed, which is why the loss is silent: from
+// JAXB's point of view the adapter succeeded and returned an object, so no ValidationEvent is
 // raised and toolkit.codec.BindEvents counts zero over a feed in which every departure time is
-// junk.
+// junk. noi.netex.time.UnparsedTally is the count.
 //
-// noi.netex.time.UnparsedTally is the count. These tests pin the three claims that make it worth
-// having:
-//   1. an unparseable value really does produce an unparsed carrier (behaviour UNCHANGED);
-//   2. that carrier is counted, per kind, with a sample of the raw text;
-//   3. a VALID value is NOT counted — and "valid" here includes the corpus's hour-24..47 times,
-//      the extended xs:duration forms and the offset-bearing values the CARRIERS EXIST FOR. A tally
-//      that fired on those would make -Dtoolkit.strict.unparsedTime=true refuse every feed.
+// A valid value is never counted, and "valid" includes the corpus's hour-24..47 times, the extended
+// xs:duration forms and the offset-bearing values the carriers exist for. A tally that fired on
+// those would make -Dtoolkit.strict.unparsedTime=true refuse every feed.
 //
-// WHY DELTAS AND NOT ABSOLUTE COUNTS. The tally is per JVM, like BindEvents', and surefire hosts
-// many files in ONE JVM. Every assertion below reads total() before and after and asserts on the
-// DIFFERENCE, which is also the only shape that stays true when this file is run on its own.
+// The tally is per JVM, like BindEvents', and surefire hosts many files in one JVM, so every
+// assertion below reads total() before and after and asserts on the difference.
 //
-// LEXICAL FORMS. The valid ones are real corpus values. The junk ones are shaped after what a feed
-// gets wrong: the literal "None" some exporters write for a missing value, an hour-24 value with a
-// bad minute field, and a date-only lexical in an xs:dateTime field.
+// The junk lexicals are shaped after what a feed gets wrong: the literal "None" some exporters
+// write for a missing value, an hour-24 value with a bad minute field, and a date-only lexical in
+// an xs:dateTime field.
 
 import noi.netex.model.ServiceJourney;
 import org.junit.jupiter.api.Test;
@@ -36,7 +29,7 @@ public class TestUnparsedTime {
     // ---------------------------------------------------------------- fixtures
 
     /// One journey carrying a junk value in each of the three bindings, in the elements the corpus
-    /// actually puts them in. It must LOAD — nothing here is a rejection — and each junk value must
+    /// actually puts them in. It must load — nothing here is a rejection — and each junk value must
     /// come back as a carrier holding its source text.
     public static final String JUNK = """
         <TimetableFrame id="tf" version="1">
@@ -118,8 +111,8 @@ public class TestUnparsedTime {
         long duration = UnparsedTally.count(UnparsedTally.Kind.DURATION);
 
         Check.that(XmlTime.parse("24:71:00").isUnparsed(), "a minute over 59 does not parse");
-        // Strict arms, deliberately: a date-only lexical in an xs:dateTime field is NOT promoted,
-        // and a dateTime in an xs:date field is not truncated. Both land in the tally, apart.
+        // Strict arms: a date-only lexical in an xs:dateTime field is not promoted, and a dateTime
+        // in an xs:date field is not truncated. Both land in the tally, apart.
         Check.that(XmlDateTime.parse("2026-07-19").isUnparsed(), "a date in an xs:dateTime field");
         Check.that(XmlDateTime.parseDate("2026-07-19T00:00:00").isUnparsed(),
                 "and a dateTime in an xs:date field");
@@ -134,7 +127,7 @@ public class TestUnparsedTime {
                 + UnparsedTally.summary());
     }
 
-    /// Absent and blank values are NOT unparsed values. Every adapter returns null for them, and a
+    /// Absent and blank values are not unparsed values. Every adapter returns null for them, and a
     /// feed that simply omits an optional element must not be reported as a parse failure.
     @Test
     void testAbsentAndBlankValuesAreNotCounted() {
@@ -152,10 +145,9 @@ public class TestUnparsedTime {
 
     // ---------------------------------------------------------------- 2. valid values are silent
 
-    /// Everything below is a real corpus lexical that the old
-    /// bindings dropped and these carriers exist to keep: hour 24..47, the end-of-day 24:00:00, an
-    /// offset-bearing time, the PnYnMnDTnHnMnS duration and its negative, and an offset-bearing
-    /// xs:dateTime. They parse, so they must not touch the tally.
+    /// Every lexical below is a real corpus value the carriers exist to keep: hour 24..47, the
+    /// end-of-day 24:00:00, an offset-bearing time, the PnYnMnDTnHnMnS duration and its negative,
+    /// and an offset-bearing xs:dateTime. They parse, so they must not touch the tally.
     @Test
     void testValidCorpusValuesAreNeverCounted() {
         long before = UnparsedTally.total();
@@ -182,12 +174,11 @@ public class TestUnparsedTime {
     // ---------------------------------------------------------------- 3. through the real loader
 
     /// End to end, through the loader that reads production feeds: the adapters are what JAXB calls,
-    /// so this is the path on which the silence happened. The journey still loads, each junk value
-    /// still comes back as its raw text, and the tally now says so.
+    /// so this is the path on which the loss is silent.
     ///
     /// The count is asserted as "at least one per kind" rather than exactly one: a fragment is
-    /// decoded once by the loader and again by resolve()'s reference repair, so the number of times a
-    /// given lexeme is re-parsed is a property of the store path, not of this defect.
+    /// decoded once by the loader and again by resolve()'s reference repair, so how many times a
+    /// given lexeme is re-parsed is a property of the store path.
     @Test
     void testUnparsedValuesAreCountedWhenAFeedIsLoaded(TestStore db) throws Exception {
         long time = UnparsedTally.count(UnparsedTally.Kind.TIME);

@@ -1,33 +1,14 @@
 package toolkit.load;
 
-// Regression test for the loader's FrameDefaults denormalisation.
+// Regression test for the srsName arm of the loader's FrameDefaults denormalisation, implemented in
+// toolkit/load/CopyingCapture (normalisation N7) on top of NetexLoader's tracking of the frame's
+// current location system.
 //
-// Gates the srsName rule as implemented in toolkit/load/CopyingCapture (normalisation N7),
-// on top of NetexLoader's tracking of the frame's current location system:
-//
-//   While a frame declares a location system:
-//     - an element named in srs_name.txt (Point/LineString/pos/…) that declares no srsName gets
-//       the enclosing Location's srsName if it has one, otherwise the frame's;
-//     - a <Location> that declares no srsName gets the frame's, and it then stops contributing
-//       an inherited value to its children.
-//
-// The four properties covered here are the four ways this can go wrong:
-//   1. stamped   — a Location AND an srs_name.txt element (gml:LineString, gml:posList) with no
-//                  srsName get the frame's DefaultLocationSystem, at any nesting depth, in the
-//                  STORED FRAGMENT as well as on the bound bean;
-//   2. preserved — an element that already declares srsName is never overwritten, and an
-//                  srs_name.txt element INSIDE a Location that declares one inherits the
-//                  Location's value rather than the frame
-//                  default — while a gml:posList inside a gml:LineString that declares one does
-//                  NOT inherit it (only Location is special-cased);
-//   3. judged    — the frame DEFAULT is stamped only when it resolves to a CRS, because it is the
-//                  one value that multiplies across a whole frame: three of the four Italian feeds
-//                  that declare DefaultLocationSystem declare the TIMEZONE "Europe/Rome" there.
-//                  A non-CRS default is dropped and the geometries under it keep no srsName, which
-//                  Projection reads as WGS84. An srsName the SOURCE declares on the element is NOT
-//                  judged — "ITA", from 48 Emilia-Romagna/Lombardia feeds, is stored as-is;
-//   4. scoped    — the default dies with its frame, and a frame that declares none stamps
-//                  nothing (the 298-of-302 gz feeds / 14-of-14 zips case).
+// While a frame declares a location system:
+//   - an element named in srs_name.txt (Point/LineString/pos/…) that declares no srsName gets the
+//     enclosing Location's srsName if it has one, otherwise the frame's;
+//   - a <Location> that declares no srsName gets the frame's, and it then stops contributing an
+//     inherited value to its children.
 
 import noi.netex.model.ScheduledStopPoint;
 import noi.netex.model.ServiceLink;
@@ -126,7 +107,6 @@ public class TestLoaderSrsName {
         Check.equals("EPSG:4326", sl.getLineString().getPosList().getSrsName(),
                 "nested srs_name.txt element (gml:posList) gets it too");
 
-        // The bean is not the whole story: the STORED fragment is what every consumer decodes.
         Check.that(fragmentOf(db, ScheduledStopPoint.class).contains("<Location srsName=\"EPSG:4326\""),
                 "stored ScheduledStopPoint fragment carries the stamped Location srsName");
         String link = fragmentOf(db, ServiceLink.class);
@@ -142,15 +122,13 @@ public class TestLoaderSrsName {
         ScheduledStopPoint ssp = Gen.byId(db, ScheduledStopPoint.class).get("ssp1");
         Check.equals("EPSG:32632", ssp.getLocation().getSrsName(),
                 "a Location that declares srsName keeps it");
-        // an srsName-bearing element inside such a Location inherits
-        // the LOCATION's srsName, not the frame default.
         Check.equals("EPSG:32632", ssp.getLocation().getPos().getSrsName(),
                 "gml:pos inside it inherits the Location's srsName, not the frame default");
 
         ServiceLink sl = Gen.byId(db, ServiceLink.class).get("sl1");
         Check.equals("EPSG:25832", sl.getLineString().getSrsName(),
                 "a gml:LineString that declares srsName keeps it");
-        // Only Location is special-cased; a plain srs_name.txt parent does NOT propagate.
+        // Only Location is special-cased; a plain srs_name.txt parent does not propagate.
         Check.equals("EPSG:4326", sl.getLineString().getPosList().getSrsName(),
                 "gml:posList inside it still takes the frame default");
         Check.that(!fragmentOf(db, ScheduledStopPoint.class).contains("EPSG:4326"),
@@ -159,21 +137,14 @@ public class TestLoaderSrsName {
 
     @Test
     void testFrameDefaultThatIsNotACrsIsNotStamped(TestStore db) throws Exception {
-        // Three of the four Italian gz feeds that declare DefaultLocationSystem declare a
-        // TIMEZONE there, copied from the DefaultLocale/TimeZone two lines above it.
+        // Three of the four Italian gz feeds that declare DefaultLocationSystem declare a timezone
+        // there, copied from the DefaultLocale/TimeZone two lines above it. The frame default is
+        // stamped only when it resolves to a CRS, because it is the one value that multiplies
+        // across a whole frame; a non-CRS default is dropped and the geometries under it keep no
+        // srsName, which Projection's resolution rule reads as WGS84.
         //
-        // THIS TEST USED TO ASSERT THE OPPOSITE — that the string was stamped verbatim and the
-        // reprojection took its CRSError fallback later. It was changed deliberately: stamping is
-        // a denormalisation, so one garbage frame default became every geometry under the frame.
-        // On the 2026-09-02 pipeline run that was 56,875 geometries per store, each one logged as
-        // "transformed through a FALLBACK WGS84 source transform ... coordinates are wrong unless
-        // they were WGS84 already" and each one counted as possibly-wrong output that
-        // -Dtoolkit.strict.droppedOutput=true would refuse the run over. Not stamping leaves them
-        // with no srsName, which Projection's resolution rule already reads as WGS84 — the same
-        // coordinates, without the false alarm.
-        //
-        // An srsName the SOURCE declares on an element is still stamped verbatim and still takes
-        // the fallback; only the frame default is judged. See testDeclaredNonCrsSrsNameSurvives.
+        // An srsName the source declares on an element is stamped verbatim whatever it says; only
+        // the frame default is judged. See testDeclaredNonCrsSrsNameSurvives.
         db.loadNetex(withDefaults("Europe/Rome"));
 
         ScheduledStopPoint ssp = Gen.byId(db, ScheduledStopPoint.class).get("ssp1");
@@ -194,6 +165,8 @@ public class TestLoaderSrsName {
                 "a source-declared srsName is kept whatever it says");
     }
 
+    /// The majority shape: 298 of the 302 gz feeds and 14 of the 14 zips declare no
+    /// DefaultLocationSystem.
     @Test
     void testWithoutFrameDefaultsNothingIsStamped(TestStore db) throws Exception {
         db.loadNetex(withDefaults(null));

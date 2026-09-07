@@ -1,25 +1,17 @@
 package toolkit.transform.epip;
 
-// The defect is JAXB-specific: it is created by the model's defaulted getters.
-//
-// EPIP calendar, SYNTHESIZED branch: a DayType whose only assignment carries a bare <Date> has no
-// UicOperatingPeriod, so the calendar pass synthesizes one and derives the assignment by
-// projecting the DayType onto a DayTypeAssignment. NetexUtils.project copies the source's GETTER
-// values into the target's FIELDS — and JAXB's EntityInVersionStructure getters DEFAULT:
-// getModification() returns NEW,
-// getStatus_BasicModificationDetailsGroup() ACTIVE and getPublication() PUBLIC while the
-// underlying fields are null. The projected DayTypeAssignment therefore marshalled
+// EPIP calendar, synthesized branch: a DayType whose only assignment carries a bare <Date> has no
+// UicOperatingPeriod, so the calendar pass synthesizes one and derives the assignment by projecting
+// the DayType onto a DayTypeAssignment. NetexUtils.project copies the source's getter values into
+// the target's fields, and JAXB's EntityInVersionStructure getters default: getModification()
+// returns NEW, getStatus_BasicModificationDetailsGroup() ACTIVE and getPublication() PUBLIC while
+// the underlying fields are null. An attribute equal to its XSD default does not reach the wire, so
+// the projected DayTypeAssignment must carry none of
 //   modification="new" status="active" publication="public"
-// which must NEVER be emitted: an attribute equal to its XSD default does not reach the wire.
 //
-// The rule is enforced at MARSHAL time, not by a call-site shim, because a call-site fix cannot
-// reach the far larger population of the same defect — every projected object, and every default
-// an input file spells out explicitly. This file asserts the observable; the dedicated test for
-// the rule itself is TestSchemaDefaultsMarshal.
-//
-// NEUTER PROOF: comment out the `marshaller.setListener(SchemaDefaults.LISTENER)` line in
-// toolkit/codec/FragmentCodec.marshalFragment, rebuild, and BOTH methods below fail with exactly
-// those three attributes present on the DayTypeAssignment.
+// What enforces that is `marshaller.setListener(SchemaDefaults.LISTENER)` in
+// toolkit.codec.FragmentCodec.marshalFragment. This file asserts the observable; the rule itself is
+// TestSchemaDefaultsMarshal's subject.
 
 import noi.netex.model.DayTypeAssignment;
 import noi.netex.model.UicOperatingPeriod;
@@ -74,7 +66,7 @@ public class TestEpipCalendarSchemaDefaults {
         }
         Check.that(resDta != null, "the synthesized DayTypeAssignment is emitted");
 
-        // The three EntityInVersionStructure fields must stay NULL. Their getters DEFAULT
+        // The three EntityInVersionStructure fields must stay null. Their getters default
         // (NEW/ACTIVE/PUBLIC) whether or not the field is set, so the marshalled form — which is
         // what reaches the export — is the observable.
         String xml = Xml.toXml(resDta);
@@ -83,17 +75,14 @@ public class TestEpipCalendarSchemaDefaults {
         Check.that(!xml.contains("publication="), "no publication attribute: " + xml);
     }
 
-    /// The synthesized PAIR (assignment + operating period), asserted as XML — the exact shape
-    /// the wire carries for them (verified against the production
-    /// data/netex-epip-merged.zip shared-05 entry for all 18 Swiss holidays).
+    /// The synthesized pair (assignment + operating period), asserted as XML — the exact shape the
+    /// wire carries for them.
     ///
-    /// The group's third member — the re-emitted source DayType — is asserted in
-    /// `TestSchemaDefaultsMarshal`, not here. It used to be unassertable: Java marshalled
-    /// it with an EMPTY `<DaysOfWeek></DaysOfWeek>` that must never be emitted, because
-    /// `EpipCalendar`'s `getDaysOfWeek()` read CREATES-ON-GET the JAXB list on the
-    /// bean it then re-inserts (the export carries these where a schema-aware writer emits none —
-    /// nearly all from the journey generator, a few in PropertyOfDay
-    /// from `EpipCalendar`). It is closed at marshal time.</p>
+    /// The group's third member, the re-emitted source DayType, is asserted in
+    /// `TestSchemaDefaultsMarshal` rather than here. `EpipCalendar`'s `getDaysOfWeek()` read
+    /// creates the JAXB list on the bean it then re-inserts, so that DayType would otherwise
+    /// marshal an empty `<DaysOfWeek></DaysOfWeek>`, which must never be emitted; the marshal-time
+    /// rule drops it.
     @Test
     void testSynthesizedPairMatchesExpectedWire(TestStore db) throws Exception {
         db.loadNetex(INPUT);

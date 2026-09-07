@@ -19,7 +19,7 @@ import java.util.Set;
 /// source parse events, not from a post-bind re-marshal.
 ///
 /// Attribute denormalisation lives here (PROV-CAP: denorm-depth) because this is the only
-/// component that sees every event of the document. Attributes are injected into the READER, so
+/// component that sees every event of the document. Attributes are injected into the reader, so
 /// the bound bean and the captured fragment agree by construction.
 ///
 /// ## Normalization set — the only ways a fragment may differ from the source bytes
@@ -42,13 +42,12 @@ import java.util.Set;
 ///    `DefaultLocationSystem`, `srsName` is synthesized
 ///    onto the `srs_name.txt` set (matched on local name, any namespace) and onto every `Location`
 ///    without one. Inside a `Location` that declares `srsName`, that value wins over the frame
-///    default. An srsName the SOURCE declares is stamped verbatim — feeds put non-CRS strings
-///    there, and this is not the layer that judges them. The frame DEFAULT is different, because
-///    it is the one value that gets multiplied across a whole frame: the loader only hands one
-///    down when it resolves to a CRS (NetexLoader.ParseIterator#locationSystemOf), so a garbage
-///    default arrives here as null and the geometries under it keep no srsName at all.
+///    default. An srsName the source declares is stamped verbatim; feeds put non-CRS strings there.
+///    The loader hands a frame default down only when it resolves to a CRS
+///    (NetexLoader.ParseIterator#locationSystemOf), so a garbage default arrives here as null and
+///    the geometries under it keep no srsName at all.
 ///
-/// Comments and PIs copied verbatim. One instance per stream; the loader itself is shareable.
+/// Comments and PIs copied verbatim. One instance per stream.
 final class CopyingCapture extends StreamReaderDelegate {
 
     private static final String ID = "id";
@@ -61,8 +60,7 @@ final class CopyingCapture extends StreamReaderDelegate {
 
     /// GML geometry classes are in the withId set because they carry `gml:id`, but arm 1 writes a
     /// no-namespace `id`, which binds to nothing there and would be a Java-only attribute in the
-    /// fragment. So: derive and stack the id for descendants, do not inject it. The GML namespace
-    /// is exactly the set whose id attribute is namespaced.
+    /// fragment. So: derive and stack the id for descendants, do not inject it.
     private static final String GML_NS = "http://www.opengis.net/gml/3.2";
 
     /// Maximum attributes this class can synthesize onto one start tag (the arms of N5 + N7).
@@ -82,13 +80,13 @@ final class CopyingCapture extends StreamReaderDelegate {
     private final ArrayDeque<String> lastVersionStack = new ArrayDeque<>();
 
     // Pushed by the loader at every FrameDefaults end and frame end. All null for a feed that
-    // declares no FrameDefaults, so the three arms cost one null check.
+    // declares no FrameDefaults.
     private String dataSourceRef;
     private String responsibilitySetRef;
     private String locationSystem;
     private String locationSrsName;
 
-    // Synthesized onto the CURRENT start element only: injectCount is 0 on every other event,
+    // Synthesized onto the current start element only: injectCount is 0 on every other event,
     // which is what makes the attribute accessors below inert.
     private final String[] injectName = new String[MAX_INJECT];
     private final String[] injectValue = new String[MAX_INJECT];
@@ -110,7 +108,7 @@ final class CopyingCapture extends StreamReaderDelegate {
         this.locationSystem = locationSystem;
     }
 
-    /// Starts at the CURRENT event, which must be the fragment root START_ELEMENT. Order on the
+    /// Starts at the current event, which must be the fragment root START_ELEMENT. Order on the
     /// root tag: source attributes, hoisted bindings, then synthesized attributes — the same path
     /// every nested element takes, so the root is not a special case.
     void beginCapture(Map<String, String> inScopeNs) throws XMLStreamException {
@@ -182,7 +180,7 @@ final class CopyingCapture extends StreamReaderDelegate {
         return ev;
     }
 
-    /// Runs for EVERY element of the document, at any depth.
+    /// Runs for every element of the document, at any depth.
     private void startElement() {
         final String ln = raw.getLocalName();
         final boolean withId = sets.withId.contains(ln);
@@ -255,7 +253,7 @@ final class CopyingCapture extends StreamReaderDelegate {
     }
 
     /// One pass, no-namespace attributes only. `getAttributeValue(null, name)` is not usable here:
-    /// per the StAX contract a null URI matches ANY namespace, so it finds `gml:id` for `id`.
+    /// per the StAX contract a null URI matches any namespace, so it finds `gml:id` for `id`.
     private void scanAttrs(boolean withId, boolean withVersion, boolean dmo, boolean srs) {
         ownId = ownVersion = ownDataSourceRef = ownResponsibilitySetRef = ownSrsName = null;
         for (int i = 0, n = raw.getAttributeCount(); i < n; i++) {
@@ -293,8 +291,8 @@ final class CopyingCapture extends StreamReaderDelegate {
                 w.copyEventFromReader(raw, true);
                 if (--depth == 0) copying = false;
             }
-            // Document ends with a capture still open. Deliberately a NO-OP: clearing `copying`
-            // here is what finishCapture() reads as SUCCESS, so it would store a partial fragment
+            // Document ends with a capture still open. Deliberately a no-op: clearing `copying`
+            // here is what finishCapture() reads as success, so it would store a partial fragment
             // as a whole one.
             case XMLStreamConstants.END_DOCUMENT -> { }
             default -> w.copyEventFromReader(raw, true);

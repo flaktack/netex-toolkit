@@ -1,17 +1,13 @@
 package toolkit.load;
 
-// The loader's INPUT contract. Both cases are the same failure shape: an input the loader cannot
+// The loader's input contract. Both cases are the same failure shape: an input the loader cannot
 // actually read producing a store that reports itself fine.
 //
-//   1. zip members: NetexLoader's own zip arm accepted `.xml` only and opened members raw, while
-//      ZipLoad -- the other loader in the same package -- accepts `.xml` and `.xml.gz`. A zip of
-//      gzipped members therefore skipped every entry, logged one warning, and returned 0, and the
-//      loader driver does not check the count. Now the two arms share ZipLoad.wrap and the same
-//      two-suffix test, and an unreadable zip REFUSES.
+//   1. zip members: NetexLoader's zip arm and ZipLoad share ZipLoad.wrap and the same two-suffix
+//      test, so both accept `.xml` and `.xml.gz`, and a zip with no loadable member refuses rather
+//      than returning 0 — no caller checks the count.
 //
-//   2. truncated input: it must never load quietly. The parse fails, which is the contract this
-//      pins; CopyingCapture's END_DOCUMENT guard is the second line of that defence, for the
-//      case where a reader hands the capture an unterminated document instead of refusing it.
+//   2. truncated input: the parse fails rather than loading part of the feed.
 
 import noi.netex.model.ScheduledStopPoint;
 import org.junit.jupiter.api.Test;
@@ -97,12 +93,9 @@ public class TestLoaderInputContract {
     }
 
     /// Truncated input must never load quietly. The reader refuses it, which is what keeps
-    /// CopyingCapture's END_DOCUMENT arm off the live path — see the comment there.
-    ///
-    /// The refusal must also SAY WHAT FAILED. A corrupt RAP download once surfaced as a bare
-    /// "parse failed" plus a Woodstox line reading `{unknown-source}`, several frames below the
-    /// only driver that knew the file name — so identifying the feed meant reading the pipeline's
-    /// Makefile. The stream label and the parser's Location were both already in hand.
+    /// CopyingCapture's END_DOCUMENT arm off the live path, and the refusal names the stream label
+    /// and the parser's Location: the feed is otherwise unidentifiable from the message, several
+    /// frames below the only driver that knows the file name.
     @Test
     void testTruncatedFeedFailsRatherThanLoadingPartially(TestStore db) {
         String head = TestStore.SKELETON.replace("__FRAMES__", FRAMES);

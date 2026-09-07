@@ -21,7 +21,7 @@ public final class CloneSupport {
 
     private CloneSupport() {}
 
-    /// The SOURCE full_keys of every object whose (id, version, class) key already exists in the
+    /// The source full_keys of every object whose (id, version, class) key already exists in the
     /// target's id index (raw probe, no deserialisation).
     public static LongOpenHashSet duplicateIdFullKeys(Store source, Txn sourceTxn, Store target, Txn targetTxn) {
         LongOpenHashSet dups = new LongOpenHashSet();
@@ -31,24 +31,24 @@ public final class CloneSupport {
         return dups;
     }
 
-    /// Referrers of a skipped row, outside the skip and re-inserted sets — the RESOLVED half only.
+    /// Referrers of a skipped row, outside the skip and re-inserted sets — the resolved half only.
     public static LongOpenHashSet referrerFullKeys(Store source, Txn sourceTxn,
                                                    LongOpenHashSet skip, LongOpenHashSet reinserted) {
         return referrerFullKeys(source, sourceTxn, skip, reinserted, Set.of());
     }
 
-    /// BOTH halves of the referrer scan — the full_keys of every object that must be re-inserted
+    /// Both halves of the referrer scan — the full_keys of every object that must be re-inserted
     /// rather than left as raw-cloned bytes:
     ///
-    /// - RESOLVED referrers of `skip` (the rows being skipped by the clone): the clone
-    ///    drops an index row whose referenced side was skipped, so the edge has to be
-    ///    re-extracted onto the new full_key — one pass over the outward edge index;
-    /// - UNRESOLVED referrers of `ids` (the ids being qualified): their stored ref
-    ///    STRING still names the old id; left alone, the final resolve() would silently bind
-    ///    them to an EARLIER source's object. One [Store#iterUnresolved] pass; a row
-    ///    matches when its encoded target's id — the value bytes before the first NUL of the
-    ///    `id NUL version NUL class2` layout; the version is deliberately ignored (it is
-    ///    why the ref did not resolve) — equals a member of `ids` as raw UTF-8 bytes.
+    /// - resolved referrers of `skip` (the rows being skipped by the clone): the clone drops an
+    ///    index row whose referenced side was skipped, so the edge has to be re-extracted onto the
+    ///    new full_key — one pass over the outward edge index;
+    /// - unresolved referrers of `ids` (the ids being qualified): their stored ref string still
+    ///    names the old id; left alone, the final resolve() would silently bind them to an earlier
+    ///    source's object. One [Store#iterUnresolved] pass; a row matches when its encoded target's
+    ///    id — the value bytes before the first NUL of the `id NUL version NUL class2` layout; the
+    ///    version is ignored, it being why the ref did not resolve — equals a member of `ids` as
+    ///    raw UTF-8 bytes.
     ///
     /// The union minus `skip` (and, when non-null, `reinserted`) is returned.
     public static LongOpenHashSet referrerFullKeys(Store source, Txn sourceTxn,
@@ -77,7 +77,7 @@ public final class CloneSupport {
     }
 
     /// The patch set's objects in sorted order (byte-lexicographic over the stored little-endian
-    /// keys); missing rows are skipped. LAZY: the keys are sorted up front but each object is
+    /// keys); missing rows are skipped. Lazy: the keys are sorted up front but each object is
     /// decoded only when the iterator advances. The source txn must stay open while it is consumed.
     public static Iterator<Object> loadPatchObjects(Store source, Txn sourceTxn, LongOpenHashSet patch) {
         LongArrayList sorted = new LongArrayList(patch);

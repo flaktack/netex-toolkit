@@ -1,23 +1,9 @@
 package toolkit.store;
 
-// Regression test for the blob-repair sweep.
-//
-// WHAT IT GATES. The repair sweep would otherwise decode EVERY referrer that owns a resolved
-// outward edge, purely to read each reference's (ref, version, nameOfRefClass) triple. The
-// decode-free scan answers the same question from the stored fragment's own attributes — the read
-// half of what RefPatcher already does — and unmarshals only the referrers it cannot settle.
-//
-// The sweep MUST STILL FIRE. "Zero repairs on this corpus" is a measurement, not a guarantee: a
-// database assembled by a clone from a source whose blobs were never swept is exactly the state
-// described below, and the first test builds one and proves the repair still lands in the stored
-// bytes. The remaining tests pin the three things the cheap read depends on:
-//   1. the fragment scan finds a reference's attributes, and ONLY unqualified ones (the trap:
-//      a namespace-agnostic attribute lookup reads gml:id where id was meant);
-//   2. RefElementIndex derives the same target-class name reference extraction derives from the
-//      Java ref class — including for the element names NeTEx reuses with different types, which is
-//      why a DIRECT child of the fragment root is resolved against its owner class;
-//   3. an element the model does not declare, or one whose type the owner does not fix, answers
-//      "unknown" so the caller falls back to the unmarshal.
+// The blob-repair sweep's decode-free path. Rather than decoding every referrer that owns a
+// resolved outward edge to read each reference's (ref, version, nameOfRefClass) triple, it answers
+// from the stored fragment's own attributes — the read half of what RefPatcher already does — and
+// unmarshals only the referrers it cannot settle.
 
 import noi.netex.model.Line;
 import noi.netex.model.Network;
@@ -41,9 +27,9 @@ import java.util.Set;
 
 public class TestBlobSweepScan {
 
-    /// A Route whose LineRef carries NO `nameOfRefClass` — the corpus-normal shape, and the one
-    /// that forces the element-name lookup: with no attribute to trust, "which class does this
-    /// reference declare?" can only be answered from `<LineRef>` itself.
+    /// A Route whose LineRef carries no `nameOfRefClass` — the corpus-normal shape, and the one
+    /// that forces the element-name lookup: with no attribute to trust, the class a reference
+    /// declares can only be read off `<LineRef>` itself.
     private static final String FRAME = """
         <ServiceFrame id="svf" version="1">
           <directions><Direction id="d1" version="1"><Name>Andata</Name></Direction></directions>
@@ -65,15 +51,12 @@ public class TestBlobSweepScan {
         throw new AssertionError("no stored " + clazz.getSimpleName());
     }
 
-    // ------------------------------------------------------- the sweep still repairs what it must
-
-    /// The named state: an outward edge that is already wired while the blob's self-description no
-    /// longer matches the object the id resolves to, reached by cloning without the source's
-    /// blob-repair marker (FeedsToCoupledDbToDb's documented deviation is exactly this).
+    /// An outward edge that is already wired while the blob's self-description no longer matches
+    /// the object the id resolves to, reached by cloning without the source's blob-repair marker.
     ///
-    /// Built by cloning the Route WITHOUT its Line and then storing a Network under the Line's id.
-    /// The Route's OTHER reference (its Direction) keeps its edge, so the sweep still visits it —
-    /// a clone drops an edge whose target it skipped, and an object with no edge at all is not a
+    /// Built by cloning the Route without its Line and then storing a Network under the Line's id.
+    /// The Route's other reference, its Direction, keeps its edge, so the sweep still visits it: a
+    /// clone drops an edge whose target it skipped, and an object with no edge at all is not a
     /// referrer. Its LineRef declares (by element) a Line, whose exact id-index key no longer
     /// exists; the id prefix now hits a Network. That is a repair, and it must reach the bytes.
     @Test
@@ -112,8 +95,6 @@ public class TestBlobSweepScan {
                 "a sweep that finds nothing to repair leaves every byte alone");
     }
 
-    // --------------------------------------------------------------------- the fragment scan
-
     private static RefPatcher.Occurrence only(String xml) {
         List<RefPatcher.Occurrence> refs = new RefPatcher().scan(xml.getBytes(StandardCharsets.UTF_8));
         Check.that(refs != null && refs.size() == 1, "exactly one reference in: " + xml + " -> " + refs);
@@ -137,10 +118,9 @@ public class TestBlobSweepScan {
         Check.isNull(deep.nameOfRefClass(), "an absent nameOfRefClass reads as null");
     }
 
-    /// The trap, stated as a test. StAX's `getAttributeValue(null, name)` matches ANY
-    /// namespace; JAXB binds `ref`/`version`/`nameOfRefClass` unqualified, so a
-    /// namespaced lookalike must be invisible to the scan — and an element whose ONLY `ref` is
-    /// namespaced is not a reference at all.
+    /// StAX's `getAttributeValue(null, name)` matches any namespace, while JAXB binds
+    /// `ref`/`version`/`nameOfRefClass` unqualified. A namespaced lookalike is therefore invisible
+    /// to the scan, and an element whose only `ref` is namespaced is not a reference at all.
     @Test
     void testScanIgnoresNamespacedLookalikeAttributes() {
         RefPatcher.Occurrence o = only("<Route xmlns:x=\"urn:x\" id=\"r1\">"
@@ -160,27 +140,23 @@ public class TestBlobSweepScan {
                 "an unparseable fragment answers 'no idea' so the caller unmarshals it");
     }
 
-    // ------------------------------------------------------------------- the element-name index
-
-    /// The index must agree with [RecursiveAttributes#toRef]'s chain, which is the ONLY thing
-    /// the sweep's exact-key guard is built from.
+    /// The index must agree with [RecursiveAttributes#toRef]'s chain, which is the only thing the
+    /// sweep's exact-key guard is built from.
     @Test
     void testIndexDerivesTheSameNameOnlyReferencesWould() {
         Check.equals("[Line]", Arrays.toString(RefElementIndex.candidates("LineRef")),
                 "LineRef -> Line, exactly as XxxRefStructure -> Xxx would");
         Check.equals("[DayType]", Arrays.toString(RefElementIndex.candidates("DayTypeRef")), "DayTypeRef");
-        // ZoneRefStructure derives "Zone", which the model has no class for: only_references then
-        // falls back to DataManagedObject, and so must the index.
+        // ZoneRefStructure derives "Zone", which the model has no class for.
         Check.equals("[DataManagedObject]", Arrays.toString(RefElementIndex.candidates("ParentZoneRef")),
                 "an unregistered derived name falls back to DataManagedObject");
         Check.isNull(RefElementIndex.candidates("NotAnElementInThisModel"),
                 "an element the model does not declare answers 'no idea'");
     }
 
-    /// The disambiguation that makes the whole thing worth doing: `FromPointRef` is declared
-    /// with nine different types across NeTEx, but a ServiceLink's FromPointRef is a
-    /// ScheduledStopPointRefStructure and nothing else. Without the owner-class lookup every stored
-    /// ServiceLink would have to be unmarshalled — most referrers on a real feed.
+    /// `FromPointRef` is declared with nine different types across NeTEx, but a ServiceLink's
+    /// FromPointRef is a ScheduledStopPointRefStructure and nothing else, so the owner class
+    /// disambiguates it.
     @Test
     void testTheOwnerClassResolvesAReusedElementName() {
         String[] global = RefElementIndex.candidates("FromPointRef");
@@ -194,22 +170,18 @@ public class TestBlobSweepScan {
                 "a Route's own DirectionRef, whose @XmlElement fixes the type");
         Check.isNull(RefElementIndex.candidatesUnder(Route.class, "FromPointRef"),
                 "an element the owner does not declare answers 'no idea'");
-        // @XmlElementRef fields resolve through the GLOBAL declaration (a substituting subtype may
-        // appear under the same field), so the owner deliberately does not answer for them —
-        // Route.LineRef and ServiceJourney.JourneyPatternRef are both of that shape.
+        // @XmlElementRef fields resolve through the global declaration, since a substituting
+        // subtype may appear under the same field, so the owner does not answer for them.
         Check.isNull(RefElementIndex.candidatesUnder(Route.class, "LineRef"),
                 "a substitution-group field is left to the global candidate set");
         Check.isNull(RefElementIndex.candidatesUnder(ServiceJourney.class, "JourneyPatternRef"),
                 "…and so is a ServiceJourney's JourneyPatternRef");
     }
 
-    // ---------------------------------------------- the single-attribute read (FragmentPeek)
-
-    /// `epip_repair_interchange_points` asks each referenced ServiceJourney one question —
-    /// which pattern is it on — and used to unmarshal the whole journey, TimetabledPassingTimes and
-    /// all, to answer it. The field is an `@XmlElementRef`, so the answer can be written with
-    /// any member of `JourneyPatternRef`'s substitution group and nothing else; that set, and
-    /// the direct-child rule, are what make the byte read equivalent.
+    /// One question about a referenced ServiceJourney — which pattern it is on — answered from the
+    /// stored bytes instead of from an unmarshalled journey. The field is an `@XmlElementRef`, so
+    /// the answer can be written with any member of `JourneyPatternRef`'s substitution group and
+    /// nothing else; that set and the direct-child rule are what make the byte read equivalent.
     @Test
     void testPeekReadsTheJourneyPatternRefTheFieldWouldHold() {
         Set<String> group = RefElementIndex.substitutionGroup("JourneyPatternRef");
@@ -226,7 +198,6 @@ public class TestBlobSweepScan {
         Check.isNull(peek.firstChildRef(("<ServiceJourney id=\"j1\"><Name>x</Name></ServiceJourney>")
                         .getBytes(StandardCharsets.UTF_8), group),
                 "no such child = the field JAXB would fill is empty");
-        // A pattern ref nested inside another object is NOT this journey's pattern.
         Check.isNull(peek.firstChildRef(("<ServiceJourney id=\"j1\"><parts><JourneyPart id=\"a\">"
                         + "<JourneyPatternRef ref=\"deep\"/></JourneyPart></parts></ServiceJourney>")
                         .getBytes(StandardCharsets.UTF_8), group),

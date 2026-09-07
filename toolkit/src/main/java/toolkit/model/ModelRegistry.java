@@ -22,24 +22,22 @@ import java.util.stream.Stream;
 /// The registrable NeTEx model classes, discovered once per JVM from the model's code source.
 ///
 /// Every class in [#MODEL_PKG] assignable to [EntityStructure] — everything that can carry an
-/// `id` — registered under its SIMPLE NAME in sorted order, so a fresh database's idx assignment
+/// `id` — registered under its simple name in sorted order, so a fresh database's idx assignment
 /// is deterministic across runs and JVMs. The name space is the JAXB simple-name space, with
 /// `DataManagedObject` aliased to `DataManagedObjectStructure` for the ref-class fallback.
 ///
-/// PROV-CAP: netex-2.0-model — the marker's SITE, not its subject. The schema flip is one line in
-/// `model/pom.xml`, which the marker scan cannot see. [#classes()] is where the model jar BECOMES
-/// the store's class table, feeding the `_class_idx` map a database writes at creation, so the
-/// capability's first consequence — a store built at one schema version cannot be a clone source
-/// for a chain at another — is a statement about this list.
+/// PROV-CAP: netex-2.0-model — the marker's site rather than its subject, since the schema flip is
+/// one line in `model/pom.xml` that the marker scan cannot see. [#classes()] is where the model jar
+/// becomes the store's class table, feeding the `_class_idx` map a database writes at creation.
 public final class ModelRegistry {
-    /// The model package, DERIVED from a class this toolkit imports rather than written out.
+    /// The model package, derived from a class this toolkit imports rather than written out.
     ///
     /// Fed to [Class#forName] and to `JAXBContext.newInstance`. A literal disagreeing with the
     /// compile-time imports would neither fail the build nor throw: `classForName` would find
     /// nothing and every edge would land in `_unresolved`.
     public static final String MODEL_PKG = EntityStructure.class.getPackageName();
 
-    /// The GML package, derived the same way. Deliberately EXCLUDED from the model walks.
+    /// The GML package, derived the same way. Excluded from the model walks.
     public static final String GML_PKG = PolygonType.class.getPackageName();
 
     public static final String NETEX_NS = "http://www.netex.org.uk/netex";
@@ -57,7 +55,7 @@ public final class ModelRegistry {
         return classes;
     }
 
-    /// EVERY class of the model package (nested classes included, enums excluded), not just the
+    /// Every class of the model package (nested classes included, enums excluded), not just the
     /// registrable [EntityStructure] subset — the traversal space of the containment index.
     public static synchronized List<Class<?>> allModelClasses() {
         if (allModelClasses == null) scan();
@@ -102,8 +100,8 @@ public final class ModelRegistry {
                 try {
                     c = Class.forName(cn, false, cl);
                 } catch (Throwable t) {
-                    // NOT a lookup miss: the name came from a .class resource just enumerated out
-                    // of the model's OWN code source, so this is a classpath problem. Swallowing it
+                    // Not a lookup miss: the name came from a .class resource just enumerated out
+                    // of the model's own code source, so this is a classpath problem. Swallowing it
                     // resurfaces three layers away as the loader's `unmapped` on a valid feed.
                     unloadable.add(cn + ": " + t);
                     Log.warn("[model_registry] %s will not load from the model code source: %s",
@@ -134,9 +132,9 @@ public final class ModelRegistry {
     /// Refuse a scan that could not load every class it found — after the whole walk, so the
     /// message names all of them rather than whichever sorted first.
     ///
-    /// FATAL, with no opt-in. A class dropped here does not merely go missing: it SHIFTS every idx
-    /// assigned after it, leaving a store that is internally consistent, silently smaller than the
-    /// model, and not comparable with any store built on a healthy classpath.
+    /// Fatal, with no opt-in: a class dropped here shifts every idx assigned after it, leaving a
+    /// store that is internally consistent, silently smaller than the model, and not comparable with
+    /// any store built on a healthy classpath.
     ///
     /// Exposed rather than private so a test can exercise the refusal.
     public static void refuseUnloadable(List<String> unloadable) {
@@ -151,7 +149,7 @@ public final class ModelRegistry {
 
     /// Every `.class` resource of [#MODEL_PKG], as `a/b/C.class` paths, sorted.
     ///
-    /// The code source is a JAR off `target/deps` but a DIRECTORY under a reactor build, an IDE or
+    /// The code source is a jar off `target/deps` but a directory under a reactor build, an IDE or
     /// an exploded classpath; both are handled. Sorting makes the two enumerations agree byte for
     /// byte.
     private static List<String> modelClassResources() throws IOException, java.net.URISyntaxException {

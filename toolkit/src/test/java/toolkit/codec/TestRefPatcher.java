@@ -1,23 +1,10 @@
 package toolkit.codec;
 
-// Regression test. An implementation that re-serialises the whole repaired object has no fragment
-// to preserve; this one does.
+// Regression test for toolkit.codec.RefPatcher, driven end to end through
+// resolve()/resolveEmbeddings() and then against the patcher itself.
 //
-// WHAT IT GATES. resolve()/resolveEmbeddings() repair a reference by setting `version` and/or
-// `nameOfRefClass` on it. The ONLY way they used to persist that was FragmentCodec.encode(obj) — a
-// full JAXB re-marshal of the whole fragment to change one start-tag attribute, and every lost
-// value in the round-trip harness was inside that population.
-//
-// toolkit.codec.RefPatcher replaces the re-marshal with a start-tag attribute rewrite over the
-// stored bytes. The properties below are the four ways that can go wrong:
-//   1. the repair must actually reach the stored bytes (it is what resolve() is FOR);
-//   2. everything else in the fragment must survive verbatim — comments, entity references,
-//      attribute order, quoting and element names are all things a JAXB re-marshal changes;
-//   3. a reference that needs NO repair must not cause a rewrite at all;
-//   4. re-running resolve() over an already-repaired database must be a no-op on the bytes.
-//
-// The `xmlns:ns2=` assertions are the re-marshal's own fingerprint:
-// JAXB's auto-generated prefix appears in every re-marshalled fragment and in no captured one.
+// The `xmlns:ns2=` assertions are the re-marshal's own fingerprint: JAXB's auto-generated prefix
+// appears in every re-marshalled fragment and in no captured one.
 
 import noi.netex.model.Route;
 import org.junit.jupiter.api.Test;
@@ -37,11 +24,9 @@ public class TestRefPatcher {
     /// a CDATA section — two things no JAXB re-marshal reproduces. `__V__` is the version the
     /// LineRef declares: "3" needs the repair, "7" is already right.
     ///
-    /// What is deliberately NOT asserted below is anything CopyingCapture itself normalises
-    /// (its declared set N1-N7: hoisted namespace declarations, attribute re-quoting, resolved
-    /// character references). Those are load-time properties, already gated by TestLoaderSrsName
-    /// and measured as lossless by the round-trip harness; the patcher only has to leave them
-    /// alone, which the byte-equality test below states far more strongly than a substring could.
+    /// CopyingCapture normalises hoisted namespace declarations, attribute re-quoting and resolved
+    /// character references at load time (its declared set N1-N7); the patcher only has to leave
+    /// them alone.
     private static final String FRAME = """
         <ServiceFrame id="svf" version="1">
           <lines><Line id="l1" version="7"><Name>Linea</Name></Line></lines>
@@ -83,9 +68,6 @@ public class TestRefPatcher {
         Check.that(frag.contains("<![CDATA[Rotta & co]]>"), "the CDATA section survived: " + frag);
     }
 
-    /// The strongest statement of the whole fix: the bytes stored for a repaired object are the
-    /// bytes that would have been stored had the source declared the repaired value in the first
-    /// place. Nothing but the one attribute moves.
     @Test
     void testOnlyTheReferenceAttributeDiffersFromAnUnrepairedCapture(TestStore db)
             throws Exception {
@@ -202,7 +184,6 @@ public class TestRefPatcher {
                 "both attributes of the moved reference are carried");
         Check.that(RefPatcher.patchSet(before, before, true).isEmpty(),
                 "nothing moved -> empty patch set -> the caller writes nothing at all");
-        // whether resolve() INVENTS nameOfRefClass on references that never had one.
         Check.isNull(RefPatcher.patchSet(before, after, false)
                         .get(new RefPatcher.Key("X", "1", null)).nameOfRefClass(),
                 "with the invention switched off an absent nameOfRefClass is not added");

@@ -9,11 +9,8 @@ import java.util.NoSuchElementException;
 import java.util.Set;
 
 /// The two [RefGraph] reads that walk the edge index rather than serve one row: the CSR build
-/// and the reference-graph closure behind the export payload.
-///
-/// Out of [AbstractLmdbStore] because these are the only store methods that hold no cursor, write
-/// nothing, and know nothing of the class table's layout: the whole of it is a pure function of the
-/// edge set and `clazzes`.
+/// and the reference-graph closure behind the export payload. Both are a pure function of the edge
+/// set and `clazzes` — no cursor is held and nothing is written.
 final class ClosureQueries {
 
     private final AbstractLmdbStore store;
@@ -33,18 +30,15 @@ final class ClosureQueries {
         return Csr.build(src.toLongArray(), dst.toLongArray());
     }
 
-    /// See [Store#fetchAllReferencesByClass]. The seed pass walks all edges grouped by referrer and
-    /// the fixpoint uses [Csr#out]; sets are insertion-ordered, which is what makes the emission
+    /// [Store#fetchAllReferencesByClass]. The seed pass walks all edges grouped by referrer and the
+    /// fixpoint uses [Csr#out]; sets are insertion-ordered, which is what makes the emission
     /// deterministic.
-    ///
-    /// The cost is the DECODES: the drain below discards most of the objects it unmarshals, having
-    /// wanted only their class. That is what [#skippableWithoutDecoding] removes.
     Iterator<Object> fetchAllReferencesByClass(Txn txn, Set<Class<?>> clazzes, boolean skipExisting) {
         AbstractLmdbStore.LmdbTxn t = store.cast(txn);
         Csr csr = csr(t);
         LinkedHashSet<Long> yielded = new LinkedHashSet<>();
         LinkedHashSet<Long> partial = new LinkedHashSet<>();
-        // Seed: every target referenced by an object of the given classes. NO class filter on the
+        // Seed: every target referenced by an object of the given classes. No class filter on the
         // target here — skipExisting handles those at emission.
         for (int i = 0; i < csr.n; i++) {
             Class<?> referrer = store.idxToClass.get(NulKeyCodec.fullKeyClassIdx(csr.nodes[i]));
@@ -99,17 +93,14 @@ final class ClosureQueries {
         };
     }
 
-    /// `skipExisting`'s question — "is this row's class one of `clazzes`?" — answered
-    /// WITHOUT a JAXB unmarshal, or `false` meaning "cannot answer, decode it".
+    /// `skipExisting`'s question — "is this row's class one of `clazzes`?" — answered without a
+    /// JAXB unmarshal, or `false` meaning "cannot answer, decode it".
     ///
-    /// A REFUSAL, not a shortcut. A row's class is its full key's class index, and
-    /// `loadObjectByFullKey` unmarshals with exactly that class as the declared type — so the two
-    /// agree, EXCEPT that JAXB honours an `xsi:type` on the fragment root and may return a different
-    /// class, which `Set.contains` (exact class, not assignability) judges differently. So this
-    /// reads the stored blob and refuses to answer whenever the root start tag carries an
-    /// `xsi:type`. Every unresolved question costs a decode, never a wrong answer.
-    ///
-    /// The saving is the unmarshal; the read and the LZ4 are still paid.
+    /// A row's class is its full key's class index, and `loadObjectByFullKey` unmarshals with
+    /// exactly that class as the declared type — so the two agree, except that JAXB honours an
+    /// `xsi:type` on the fragment root and may return a different class, which `Set.contains`
+    /// (exact class, not assignability) judges differently. So this reads the stored blob and
+    /// refuses to answer whenever the root start tag carries an `xsi:type`.
     private boolean skippableWithoutDecoding(AbstractLmdbStore.LmdbTxn t, long fullKey,
                                              Set<Class<?>> clazzes) {
         Class<?> clazz = store.idxToClass.get(NulKeyCodec.fullKeyClassIdx(fullKey));

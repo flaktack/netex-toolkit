@@ -1,35 +1,14 @@
 package toolkit.store;
 
-// WHAT IS PINNED. toolkit.store.Store is no longer a 44-method list: it is the UNION of seven
-// role supertypes — StoreTxns, ClassRegistry, ObjectReader, IdIndex, ObjectWriter, RefGraph,
-// StoreResolve — and declares nothing itself but the handle (path/formatMarker/formatId/
-// isReadonly/close) and copyMap, which needs two roles on `this` and so belongs to neither.
+// toolkit.store.Store is the union of seven role supertypes — StoreTxns, ClassRegistry,
+// ObjectReader, IdIndex, ObjectWriter, RefGraph, StoreResolve — and declares nothing itself but the
+// handle (path/formatMarker/formatId/isReadonly/close) and copyMap, which needs two roles on `this`
+// and so belongs to neither. The roles are flat: none extends another, and ObjectReader in
+// particular must not come to require a Txn.
 //
-// WHY A TEST AND NOT JUST A COMPILE. `Store` keeps compiling either way, because every consumer in
-// the repository is still typed `Store` — narrowing them would need
-// `<S extends ObjectReader & ClassRegistry>` intersections through every caller. So the
-// load-bearing claims are made HERE, each a compile-time or reflective fact a bad re-merge breaks:
-//
-//   * a variable of each role type is assignable from a Store AND can do that role's work —
-//     if a method were left on Store instead of moved, the narrow variable would not compile;
-//   * a double implementing ObjectReader ALONE exists below, in ~30 lines, over a HashMap, with
-//     no txn, no LMDB and no write path. That is the payoff of the split and it is exercised
-//     through the same helper the real store goes through;
-//   * Store.class.getMethods() is exactly the union of the roles' declared methods plus Store's
-//     own six. Adding a method to Store instead of to a role fails this;
-//   * Store.MergeFn — the pre-split spelling, used at four call sites in toolkit/ and tools/ —
-//     still resolves now that the type is declared inside ObjectWriter, and is the same type.
-//
-// NEUTER PROOF (each test names the edit that must break it):
-//   * testEachRoleIsUsableOnItsOwn        — move any of the named methods back onto Store; the
-//     narrow local stops compiling.
-//   * testAReaderDoubleNeedsNothingElse   — make ObjectReader extend StoreTxns or ClassRegistry;
-//     MapReader below no longer compiles.
-//   * testStoreDeclaresOnlyTheHandle      — add a method to Store's own body; the sets diverge.
-//   * testStoreIsExactlyTheUnionOfItsRoles— drop a role from the extends clause, or drop a method
-//     from a role; the union stops matching getMethods().
-//   * testMergeFnStillResolvesThroughStore— the assignment is the test: move MergeFn somewhere a
-//     subinterface does not inherit it and this file does not compile.
+// The compiler does not check that on its own, because every consumer in the repository is typed
+// `Store`; narrowing them would need `<S extends ObjectReader & ClassRegistry>` intersections
+// through every caller. Each test below is a compile-time or reflective fact instead.
 
 import noi.netex.model.Line;
 import noi.netex.model.Operator;
@@ -55,8 +34,6 @@ public class TestStoreRoles {
         ObjectWriter.class, RefGraph.class, StoreResolve.class,
     };
 
-    // ---------------------------------------------------------------- the fixture
-
     private static void fill(TestStore ts) {
         try (Txn txn = ts.store.rwTxn()) {
             ts.store.insertAnyObjects(txn, List.of(
@@ -80,11 +57,8 @@ public class TestStoreRoles {
         return o;
     }
 
-    // ---------------------------------------------------------------- the tests
-
-    /// One local per role, each typed to the role and NOT to `Store`, each doing that role's
-    /// work. The assertions are almost beside the point: what is pinned is that these seven
-    /// declarations compile, i.e. that every method really did move out of `Store`.
+    /// One local per role, each typed to the role rather than to `Store`, each doing that role's
+    /// work. What is pinned is that the seven declarations compile: no method is left on `Store`.
     @Test
     void testEachRoleIsUsableOnItsOwn(TestStore ts) {
         fill(ts);
@@ -128,9 +102,8 @@ public class TestStoreRoles {
         }
     }
 
-    /// **The point of the whole exercise.** [MapReader] implements [ObjectReader] and NOTHING else
-    /// — no transactions, no class registry, no id index, no write path, no LMDB — and the same
-    /// helper reads it and the real store.
+    /// [MapReader] implements [ObjectReader] and nothing else — no transactions, no class registry,
+    /// no id index, no write path, no LMDB — and one helper reads both it and the real store.
     @Test
     void testAReaderDoubleNeedsNothingElse(TestStore ts) {
         fill(ts);
@@ -146,13 +119,13 @@ public class TestStoreRoles {
             Check.equals(List.of("one", "two"), names(ts.store, tx),
                     "and the real store answers the same question through the same parameter");
         }
-        // Not vacuous: the helper's parameter is ObjectReader, so neither call could have reached
-        // a txn, the registry or an insert even if it wanted to.
+        // The helper's parameter is ObjectReader, so neither call could reach a txn, the registry
+        // or an insert.
         Check.equals(ObjectReader.class, namesParameterType(), "names(ObjectReader, Txn)");
     }
 
-    /// `Store`'s own body is the handle and nothing else. A method that "moved" but was left
-    /// behind, or a new method added to the union instead of to a role, shows up here.
+    /// `Store`'s own body is the handle and nothing else; a method added to the union instead of to
+    /// a role shows up here.
     @Test
     void testStoreDeclaresOnlyTheHandle() {
         Check.equals(new TreeSet<>(Set.of(
@@ -164,7 +137,6 @@ public class TestStoreRoles {
 
     /// The union is exact: every method callable on a `Store` is declared by exactly one role
     /// or by `Store` itself, and every method a role declares is callable on a `Store`.
-    /// Nothing was lost in the move and nothing was invented.
     @Test
     void testStoreIsExactlyTheUnionOfItsRoles() {
         Set<String> union = new LinkedHashSet<>(declared(Store.class));
@@ -181,7 +153,6 @@ public class TestStoreRoles {
         }
         Check.equals(new TreeSet<>(union), new TreeSet<>(callable),
                 "Store's callable surface == the roles' declarations + its own");
-        // Not vacuous: a two-method interface would satisfy an equality of two empty-ish sets.
         Check.that(union.size() >= 40, "the surface really is the whole SPI: " + union.size());
 
         Set<Class<?>> extended = Set.of(Store.class.getInterfaces());
@@ -191,10 +162,10 @@ public class TestStoreRoles {
         Check.that(extended.contains(AutoCloseable.class), "…and is still AutoCloseable");
     }
 
-    /// `MergeFn` lives inside [ObjectWriter]. Member types are inherited through subinterfaces, so
-    /// `Store.MergeFn` — the spelling at every existing call site — still names it, and names the
-    /// SAME type. Both assignments below are the assertion; the insert underneath proves the policy
-    /// still reaches the insert path.
+    /// `MergeFn` is declared inside [ObjectWriter]. Member types are inherited through
+    /// subinterfaces, so `Store.MergeFn` still names it, and names the same type. The two
+    /// assignments below are the assertion; the insert underneath runs the policy through the
+    /// insert path.
     @Test
     void testMergeFnStillResolvesThroughStore(TestStore ts) {
         Store.MergeFn viaStore = (existing, incoming) -> {
@@ -202,12 +173,12 @@ public class TestStoreRoles {
                     Mls.text(((Line) existing).getName()) + "+" + Mls.text(((Line) incoming).getName()));
             return incoming;
         };
-        ObjectWriter.MergeFn viaRole = viaStore;      // one type, two spellings
+        ObjectWriter.MergeFn viaRole = viaStore;
         Check.that(viaStore == viaRole, "Store.MergeFn and ObjectWriter.MergeFn are one type");
 
         fill(ts);
         // Three roles, three variables: the writer cannot open the txn it writes under, because a
-        // txn is StoreTxns' to give. That separation is the reason resolve() is its own role too.
+        // txn is StoreTxns' to give.
         StoreTxns txns = ts.store;
         ObjectWriter writer = ts.store;
         ObjectReader reader = ts.store;
@@ -225,8 +196,6 @@ public class TestStoreRoles {
                     "the policy ran on the duplicate insert, so MergeFn reached the insert path");
         }
     }
-
-    // ---------------------------------------------------------------- helpers
 
     /// Reads Line names through the narrow role — the parameter is what is being pinned.
     private static List<String> names(ObjectReader reader, Txn txn) {
@@ -269,9 +238,8 @@ public class TestStoreRoles {
         return sb.append(')').toString();
     }
 
-    /// An [ObjectReader] and nothing else, over a [HashMap]. It ignores the [Txn] entirely — a
-    /// reader role holder never opened one and cannot — which is what makes it thirty lines instead
-    /// of a fake LMDB.
+    /// An [ObjectReader] and nothing else, over a [HashMap]. It ignores the [Txn] entirely: a
+    /// holder of the reader role never opened one and cannot.
     static final class MapReader implements ObjectReader {
         private final Map<Class<?>, List<Object>> byClass = new HashMap<>();
 

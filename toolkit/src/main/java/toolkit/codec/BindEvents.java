@@ -18,35 +18,28 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
 
-/// The [ValidationEventHandler] nobody installed.
+/// The [ValidationEventHandler] that counts what the JAXB RI swallows.
 ///
 /// A lexical value that fails to parse into its bound type raises a `ValidationEvent`; the RI's
 /// default handler returns true for `WARNING` and `ERROR`, unmarshalling continues, and the field
-/// is left at its zero value. Nothing says so. This counts those events and changes nothing else.
-///
-/// COUNTING, NOT FAILING: a handler returning `false` aborts the unmarshal with an
-/// `UnmarshalException` on fragments the loader tolerates today, so it would crash the chain on
-/// data that currently loads. This handler therefore DELEGATES its verdict to whatever handler was
-/// installed before it, which is the RI's own default:
+/// is left at its zero value. This counts those events and changes nothing else: the verdict is
+/// delegated to whatever handler was installed before it, which is the RI's own default:
 ///
 /// ```
 /// unmarshal default:  WARNING -> true   ERROR -> true    FATAL_ERROR -> false
 /// marshal   default:  WARNING -> false  ERROR -> false   FATAL_ERROR -> false
 /// ```
 ///
-/// Those verdicts are measured, and `tests/TestBindEvents.java` pins them. The marshal side is
-/// already loud — any event becomes an exception — so installing this there is for attribution.
+/// The marshal side is already loud — any event becomes an exception — so installing this there is
+/// for attribution.
 ///
-/// NOT a `ValidationEventCollector`: that accumulates every event object it is handed. This retains
-/// a bounded tally — at most [#SITE_CAP] distinct (side, scope, class, element, cause) sites with
-/// {@value #SAMPLE_CAP} sample lexicals each — and drops the event object, as the RI does.
+/// The tally is bounded: at most [#SITE_CAP] distinct (side, scope, class, element, cause) sites
+/// with {@value #SAMPLE_CAP} sample lexicals each. The event object itself is dropped, as the RI
+/// does.
 ///
-/// [#handleEvent] runs only when an event is raised, so clean data costs nothing but the two field
-/// stores in [#context].
-///
-/// **Not thread-safe per instance**, deliberately: one handler belongs to one `Unmarshaller`,
-/// which belongs to one [FragmentCodec] or one loader stream, each single-threaded by contract.
-/// Only the static tally is shared.
+/// Not thread-safe per instance: one handler belongs to one `Unmarshaller`, which belongs to one
+/// [FragmentCodec] or one loader stream, each single-threaded by contract. Only the static tally
+/// is shared.
 public final class BindEvents implements ValidationEventHandler {
 
     /// Distinct (side, scope, class, element, cause) sites retained before further events are
@@ -55,7 +48,7 @@ public final class BindEvents implements ValidationEventHandler {
     /// Sample lexical values kept per site.
     public static final int SAMPLE_CAP = 3;
 
-    /// One counted binding failure, identified by everything that is free to know at event time.
+    /// One counted binding failure, as it can be identified at event time.
     public record Site(String side, String scope, String clazz, String element, String cause) {}
 
     private static final LongAdder TOTAL = new LongAdder();
@@ -91,8 +84,8 @@ public final class BindEvents implements ValidationEventHandler {
         this.delegate = delegate;
     }
 
-    /// Wrap whatever handler `current` is — for a fresh RI unmarshaller or marshaller that is
-    /// the implementation object itself, i.e. the default policy — so the verdict never changes.
+    /// Wrap whatever handler `current` is — on a fresh RI unmarshaller or marshaller that is the
+    /// implementation object itself, i.e. the default policy — so the verdict never changes.
     public static BindEvents unmarshalling(ValidationEventHandler current) {
         return new BindEvents("unmarshal", current);
     }
@@ -103,21 +96,19 @@ public final class BindEvents implements ValidationEventHandler {
     }
 
     /// The feed, zip member or store this handler's owner is currently reading — the "per feed"
-    /// axis of the report. `NetexLoader` sets its stream label; a driver or tool may set the
-    /// store path on a codec. Unset reads as `-`.
+    /// axis of the report. Unset reads as `-`.
     public void scope(String s) {
         this.scope = (s == null || s.isEmpty()) ? "-" : s;
     }
 
-    /// The declared root type and the reader about to be consumed. No matching `clear()`: nulling
-    /// the reader afterwards would be a third store to save one fragment's bytes per codec.
+    /// The declared root type and the reader about to be consumed. There is no matching `clear()`.
     public void context(Class<?> c, XMLStreamReader r) {
         this.clazz = c;
         this.reader = r;
     }
 
-    /// The loader's shape: its reader is per STREAM, not per element, so it is set once and only
-    /// the declared type moves.
+    /// The loader's reader is per stream, not per element, so it is set once and only the declared
+    /// type moves.
     public void reader(XMLStreamReader r) {
         this.reader = r;
     }
@@ -133,7 +124,7 @@ public final class BindEvents implements ValidationEventHandler {
         try {
             record(e);
         } catch (RuntimeException ignored) {
-            // Counting is best-effort: an instrument may not be the reason a load fails.
+            // Counting is best-effort.
             DROPPED.increment();
         }
         return delegate.handleEvent(e);
@@ -168,7 +159,7 @@ public final class BindEvents implements ValidationEventHandler {
                 return r.getName().toString();
             }
         } catch (RuntimeException ignored) {
-            // a reader that will not say where it is, is not a reason to lose the count
+            // no location: the count still stands
         }
         return "-";
     }
@@ -214,7 +205,7 @@ public final class BindEvents implements ValidationEventHandler {
     /// The per-run summary, with no flag to switch it on. Clean data still prints one INFO line; a
     /// run that lost values prints one WARNING per site.
     ///
-    /// The tally is PER JVM, not per call, so a host running several stages in one JVM sees each
+    /// The tally is per JVM, not per call, so a host running several stages in one JVM sees each
     /// line carry the running total; [#reset] scopes a count to one sweep.
     public static void report(String tag) {
         long total = TOTAL.sum();
@@ -243,7 +234,7 @@ public final class BindEvents implements ValidationEventHandler {
     }
 
     /// Arm the at-exit safety net once, on the first event, so clean data installs no hook. It
-    /// covers a driver that forgets to call [#report], and `System.exit` paths.
+    /// covers a driver that never calls [#report], and `System.exit` paths.
     private static void arm() {
         if (HOOKED.compareAndSet(false, true)) {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {

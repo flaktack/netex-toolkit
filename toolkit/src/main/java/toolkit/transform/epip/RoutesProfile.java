@@ -1,23 +1,16 @@
 package toolkit.transform.epip;
 
 // The routes slice the EPIP journey generator needs: routePointProjection and
-// projectRouteToServiceLinks. The other route-projection methods have no EPIP caller and are not
-// implemented.
-//
-// Both return materialized Lists; their callers drain them fully. projectRouteToServiceLinks
-// mutates the sjp IN PLACE.
+// projectRouteToServiceLinks.
 //
 // gml choice-group note: the model splits the LineString pos/pointProperty/posList choice into
-// `posOrPointProperty` (List<Object>) plus a dedicated `posList` slot. The helpers below rebuild
-// the single document-ordered view as posOrPointProperty entries followed by posList — exact for
-// real NeTEx data, where a LineString carries either pos elements or a single posList, never
-// both. Document order across mixed forms is not recoverable from JAXB.
+// `posOrPointProperty` (List<Object>) plus a dedicated `posList` slot. The helpers below rebuild the
+// single document-ordered view as posOrPointProperty entries followed by posList. That holds only
+// while a LineString carries either pos elements or a single posList and never both, as real NeTEx
+// data does: document order across mixed forms is not recoverable from JAXB.
 //
-// Float-formatting note: the ServiceLink dedup hash feeds each posList float through a string
-// conversion into sha256, and those hashes become ServiceLink and LineString ids. The required
-// form is the shortest round-trip repr, positional for 1e-4 <= |x| < 1e16 and scientific outside.
-// Double.toString picks the same digits but different positional/scientific thresholds, so
-// pyFloatStr() reformats them.
+// The ServiceLink dedup hash feeds each posList float through pyFloatStr() into sha256, and those
+// hashes become the ServiceLink and LineString ids.
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.gml.DirectPositionListType;
@@ -84,10 +77,9 @@ public final class RoutesProfile {
     ///    both route and sjp have pointsInSequence;
     /// - the single-link case stamps `LineString_<hash>` onto the SOURCE RouteLink's own (shared)
     ///    LineString and hands that same instance to the ServiceLink;
-    /// - the multi-link case works on a deep copy of the first link's LineString. KNOWN BUG
-    ///    (OPEN.md §16): the `lineStringValue[-srsDimension : 0]` slice is ALWAYS empty, so the
-    ///    merge loop breaks on its first candidate, leaving distance at zero and the copied
-    ///    geometry unextended;
+    /// - the multi-link case works on a deep copy of the first link's LineString. KNOWN BUG: the
+    ///    `lineStringValue[-srsDimension : 0]` slice is ALWAYS empty, so the merge loop breaks on
+    ///    its first candidate, leaving distance at zero and the copied geometry unextended;
     /// - a missing `routePointProjection` entry for a from/to stop throws NullPointerException.
     public static List<ServiceLink> projectRouteToServiceLinks(
             Store db, Txn txn, ServiceJourneyPattern sjp, Route route,
@@ -96,10 +88,8 @@ public final class RoutesProfile {
 
         List<ServiceLink> yielded = new ArrayList<>();
 
-        // Two variants:
-        // 1. pointsInSequence has PointOnRoute/OnwardRouteLinkRef;
-        // 2. linksInSequence
-        // We aggregate to linksInSequence
+        // A Route arrives in one of two shapes — pointsInSequence with PointOnRoute/
+        // OnwardRouteLinkRef, or linksInSequence — and both aggregate to linksInSequence here.
 
         if (route.getPointsInSequence() == null) return yielded;
         List<RouteLinkRefStructure> linksInSequence = new ArrayList<>();
@@ -148,7 +138,8 @@ public final class RoutesProfile {
                 continue;
             } else if (combinedRouteLinks.size() == 1) {
                 RouteLink only = combinedRouteLinks.get(0);
-                // This is magic, so ServiceLinks with the same SSPs and same LineString are not duplicated
+                // The id hashes (from, to, coordinates), so ServiceLinks with the same SSPs and the
+                // same LineString collapse to one.
                 String objectId = sha256Head8(
                         fromSsp.getRef() + "\n" + toSsp.getRef() + "\n"
                                 + joinPyFloats(posValues(firstChoiceItem(only.getLineString()))));
@@ -163,8 +154,8 @@ public final class RoutesProfile {
                 sl.setDerivedFromObjectRef(only.getId());
                 sl.setDerivedFromVersionRef_BasicModificationDetailsGroup(only.getVersion());
             } else {
-                // KNOWN LIMIT (OPEN.md §16): only a DirectPositionList is merged. A geometry
-                // built from individual <pos> elements falls through to the ref-only branch.
+                // KNOWN LIMIT: only a DirectPositionList is merged. A geometry built from
+                // individual <pos> elements falls through to the ref-only branch.
                 if (firstChoiceItem(combinedRouteLinks.get(0).getLineString())
                         instanceof DirectPositionListType) {
                     LineStringType lineString =
@@ -174,7 +165,8 @@ public final class RoutesProfile {
                         lineString.setSrsDimension(BigInteger.valueOf(2));
                     }
 
-                    List<Double> lineStringValue = posValues(                        // aliases the SOURCE link's list
+                    // Aliases the SOURCE link's list.
+                    List<Double> lineStringValue = posValues(
                             firstChoiceItem(combinedRouteLinks.get(0).getLineString()));
                     BigDecimal distance = BigDecimal.ZERO;
                     int dim = lineString.getSrsDimension().intValue();
@@ -191,17 +183,19 @@ public final class RoutesProfile {
                         } else if (!pySlice(lineStringValue, -dim, 0)
                                 .equals(pySlice(posValues(kFirst), 0, dim))) {
                             // The [-dim:0] slice is always empty, so for non-empty coordinates this
-                            // branch always breaks. See the KNOWN BUG note on this method.
+                            // branch always breaks (KNOWN BUG).
                             break;
                         } else {
-                            lineStringValue.addAll(                                  // mutates the SOURCE list
+                            // Mutates the SOURCE list.
+                            lineStringValue.addAll(
                                     pySlice(posValues(kFirst), dim, posValues(kFirst).size()));
                             distance = distance.add(combinedRouteLinks.get(k).getDistance());
                         }
                     }
 
-                    // This is magic, so ServiceLinks with the same SSPs and same LineString are not duplicated
-                    String objectId = sha256Head8(                                   // hash over the DEEP COPY's coordinates
+                    // The id hashes (from, to, coordinates of the DEEP COPY), so ServiceLinks with
+                    // the same SSPs and the same LineString collapse to one.
+                    String objectId = sha256Head8(
                             fromSsp.getRef() + "\n" + toSsp.getRef() + "\n"
                                     + joinPyFloats(posValues(firstChoiceItem(lineString))));
                     lineString.setId("LineString_" + objectId);
@@ -220,14 +214,14 @@ public final class RoutesProfile {
             if (sl != null) {
                 spijps.get(i).setOnwardServiceLinkRef(
                         NetexUtils.getRef(sl, ServiceLinkRefStructure.class));
-                // KNOWN OPEN QUESTION (OPEN.md §16): the timing link ref is cleared whenever a
-                // service link is set, without asking whether the profile wanted it kept.
+                // KNOWN OPEN QUESTION: the timing link ref is cleared whenever a service link is
+                // set, without asking whether the profile wanted it kept.
                 spijps.get(i).setOnwardTimingLinkRef(null);
                 yielded.add(sl);
             }
         }
 
-        points.clear();                                                              // JAXB lists have no setter
+        points.clear();                        // JAXB lists have no setter
         points.addAll(spijps);
         return yielded;
     }
@@ -241,7 +235,6 @@ public final class RoutesProfile {
         return ls.getPosList();
     }
 
-    /// The number of entries in the combined choice list.
     private static int choiceCount(LineStringType ls) {
         return ls.getPosOrPointProperty().size() + (ls.getPosList() != null ? 1 : 0);
     }
@@ -291,7 +284,6 @@ public final class RoutesProfile {
 
     // ---------------------------------------------------------------- string/list primitives
 
-    /// Unwrap a JAXBElement choice member.
     private static <T> T value(JAXBElement<? extends T> element) {
         return element == null ? null : element.getValue();
     }
@@ -318,9 +310,8 @@ public final class RoutesProfile {
         return sb.toString();
     }
 
-    /// The required float rendering: shortest round-trip digits (the same digits Java's
-    /// Double.toString produces), positional when the decimal exponent is in [-4, 16),
-    /// scientific otherwise (`1e+16`, `1e-05`: no trailing `.0` on the
+    /// The required float rendering: shortest round-trip digits, positional when the decimal
+    /// exponent is in [-4, 16), scientific otherwise (`1e+16`, `1e-05`: no trailing `.0` on the
     /// mantissa, sign always present, exponent zero-padded to two digits).
     static String pyFloatStr(double d) {
         if (Double.isNaN(d)) return "nan";

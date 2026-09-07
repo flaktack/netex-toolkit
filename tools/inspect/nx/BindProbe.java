@@ -33,60 +33,42 @@ import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 
-/// `nx bind probe` — `nx bind`'s VERSION arm.
+/// `nx bind probe` — `nx bind`'s version arm.
 ///
-/// ## Why it exists
-///
-/// `nx bind sweep` needs a store, and there is no store at the other schema version, so every
-/// silent shape a version flip introduces — a narrowing enum token set, a narrowing cardinality,
-/// an element-case change, a type change — is unobservable. Compiling against the other version
-/// proves it compiles, not that it runs.
-///
-/// This subcommand needs NO STORE. It drives the same two arms the sweep drives — B0 (plain JAXB,
-/// no interception, with a [ValidationEventCollector] attached so "nothing was raised" is a
-/// measurement) and B ([FragmentCodec#decode], what the toolkit binds) — over SYNTHETIC
-/// single-object fragments, plus a third arm the sweep has no use for:
-///
-/// - M — re-marshal the B bean and ask whether the element is still there. Only a marshal can
-///    answer that.
+/// No store, so it reaches a schema version no store was ever built at, where a narrowing enum
+/// token set, a narrowing cardinality, an element-case change or a type change is otherwise
+/// unobservable. It drives the same two arms `nx bind sweep` drives — B0 (plain JAXB, no
+/// interception, with a [ValidationEventCollector] attached so "nothing was raised" is a
+/// measurement) and B ([FragmentCodec#decode], what the toolkit binds) — over synthetic
+/// single-object fragments, plus a third the sweep has no use for: M, re-marshalling the B bean and
+/// asking whether the element is still there.
 ///
 /// Run it under either model jar and it answers at that version: it names no version-specific
-/// symbol and resolves every class and field reflectively, so it compiles and runs at both, and CI
+/// symbol and resolves every class and field reflectively, so the same binary runs at both, and CI
 /// diffs the two runs.
 ///
-/// ## The four refusals
+/// Four refusals, each exit 2 rather than a zero:
 ///
-/// A probe that reports "nothing found" when its subject moved is worse than no probe. So:
+/// 1. a named CLASS that does not exist at the running version;
+/// 2. a named FIELD that does not exist on it — a renamed property is exactly how a shape stops
+///    being probed while the probe stays green;
+/// 3. an abstract owner with no concrete subclass. Otherwise the owner is resolved to a concrete
+///    subclass so JAXB has something to instantiate, and which one is printed;
+/// 4. either positive control failing: `ctl-bind`, a plain enum token, must bind on both arms, and
+///    `ctl-104`, the same token with a trailing space, must be repaired — B0 null, B bound.
 ///
-/// 1. a named CLASS that does not exist at the running version → exit 2, never a zero;
-/// 2. a named FIELD that does not exist on it → exit 2. This is the one that matters most: a
-///    renamed property is exactly how a shape stops being probed while the probe stays green;
-/// 3. an abstract owner with no concrete subclass → exit 2. The owner is resolved to a concrete
-///    subclass so JAXB has something to instantiate, and WHICH ONE is printed;
-/// 4. the positive controls, below.
+/// What it cannot see:
 ///
-/// ## The positive controls
-///
-/// A probe that always says "null" would pass every test, so two rows carry a known non-zero
-/// expectation at every version and the probe REFUSES if either fails:
-///
-/// - `ctl-bind` — a plain enum token must BIND on both arms. If this row is null the harness is
-///    broken.
-/// - `ctl-104` — the same token with a trailing space must be REPAIRED: B0 null, B bound. That
-///    exercises the B arm's interception rather than merely its plumbing.
-///
-/// ## What it cannot see
-///
-/// - Corpus scale. One synthetic object per row: it says what the binding DOES with a lexical,
+/// - Corpus scale. One synthetic object per row: it says what the binding does with a lexical,
 ///    never how often that lexical occurs.
 /// - The store. The store persists source bytes and re-marshals only what a transformer created,
-///    while this marshals unconditionally — so the M arm answers "IF this object were
-///    re-marshalled", the condition and not the frequency.
+///    while this marshals unconditionally, so the M arm answers "IF this object were
+///    re-marshalled".
 /// - Anything nested. The fragments are one element deep plus one child.
 /// - Which owner XJC binds when a name is declared twice. It probes the field it is told to probe.
 ///
-/// A diagnostic, like the rest of `nx bind`, but unlike `sweep` it HAS pass/fail: exit 0 means
-/// every row produced a verdict and both controls held. It never fails on a FINDING.
+/// A diagnostic, but unlike `sweep` it HAS pass/fail: exit 0 means every row produced a verdict and
+/// both controls held. It never fails on a FINDING.
 public final class BindProbe {
 
     // ================================================================== verdicts
@@ -121,11 +103,10 @@ public final class BindProbe {
 
     /// The table: one row per identified cell, plus the two controls.
     ///
-    /// Enumerated, not discovered: the subject is a finite list of cells a schema diff identified
-    /// and cannot be re-derived from the model. The refusals protect it — a row naming a class or
-    /// field that no longer exists is exit 2.
+    /// Enumerated, not discovered: the subject is a finite list of cells a schema diff identified,
+    /// and cannot be re-derived from the model.
     static final Shape[] SHAPES = {
-        // ---- the two positive controls. A probe that always says "null" must fail here.
+        // ---- the two positive controls.
         new Shape("ctl-bind", "control", "-", "Line_VersionStructure", "TransportMode",
                 "transportMode", new String[] {"bus"},
                 "POSITIVE CONTROL — must BOUND at every version"),
@@ -211,9 +192,8 @@ public final class BindProbe {
         Set<String> only = new LinkedHashSet<>();
         boolean listOnly = false;
         List<Shape> extra = new ArrayList<>();
-        // Control expectations, overridable ONLY so the self-test can drive the control machinery
-        // through this entry point and watch it say no: a control nobody has seen fail is a control
-        // nobody knows works.
+        // Control expectations, overridable only so the self-test can drive the control machinery
+        // through this entry point and watch it say no.
         String expectBind = BOUND, expect104 = REPAIRED;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
@@ -221,8 +201,8 @@ public final class BindProbe {
                 case "--only" -> only.addAll(List.of(args[++i].split(",")));
                 case "--list" -> listOnly = true;
                 case "--inject" -> {
-                    // The self-test's poison: it drives the REFUSAL paths through the real entry
-                    // point rather than through a copy of their logic.
+                    // The self-test's poison: it drives the refusal paths through the real entry
+                    // point.
                     String[] p = args[++i].split(":", 5);
                     if (p.length != 5) {
                         System.err.println("nx bind probe: --inject wants id:owner:field:element:value");
@@ -261,7 +241,6 @@ public final class BindProbe {
                     s.owner(), s.field());
             return 0;
         }
-        // A subset that drops the controls is not a smaller run, it is an UNCONTROLLED one.
         if (!only.isEmpty() && (!only.contains(CTL_BIND) || !only.contains(CTL_104))) {
             System.err.println("PROBE INOPERATIVE: --only must include both positive controls ("
                     + CTL_BIND + ", " + CTL_104 + ").");
@@ -278,8 +257,7 @@ public final class BindProbe {
         o.printf("model              %,d registered classes, %,d model classes%n",
                 ModelRegistry.classes().size(), ModelRegistry.allModelClasses().size());
         // Which schema version is on this classpath, taken from the model itself rather than from a
-        // filename or a property: handed the wrong jar, everything downstream comes out clean. CI
-        // refuses on this line; the probe prints it so a hand run can see it too.
+        // filename or a property. CI refuses on this line.
         boolean sitePathLinkEnd = exists("SitePathLinkEndStructure");
         boolean datedCall = exists("DatedCall");
         String ver = sitePathLinkEnd && !datedCall ? "2.0.0"
@@ -379,8 +357,7 @@ public final class BindProbe {
             return null;
         }
 
-        // An abstract owner cannot be unmarshalled into: resolve it to a concrete subclass, and
-        // SAY WHICH.
+        // An abstract owner cannot be unmarshalled into: resolve it to a concrete subclass.
         Class<?> target = owner;
         if (Modifier.isAbstract(owner.getModifiers())) {
             List<Class<?>> subs = ModelRegistry.concreteSubclasses(owner);
@@ -396,9 +373,8 @@ public final class BindProbe {
                 + (target == owner ? "" : "  (concrete subclass of " + owner.getSimpleName() + ")");
 
         // The field SET, not the field. The named field is the anchor that makes a rename refuse,
-        // but the predicate is "did the stated value land anywhere in the bean". Where a class
-        // declares two properties for two spellings of one element, asking only about the named
-        // field would report a silent null for a value that bound to the sibling.
+        // but the predicate is "did the stated value land anywhere in the bean", and a class can
+        // declare two properties for two spellings of one element.
         List<Field> targets = fieldsNamed(target, s.element());
         if (targets.isEmpty()) {
             // Not a refusal: "this element name binds to no field at this version" is a REAL
@@ -520,7 +496,7 @@ public final class BindProbe {
         System.err.println("  " + why);
         System.err.println("  Reporting a comfortable zero over a subject that moved is the failure "
                 + "mode this");
-        System.err.println("  probe is written against — GIT_MIGRATION_PLAN §7.8, eight instances "
+        System.err.println("  probe is written against — eight instances "
                 + "and counting.");
     }
 

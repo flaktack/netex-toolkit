@@ -20,43 +20,28 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-/// ORDERED CPU OFF-LOAD for the EPIP journey generator. Default OFF.
+/// Ordered CPU off-load for the EPIP journey generator, off by default.
 ///
-/// ## What it is for
-///
-/// The generator stage is one LMDB **write** transaction, and a write txn is bound to the thread
-/// that opened it. So the only parts that can move off that thread are the ones that are pure
-/// functions of bytes or of a bean:
+/// The generator stage is one LMDB write transaction, and a write txn is bound to the thread that
+/// opened it. So the only parts that can move off that thread are the ones that are pure functions
+/// of bytes or of a bean, and together they are most of the per-object bean CPU:
 ///
 /// - `FragmentCodec.decode(blob, class)` — LZ4 + StAX + JAXB unmarshal of a stored row;
 /// - `FragmentCodec.marshalFragment(bean)` — the marshal the insert path would run inline.
 ///
-/// Together they are most of the per-object bean CPU.
+/// Results come back in source order, so the sequence of `insertOne` calls matches the serial arm's
+/// item for item. Reads keep their order relative to each other but not relative to the inserts,
+/// because [#ordered] fills its in-flight window before the first result is written: a generator
+/// that reads a class it also writes sees a different store than in the serial arm, since
+/// read-your-own-writes inside one write transaction makes the lag observable.
 ///
-/// ## Why the output cannot move
+/// `insertOne` extracts references and then marshals, and marshalling mutates the bean —
+/// `SchemaDefaults.LISTENER` nulls every field holding its declared default. Marshalling ahead
+/// reverses that order, so this is sound only while that rule table holds nothing but defaulted
+/// scalars and empty collections, an empty collection carrying no reference. Nothing here enforces
+/// it.
 ///
-/// Both stages are order-preserving by construction. The consumer thread — the one holding the
-/// write txn — is also the submitter: it pulls the source in its own order, hands each item to a
-/// worker, and takes results back IN SUBMISSION ORDER from a bounded queue of futures. Workers
-/// never touch the store, never see each other's items and decide nothing, so the sequence of
-/// `insertOne` calls is identical to the serial arm's, item for item.
-///
-/// What is NOT preserved: reads keep their order relative to each other but NOT relative to the
-/// inserts, because [#ordered] fills its in-flight window before the first result is written. A
-/// generator that READS a class it also WRITES therefore sees a different store than in the serial
-/// arm — read-your-own-writes inside one write transaction makes the lag observable.
-///
-/// The one real hazard: `insertOne` extracts references AND THEN marshals, and marshalling MUTATES
-/// the bean, since `SchemaDefaults.LISTENER` nulls every field holding its declared default.
-/// Marshalling ahead reverses that order, so normalisation removing or renaming a reference would
-/// move edge rows. It cannot: the rule table holds only defaulted scalars and empty collections,
-/// and an empty collection carries no reference. A probe re-extracts from the marshalled bean and
-/// compares bytes on every object it samples.
-///
-/// ## The knob
-///
-/// `-Dtoolkit.epip.parallelJourneys=N`. Absent, `0` or negative gives the serial path, which is the
-/// default. Both arms log the same row counts at INFO.
+/// The knob is `-Dtoolkit.epip.parallelJourneys=N`; absent, `0` or negative gives the serial path.
 public final class GenParallel {
 
     /// `-Dtoolkit.epip.parallelJourneys` — worker count per stage; &le; 0 is the serial arm.
@@ -65,15 +50,11 @@ public final class GenParallel {
     private GenParallel() {}
 
     /// Worker count; `0` is the serial path. Read from the property on every call — twice per
-    /// generator run, never per object — so a test can run both arms in ONE JVM.
-    ///
-    /// A malformed value REFUSES rather than falling back to serial, whose only symptom would be a
-    /// timing.
+    /// generator run, never per object — so a test can run both arms in one JVM. A malformed value
+    /// refuses rather than falling back to serial, whose only symptom would be a timing.
     public static int workers() {
         return Math.max(0, Conf.intOf(Conf.EPIP_PARALLEL_JOURNEYS));
     }
-
-    // ---------------------------------------------------------------- the two off-loaded stages
 
     /// The generator's source scan. Serial arm: `iterOnlyObjects`. Parallel arm: the cursor
     /// walk stays on this thread and only `decode` moves, results delivered in cursor order.
@@ -111,7 +92,7 @@ public final class GenParallel {
 
     // ---------------------------------------------------------------- the machinery
 
-    /// Counts what passes through and logs the total once, in BOTH arms.
+    /// Counts what passes through and logs the total once, in both arms.
     private static Iterator<Object> counted(Iterator<Object> src, String label, int workers) {
         return new Iterator<>() {
             long n;
@@ -136,11 +117,10 @@ public final class GenParallel {
         };
     }
 
-    /// Map `src` through `fn` on `workers` threads and deliver the results **in source order**. The
+    /// Map `src` through `fn` on `workers` threads and deliver the results in source order. The
     /// caller's thread does the pulling and the taking, so a caller holding an LMDB txn keeps every
-    /// txn touch on its own thread.
-    ///
-    /// The queue of in-flight futures is bounded at `4 * workers`, which bounds peak memory.
+    /// txn touch on its own thread. The queue of in-flight futures is bounded at `4 * workers`,
+    /// which bounds peak memory.
     private static <I> Iterator<Object> ordered(Iterator<I> src,
                                                 Supplier<Function<I, Object>> perThread,
                                                 int workers, String name) {

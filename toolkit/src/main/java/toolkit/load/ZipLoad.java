@@ -28,7 +28,7 @@ import java.util.zip.ZipFile;
 /// `loadStream` each under a `zipname!member` label.
 ///
 /// It reads members and stops there. The post pass and the `resolve()`/`resolveEmbeddings()` pair
-/// belong to `toolkit.harness.FeedToDb` — properties of a finished LOAD, not of a zip.
+/// are properties of a finished load, not of a zip, and belong to the caller.
 public final class ZipLoad {
 
     private ZipLoad() {}
@@ -36,12 +36,11 @@ public final class ZipLoad {
     /// Per-feed knobs, each nullable (null = default):
     ///
     /// - `memberFilter` — keep only matching member names; default: every .xml member.
-    /// - `memberOrder` — load order. With last-wins duplicate-id precedence, ORDER IS SEMANTICS.
-    ///    Default is ZIP ARCHIVE ORDER; do NOT default to a name sort, it changes which duplicate
-    ///    wins.
-    /// - `mergePolicies` — [Store#setMergePolicy] registrations held for the duration of the LOAD
+    /// - `memberOrder` — load order. With last-wins duplicate-id precedence, order is semantics.
+    ///    Default is zip archive order; a name sort changes which duplicate wins.
+    /// - `mergePolicies` — [Store#setMergePolicy] registrations held for the duration of the load
     ///    only; default: none, i.e. last-wins.
-    /// - `postLoad` — run after the policies are cleared and BEFORE resolve. May open its own rw
+    /// - `postLoad` — run after the policies are cleared and before resolve. May open its own rw
     ///    txn: none is held here.
     public record Options(Predicate<String> memberFilter, Comparator<String> memberOrder,
                           Map<Class<?>, Store.MergeFn> mergePolicies, Consumer<Store> postLoad) {
@@ -75,7 +74,7 @@ public final class ZipLoad {
             }
             if (opts.memberOrder() != null) {
                 members.sort(Comparator.comparing(ZipEntry::getName, opts.memberOrder()));
-            } // else: zip archive order (see Options javadoc — order is dedup precedence)
+            } // else: zip archive order
             if (filtered > 0 || nonXml > 0) {
                 Log.info("[zipload] %d members skipped by filter, %d non-XML members ignored", filtered, nonXml);
             }
@@ -94,10 +93,7 @@ public final class ZipLoad {
         }
         // The member loop's own profile, before the post pass adds writes of its own.
         if (store instanceof toolkit.store.AbstractLmdbStore als) als.logLoadProfile("members");
-        // Decided here, not in FeedToDb: this is the feed boundary both loader entry points share,
-        // and it precedes the post pass and resolve.
         NetexLoader.reportDropped(zip.getFileName().toString(), total);
-        // run() does NOT resolve. Its one caller, FeedToDb, owns that sequence.
         return total;
     }
 
@@ -129,7 +125,7 @@ public final class ZipLoad {
         return total;
     }
 
-    /// The count any speed claim about this loader has to quote. Logged in both arms.
+    /// The member, txn and commit-time counts, logged in both arms.
     private static void logTxns(int members, Batcher batch) {
         Log.info("[zipload] %d members, %d write txns, commit %.1f s (%.0f ms/txn)",
                 members, batch.txns, batch.commitNanos / 1e9,
@@ -180,7 +176,7 @@ public final class ZipLoad {
         }
 
         /// Abort whatever is still open — a no-op after `commitPending`. On the failure path an
-        /// unfinished txn is DISCARDED, never silently committed.
+        /// unfinished txn is discarded, never silently committed.
         @Override
         public void close() {
             if (open == null) return;
@@ -200,20 +196,16 @@ public final class ZipLoad {
 
     // ------------------------------------------------------- within-zip pipeline
 
-    /// `-Dtoolkit.load.zipWorkers=N` — parse N members concurrently, hand their objects to ONE
+    /// `-Dtoolkit.load.zipWorkers=N` — parse N members concurrently, hand their objects to one
     /// writer thread (the caller's). `0`, the default, is the serial loop above.
     ///
-    /// One writer, because store CONTENT is a function of insert ORDER: `insertOne` takes the next
+    /// One writer, because store content is a function of insert order: `insertOne` takes the next
     /// value of a monotonic sequence, resolves each reference against the id index as it stands,
     /// and lets duplicate ids go last-wins over the driver's member order. Parallel writers would
     /// move all three.
     ///
-    /// Byte identity is structural: each member is still parsed by one iterator over one stream,
-    /// and the writer drains members in order, each queue to its end, so `insertOne` sees the same
-    /// call sequence it sees serially.
-    ///
-    /// Size against [#TXN_BATCH] first — this pays off on few large members, not on many small
-    /// ones, where commits dominate.
+    /// Size against [#TXN_BATCH] first: this pays off on few large members, not on many small ones,
+    /// where commits dominate.
     private static final int WORKERS = Conf.intOf(Conf.LOAD_ZIP_WORKERS);
     /// Objects buffered per in-flight member; the pipeline's whole memory bound is WORKERS × this.
     private static final int QUEUE_CAP = Conf.intOf(Conf.LOAD_ZIP_QUEUE);
@@ -251,7 +243,7 @@ public final class ZipLoad {
             return t;
         });
         // A finished member holds its objects until the writer drains it, so the thread count does
-        // not bound memory — this does. FAIR, or a late worker can starve the member the writer
+        // not bound memory — this does. Fair, or a late worker can starve the member the writer
         // needs next.
         java.util.concurrent.Semaphore inFlight = new java.util.concurrent.Semaphore(workers + 1, true);
         LoadStats total = LoadStats.ZERO;

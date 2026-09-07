@@ -15,19 +15,19 @@ import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
-/// The reflective walk over the model beans — the READ side, whose write side is [NetexUtils].
+/// The reflective read-side walk over the model beans.
 ///
 /// Per-class [VarHandle] accessors are cached at first touch through a [ClassValue], and only
 /// fields whose declared type can hold a model object are ever read: scalars are pruned when the
 /// cache is built.
 ///
-/// - a sub-object that IS a reference — any [VersionOfObjectRefStructure] subclass, i.e. anything
-///    carrying a `ref` — is yielded as a reference and NOT recursed into;
+/// - a sub-object that is a reference — any [VersionOfObjectRefStructure] subclass, i.e. anything
+///    carrying a `ref` — is yielded as a reference and not recursed into;
 /// - every other model-typed sub-object is visited and recursed; those carrying an id are the
 ///    embedded objects;
 /// - `List` elements and `JAXBElement` wrappers are unwrapped transparently.
 ///
-/// [#onlyReferences] names a target class from `nameOfRefClass` when set AND registered, else from
+/// [#onlyReferences] names a target class from `nameOfRefClass` when set and registered, else from
 /// the reference class's simple name (`XxxRefStructure`/`XxxRef` → `Xxx`, which is what the schema
 /// fixes that attribute's default to), else `DataManagedObject`. Version is the ref's own
 /// attribute, null encoding as absent. Dedup is by (targetClassName, ref, version) in encounter
@@ -40,12 +40,12 @@ public final class RecursiveAttributes {
 
     private RecursiveAttributes() {}
 
-    /// The model package, EXACT — `getPackageName().equals(...)`, never a prefix test.
+    /// The model package, matched exactly — `getPackageName().equals(...)`, never a prefix test.
     ///
-    /// This walk prunes the GML package — geometry carries no ids or refs, and the geo walk in
-    /// [toolkit.geo.Projection] covers both packages on purpose. Model and GML share the
-    /// `noi.netex.` root, so a PREFIX test shortened by one component would pull GML into the
-    /// reference walk with no error.
+    /// This walk prunes the GML package: geometry carries no ids or refs, and the geo walk in
+    /// [toolkit.geo.Projection] covers both packages. Model and GML share the `noi.netex.` root, so
+    /// a prefix test shortened by one component would pull GML into the reference walk with no
+    /// error.
     private static final String MODEL_PKG = ModelRegistry.MODEL_PKG;
 
     private static final ClassValue<VarHandle[]> FIELDS = new ClassValue<>() {
@@ -88,7 +88,7 @@ public final class RecursiveAttributes {
         void node(Object modelObject);
     }
 
-    /// Walk all sub-objects of `root` (root itself is NOT visited), pre-order.
+    /// Walk all sub-objects of `root` (root itself is not visited), pre-order.
     public static void walk(Object root, Visitor visitor) {
         for (VarHandle vh : FIELDS.get(root.getClass())) {
             descend(vh.get(root), visitor);
@@ -135,8 +135,8 @@ public final class RecursiveAttributes {
         return refsAndEmbeddings(root, null).references();
     }
 
-    /// Every reference object of the tree, NO dedup, in encounter order, with the target-class name
-    /// derived by the SAME chain the insert path uses, so a key encoded from the returned tuple
+    /// Every reference object of the tree, no dedup, in encounter order, with the target-class name
+    /// derived by the same chain the insert path uses, so a key encoded from the returned tuple
     /// equals the stored unresolved row of an unmodified reference.
     public static List<Ref> referenceObjects(Object root) {
         List<Ref> out = new ArrayList<>();
@@ -167,7 +167,7 @@ public final class RecursiveAttributes {
     /// Combined result of the single-walk reference + scoped-embedding extraction.
     public record Extraction(List<Ref> references, List<EntityStructure> embedded) {}
 
-    /// ONE walk yielding the dedup'd references (exactly what [#onlyReferences] yields) plus every
+    /// One walk yielding the dedup'd references (exactly what [#onlyReferences] yields) plus every
     /// embedded id-carrying entity whose class passes `embeddingScope`.
     public static Extraction refsAndEmbeddings(Object root, Predicate<Class<?>> embeddingScope) {
         Map<String, Ref> dedup = new LinkedHashMap<>();

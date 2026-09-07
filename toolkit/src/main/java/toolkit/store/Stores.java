@@ -12,38 +12,33 @@ import java.nio.file.Path;
 
 /// Store factory: format sniffing ("which store wrote this directory?") and creation.
 ///
-/// There is ONE store format. `v1` is retired; its identifier survives as [#RETIRED_V1] so a store
+/// There is one store format. `v1` is retired; its identifier survives as [#RETIRED_V1] so a store
 /// or command line naming it fails with that sentence rather than "unknown store format".
 public final class Stores {
 
-    /// Defined by the format itself ([V2Store#FORMAT_ID]), not duplicated here.
     public static final String V2 = V2Store.FORMAT_ID;
 
     /// The retired format id. Never creatable; recognised only to be refused.
     public static final String RETIRED_V1 = "v1";
 
     /// The embedding-index scope of the NeTEx profile this repository loads: embeddable classes
-    /// that are realistic reference targets. TimetabledPassingTime, LineString and ValidBetween are
-    /// excluded deliberately — unscoped, the index would dwarf the id index for classes that never
-    /// matched.
+    /// that are realistic reference targets. Any caller can pass another scope, and the store then
+    /// indexes and marks under that one.
     ///
-    /// It lives here, not in the store: WHICH classes is a fact about this profile. Any caller can
-    /// pass another scope, and the store then indexes and MARKS under that one.
-    ///
-    /// Matched against the JAXB SIMPLE NAME of the object the parser built, which is not always the
-    /// NeTEx element name — XJC generates no class for a global element declared with a NAMED type,
+    /// Matched against the JAXB simple name of the object the parser built, which is not always the
+    /// NeTEx element name — XJC generates no class for a global element declared with a named type,
     /// and many NeTEx elements are. Two entries are worth spelling out:
     ///
     /// - `RouteView` never matches. The element binds to a class extending `DerivedViewStructure`
-    ///    — a view, not an `EntityStructure`, with no `getId()` and not registrable. Kept, pinned by
-    ///    `TestEmbeddingScope`, so a model regeneration making it an entity is not a silent gap.
+    ///    — a view, not an `EntityStructure`, with no `getId()` and not registrable. Kept, pinned
+    ///    by `TestEmbeddingScope`, so a model regeneration making it an entity is not a silent gap.
     /// - `Entrance` needs `SiteEntrance_VersionStructure` listed too
     ///    (PROV-CAP: embed-scope-siteentrance): the schema declares `<Entrance>` with that named
     ///    type, so the parser builds a structure that is registrable and id-carrying but simply
     ///    named something else. Without the alias the index misses every id-bearing `<Entrance>`.
-    ///    The bare `Entrance` entry never matches anything; it is documentation.
+    ///    The bare `Entrance` entry never matches anything.
     ///
-    /// CHANGING THIS SET CHANGES STORED BYTES: it is half of the scope tag every store records, so
+    /// Changing this set changes stored bytes: it is half of the scope tag every store records, so
     /// a widened list makes every existing index degrade to a corpus scan until the store is
     /// rebuilt.
     public static final AbstractLmdbStore.EmbeddingScope NETEX_EMBEDDING_SCOPE =
@@ -69,16 +64,16 @@ public final class Stores {
 
     /// As [boolean, String)][#open(Path,], under an explicit embedding-index scope.
     ///
-    /// Opening an EXISTING store under a scope other than the one it was built with is legal and
-    /// lossless — the store drops its index-completeness marker and the next
-    /// `resolveEmbeddings` takes the corpus scan, which is what the marker exists to arrange.
+    /// Opening an existing store under a scope other than the one it was built with is legal and
+    /// lossless: the store drops its index-completeness marker and the next `resolveEmbeddings`
+    /// takes the corpus scan.
     public static Store open(Path path, boolean readonly, String defaultFormat,
                              AbstractLmdbStore.EmbeddingScope embScope) {
         if (Files.exists(path.resolve("data.mdb"))) {
-            sniffFormat(path); // v2 or a loud refusal; never a silent fallback
+            sniffFormat(path);
             Store s = new V2Store(path, readonly, embScope);
             // A pre-existing db opened rw: its bytes came from some other jar, so the effective
-            // capability set is the intersection, or UNKNOWN with no sidecar to intersect with.
+            // capability set is the intersection, or unknown with no sidecar to intersect with.
             if (!readonly) toolkit.prov.Provenance.stampOpen(path, false);
             return s;
         }

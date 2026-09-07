@@ -1,45 +1,22 @@
 package toolkit.transform.epip;
 
-// The EPIP journey-generator cluster.
+// The EPIP journey-generator cluster: the serial service-journey generator, the pattern synthesis
+// its calls arm needs, and the day-type derivation.
 //
-// The generator is SERIAL: not sharded, with the index build inlined as its own query phase.
+// -Dtoolkit.epip.parallelJourneys=N (default off) moves the decode of each stored journey and the
+// marshal of each emitted object off the transaction thread. Every store read, dedup decision and
+// emission stays on the thread holding the write txn, and the emitted sequence is identical item
+// for item; toolkit.harness.GenParallel holds the ordering contract and the marshal-before-extract
+// hazard.
 //
-// WHAT IS PARALLEL HERE, AND WHAT IS NOT (-Dtoolkit.epip.parallelJourneys=N, default off). The
-// flag moves TWO PURE FUNCTIONS off the transaction thread: the DECODE of each stored journey and
-// the MARSHAL of each emitted object. The loop below — every store read, every dedup decision,
-// every emission — stays where it is, in this order, on the thread holding the write txn. The
-// emitted sequence is identical item for item. See toolkit.harness.GenParallel for the ordering
-// contract and the marshal-before-extract hazard.
+// The pattern hash is an md5 over a ';'-joined signature, truncated to its first four bytes as
+// lowercase hex, and it lands in generated ids that are already in published exports. Every
+// component's stringification is therefore load-bearing to the byte and frozen: the renderings
+// pinned by sigStr, sigBool, mlsRepr and sigRepr may not be tidied.
 //
-// THE SIGNATURE FORMAT IS ID-AFFECTING, SO IT IS FROZEN. The pattern hash is an md5 over a
-// ';'-joined signature, truncated to its first four bytes as lowercase hex, and it ends up in
-// GENERATED IDS that are already in published exports. Every component's stringification is
-// therefore load-bearing to the byte, and none of it may be "tidied":
-//   - stopUse:     the enum member name, or "None".
-//   - requestStop: "True" / "False", or "None".
-//   - order:       decimal digits, or "None".
-//   - ddSig:       a display ref with a non-empty ref -> the ref string; otherwise a tuple form
-//                  whose elements render as the multilingual-string repr, with an empty or null
-//                  value rendering an empty content list. Strings use single quotes unless the
-//                  text contains one and no double quote, with escapes for backslash, quote,
-//                  \n, \r, \t and \xNN.
-//   - notices:     ref or id or the object, ","-joined after a lexicographic sort.
-//
-// Binding decisions:
-//  - the pattern ref is a JAXBElement union, so reads go through getValue() and writes wrap in the
-//    typed factory element;
-//  - the line, validity, vehicle-type and route unions each split into a ref half and a view or
-//    embedded half, so clearing one means clearing both sides;
-//  - there is no element subclass for a day-type or pattern ref: they are built as the structure
-//    and wrapped in the typed factory element of the same name, so the serialized element is
-//    identical;
-//  - directionType is set as the enum, and JAXB serializes its value.
-//
-// missingOk semantics: the pattern and time-demand loads DROP the journey on a dangling ref, so
-// they use the tolerant load plus a null check. The unguarded loads use the throwing form.
-//
-// EVERY DROP IS COUNTED and the totals reported once when the pass runs dry, under the
-// droppedOutput concern, which strictness can turn into a refusal.
+// Refs bind as JAXBElement unions: reads go through getValue(), writes wrap the structure in the
+// typed factory element of the same name. A union that splits into a ref half and a view or
+// embedded half needs both sides cleared.
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.calls.Calls;
@@ -109,17 +86,16 @@ public final class EpipJourneys {
 
     private static final ObjectFactory FACTORY = new ObjectFactory();
 
-    /// Log-once keys already emitted.
     private static final Set<String> LOGGED_ONCE = new HashSet<>();
 
     private EpipJourneys() {}
 
     private static synchronized void logOnce(String key, String message) {
-        if (LOGGED_ONCE.add(key)) Log.warn("%s:%s", key, message);   // aux_logging: key + ":" + message
+        if (LOGGED_ONCE.add(key)) Log.warn("%s:%s", key, message);
     }
 
     private static synchronized void logOnceError(String key, String message) {
-        if (LOGGED_ONCE.add(key)) Log.error("%s:%s", key, message);  // aux_logging: key + ":" + message
+        if (LOGGED_ONCE.add(key)) Log.error("%s:%s", key, message);
     }
 
     /// The tag the generator's end-of-pass aggregate is reported under.
@@ -127,12 +103,12 @@ public final class EpipJourneys {
 
     /// What one generator pass deleted from — or emitted incomplete into — its own output.
     ///
-    /// NONE OF THESE THROWS. They are corpus facts, not defects: a dangling pattern or time-demand
-    /// ref is what one feed of a multi-feed corpus looks like, and the day-type arms fire on feeds
-    /// that carry a validity window instead of availability conditions.
+    /// None of these throws: a dangling pattern or time-demand ref is what one feed of a multi-feed
+    /// corpus looks like, and the day-type arms fire on feeds that carry a validity window instead
+    /// of availability conditions.
     ///
-    /// Plain longs, not atomics: the loop that writes them is serial on the txn thread by
-    /// construction, and one bag belongs to one pass rather than to the JVM.
+    /// The counters are plain longs, correct only while the loop that writes them stays serial on
+    /// the txn thread.
     public static final class Dropped {
 
         // --- journeys DELETED from the output ---
@@ -166,8 +142,7 @@ public final class EpipJourneys {
                     + operatingPeriodWithoutDays + routeViewWithoutLine;
         }
 
-        /// One line per non-zero counter, naming the opt-in. Separate calls rather than one sum, so
-        /// each count carries its reason.
+        /// One line per non-zero counter, naming the opt-in.
         void report(String tag) {
             Strictness.require(Strictness.DROPPED_OUTPUT, "droppedOutput", unresolvedPattern, tag,
                     "ServiceJourneys were dropped for an unresolved ServiceJourneyPatternRef");
@@ -197,8 +172,8 @@ public final class EpipJourneys {
     /// stop-point-in-pattern and distinguishes one pattern from another. Provenance ids are
     /// deliberately excluded.
     ///
-    /// ID-AFFECTING: these strings feed the pattern hash, so every component uses the exact
-    /// rendering the class header pins.
+    /// Id-affecting: these strings feed the pattern hash, so every component uses the frozen
+    /// rendering.
     static String pointInPatternSignature(StopPointInJourneyPattern pis) {
         Object dd = pis.getDestinationDisplayRef() != null
                 ? pis.getDestinationDisplayRef() : pis.getDestinationDisplayView();
@@ -221,7 +196,7 @@ public final class EpipJourneys {
         if (pis.getNoticeAssignments() != null) {
             for (JAXBElement<?> el : pis.getNoticeAssignments().getNoticeAssignment_OrNoticeAssignmentView()) {
                 Object na = el.getValue();
-                // A notice-assignment VIEW lacks the union field entirely.
+                // A notice-assignment view lacks the union field entirely.
                 Object target = null;
                 if (na instanceof NoticeAssignment_VersionStructure n) {
                     target = n.getNoticeRef() != null ? n.getNoticeRef()
@@ -235,15 +210,12 @@ public final class EpipJourneys {
                     String tid = target instanceof EntityStructure e ? e.getId() : null;
                     if (truthy(tid)) s = tid;
                     else if (target == null) s = "None";
-                    // A ref-less, id-less target renders as a reflective dump of its non-null
-                    // fields. NOT toString(), which is Object's — a NON-DETERMINISTIC identity
-                    // hash that would split or merge journey patterns at random.
                     else s = beanRepr(target);
                 }
                 notices.add(s);
             }
         }
-        Collections.sort(notices);   // sorted(notices) — natural String order
+        Collections.sort(notices);
 
         return String.join("|",
                 sigStr(pis.getScheduledStopPointRef().getValue().getRef()),
@@ -259,7 +231,7 @@ public final class EpipJourneys {
     /// Synthesize a ServiceJourneyPattern from a journey's calls. The pattern id is the truncated
     /// md5 over [line ref, direction, per-point signatures]; the projected points and notice
     /// assignments are numbered from that identity, and the notices' journey-level validity
-    /// conditions are cleared. The journey's own pattern ref is NOT set here; the caller wires it.
+    /// conditions are cleared. The journey's own pattern ref is not set here; the caller wires it.
     public static ServiceJourneyPattern serviceJourneyPatternFromCalls(
             ServiceJourney sj, GeneratorDefaults generatorDefaults) {
         List<StopPointInJourneyPattern> piss = new ArrayList<>();
@@ -269,7 +241,7 @@ public final class EpipJourneys {
         // (A journey holding only a LineView NPEs here.)
         List<String> lSsp = new ArrayList<>();
         lSsp.add(sj.getLineRef().getValue().getRef());
-        // ID-AFFECTING: the direction renders as the ENUM FORM, class name plus member name, not
+        // Id-affecting: the direction renders as the enum form, class name plus member name, not
         // as the bare XML token.
         lSsp.add(sj.getDirectionType() != null
                 ? "DirectionTypeEnumeration." + sj.getDirectionType().name() : "None");
@@ -288,9 +260,8 @@ public final class EpipJourneys {
         for (StopPointInJourneyPattern pis : piss) {
             pis.setId(NetexUtils.getId(generatorDefaults.codespace(), StopPointInJourneyPattern.class,
                     id + "-" + sigStr(pis.getOrder())));
-            // Projected notice-assignment ids embed the CREATING journey's id, which is meaningless
-            // on a pattern shared by many. Renumber from the pattern identity: the notice targets
-            // are part of the hash, so equal-id patterns carry equal notices.
+            // Projected notice-assignment ids embed the creating journey's id, which is meaningless
+            // on a pattern shared by many; they are renumbered from the pattern identity.
             if (pis.getNoticeAssignments() != null) {
                 List<JAXBElement<?>> nas = pis.getNoticeAssignments().getNoticeAssignment_OrNoticeAssignmentView();
                 for (int i = 0; i < nas.size(); i++) {
@@ -327,7 +298,7 @@ public final class EpipJourneys {
 
     /// Derive a DayType, its operating period and its assignment from a journey's availability
     /// conditions, and point the journey at the — possibly already emitted — DayType. The caller
-    /// drains this fully BEFORE emitting the journey, since the last of it mutates the journey.
+    /// drains this fully before emitting the journey, since the last of it mutates the journey.
     static List<Object> serviceJourneyAcToDayType(
             Store dbRead, Txn txn, ServiceJourney serviceJourney,
             Map<String, AvailabilityCondition> availabilityConditions,
@@ -356,8 +327,6 @@ public final class EpipJourneys {
                 } else if (a instanceof AvailabilityCondition ac) {
                     acs.add(ac);
                 } else {
-                    // The condition is DISCARDED — its days are not in the export — and the
-                    // journey is emitted with whatever calendar the others gave it.
                     dropped.unhandledValidityCondition++;
                     Log.warn("Unhandled ValidityCondition in %s", serviceJourney.getId());
                 }
@@ -369,17 +338,14 @@ public final class EpipJourneys {
                 // There are no AvailabilityConditions, there may be ValidBetweens; trust the DayType
                 return out;
             }
-            // Both exist, maybe trigger a warning?
         }
 
         String dayTypeId;
         if (!acs.isEmpty()) {
-            // KNOWN OPEN QUESTION (OPEN.md §16): the id comes from the FIRST availability
+            // KNOWN OPEN QUESTION: the id comes from the first availability
             // condition, which is arbitrary when a journey has several.
             dayTypeId = acs.get(0).getId().replace("AvailabilityCondition", "DayType");
         } else {
-            // No availability condition to derive a DayType from, and no DayTypes either: the
-            // journey is emitted with NO calendar at all and runs on no day a consumer can name.
             dropped.journeyWithoutDayType++;
             Log.warn("Check %s", serviceJourney.getId());
             return out;
@@ -395,21 +361,17 @@ public final class EpipJourneys {
             uicOperatingPeriod.setVersion(acs.get(0).getVersion());
             uicOperatingPeriod.setDerivedFromObjectRef(acs.get(0).getId());
             uicOperatingPeriod.setDerivedFromVersionRef_BasicModificationDetailsGroup(acs.get(0).getVersion());
-            // The two branches treat the date DIFFERENTLY on purpose: copy versus synthesis
-            // decides whether the output carries the SOURCE lexical or a canonical one.
             if (validDays.isEmpty()) {
-                // The period is still emitted, with bits "0" — a calendar that runs on zero days,
-                // so every journey pointed at this DayType is in the export and operates NEVER.
                 dropped.operatingPeriodWithoutDays++;
                 Log.warn("%s does not have any valid days", dayTypeId);
-                // PURE COPY: the parsed carrier goes straight across and re-emits the source
-                // lexical verbatim, offset and all. Do NOT "normalise" this.
+                // Pure copy: the parsed carrier goes straight across and re-emits the source
+                // lexical verbatim, offset and all. Do not normalise it.
                 uicOperatingPeriod.setFromDate(acs.get(0).getFromDate());
                 uicOperatingPeriod.setToDate(acs.get(0).getFromDate());   // the string is empty anyway
                 uicOperatingPeriod.setValidDayBits("0");
             } else {
-                // SYNTHESIS: these are computed values with no source lexical, so the carrier is
-                // built from a datetime and serialises CANONICALLY.
+                // Synthesis: these are computed values with no source lexical, so the carrier is
+                // built from a datetime and serialises canonically.
                 uicOperatingPeriod.setFromDate(XmlDateTime.from(validDays.get(0)));
                 uicOperatingPeriod.setToDate(XmlDateTime.from(validDays.get(validDays.size() - 1)));
                 uicOperatingPeriod.setValidDayBits(ServiceCalendarEpip.validDaysToBits(validDays));
@@ -418,8 +380,8 @@ public final class EpipJourneys {
             uicOperatingPeriodsIds.add(uicOperatingPeriod.getId());
             out.add(uicOperatingPeriod);
 
-            // Derive from the AvailabilityCondition (stable), not the journey: many journeys share
-            // one AC-derived DayType, so journey-id provenance would depend on iteration order.
+            // Provenance comes from the AvailabilityCondition, not the journey: many journeys share
+            // one AC-derived DayType, so a journey id here would depend on iteration order.
             DayType dayType = new DayType();
             dayType.setId(dayTypeId);
             dayType.setVersion(serviceJourney.getVersion());
@@ -443,7 +405,7 @@ public final class EpipJourneys {
             out.add(dayTypeAssignment);
             dayTypeRef = NetexUtils.getRef(dayType);
         } else {
-            // KNOWN OPEN QUESTION (OPEN.md §16): this emits a ref to a DayType that is never
+            // KNOWN OPEN QUESTION: this emits a ref to a DayType that is never
             // constructed, so it can only resolve if something else supplies that id.
             dayTypeRef = NetexUtils.getFakeRef(dayTypeId, DayTypeRefStructure.class, serviceJourney.getVersion());
         }
@@ -461,8 +423,8 @@ public final class EpipJourneys {
                    Map<String, AvailabilityCondition> availabilityConditions,
                    Map<String, Route> routes) {}
 
-    /// Pre-index what the per-journey pass reads. Patterns and time-demand types are deliberately
-    /// NOT indexed: they stay keyed on-demand loads, guarded by the pattern dedup set.
+    /// Pre-index what the per-journey pass reads. Patterns and time-demand types are not indexed;
+    /// they stay on-demand loads, guarded by the pattern dedup set.
     static Indexes buildJourneyIndexes(Store dbRead, Txn txn) {
         Log.info("Indexing RoutePoint to ScheduledStopPoint ");
         Map<String, RoutePointRefStructure> routePointProjection = new LinkedHashMap<>();
@@ -482,7 +444,7 @@ public final class EpipJourneys {
             availabilityConditions.put(ac.getId(), ac);
         }
         Map<String, Route> routes = new LinkedHashMap<>();
-        if (dbRead.dbNames(txn).contains(Route.class)) {   // Route in present_classes
+        if (dbRead.dbNames(txn).contains(Route.class)) {
             for (Object o : dbRead.iterOnlyObjects(txn, Route.class)) {
                 Route route = (Route) o;
                 routes.put(route.getId(), route);
@@ -504,7 +466,7 @@ public final class EpipJourneys {
                        Map<String, JAXBElement<? extends VehicleTypeRefStructure>> vehicleTypes,
                        Dropped dropped) {}
 
-    /// SERIAL ONLY. Per journey, a four-way dispatch:
+    /// Serial only. Per journey, a four-way dispatch:
     ///
     /// 1. passing times present → load the referenced pattern once per pattern; a dangling ref
     ///    drops the journey, as a consumer would;
@@ -544,9 +506,8 @@ public final class EpipJourneys {
             }
         }
 
-        // The source scan. Serial by default; -Dtoolkit.epip.parallelJourneys=N moves the JAXB
-        // DECODE (and only the decode) onto N threads, cursor order preserved — the cursor itself
-        // stays here, because it belongs to the write txn and a write txn is thread-bound.
+        // The source scan. Only the JAXB decode moves onto the parallel threads; the cursor stays
+        // here, because it belongs to the write txn and a write txn is thread-bound.
         Iterator<Object> journeys =
                 GenParallel.decodeAhead(dbRead, txn, ServiceJourney.class, "journeys");
         Deque<Object> pending = new ArrayDeque<>();
@@ -559,12 +520,11 @@ public final class EpipJourneys {
                     process(ctx, (ServiceJourney) journeys.next(), pending);
                 }
                 if (pending.isEmpty() && !reported) {
-                    // END OF THE PASS, and the ONLY boundary the generator can see: it hands
+                    // End of the pass, and the only boundary the generator can see: it hands
                     // objects to an insert loop and is never told the driver finished.
                     reported = true;
                     ctx.dropped().report(TAG);
-                    // Reported here: the passing-times profile has no pass of its own and this is
-                    // its only caller.
+                    // Reported here: the passing-times profile has no pass of its own.
                     TimetabledPassingTimesProfile.reportDropped(TAG);
                 }
                 return !pending.isEmpty();
@@ -576,24 +536,22 @@ public final class EpipJourneys {
                 return pending.poll();
             }
         };
-        // The OUTPUT half of the off-load is NOT applied here: it wraps each object in a form only
+        // The output half of the off-load is not applied here: it wraps each object in a form only
         // an insert path understands, so it belongs at the call site that feeds the insert.
         return emitted;
     }
 
-    /// The nested process() closure; each yield becomes an `out` append.
     private static void process(Ctx ctx, ServiceJourney sj, Deque<Object> out) {
         JourneyPattern_VersionStructure serviceJourneyPattern = null;
 
         if (sj.getPassingTimes() != null) {
             // (a null journeyPatternRef here NPEs)
             if (!ctx.sjpIds().contains(sj.getJourneyPatternRef().getValue().getRef())) {
-                // Loaded once per PATTERN, not per journey.
+                // Loaded once per pattern, not per journey.
                 serviceJourneyPattern = (JourneyPattern_VersionStructure) ctx.dbRead()
                         .loadObjectByReference(ctx.txn(), sj.getJourneyPatternRef().getValue(), /*missingOk=*/true);
                 if (serviceJourneyPattern == null) {
-                    // Dangling pattern ref: the pattern is not in the feed. Drop the journey
-                    // rather than abort the run, and count it.
+                    // Dangling pattern ref: the pattern is not in the feed.
                     ctx.dropped().unresolvedPattern++;
                     Log.error("Dropping ServiceJourney %s: unresolved ServiceJourneyPattern %s",
                             sj.getId(), sj.getJourneyPatternRef().getValue().getRef());
@@ -629,24 +587,20 @@ public final class EpipJourneys {
                     sj, (ServiceJourneyPattern) serviceJourneyPattern, timeDemandType);
 
         } else {
-            // No passing times, no calls, no journey-pattern/time-demand pair: nothing to derive
-            // a timetable from. Drop the journey like the other unresolvable cases.
             ctx.dropped().noTiming++;
             Log.error("Dropping ServiceJourney %s: no matching timing transformation found", sj.getId());
             return;
         }
 
-        // If we already know that this generated SJP already exists, we should not even add it.
         if (ctx.sjpIds().contains(sj.getJourneyPatternRef().getValue().getRef())) {
-            // pass
+            // already emitted
         } else if (serviceJourneyPattern == null) {
-            // (the two ids stand in for a full object dump)
             Log.error("No service journey pattern for journey: %s %s",
                     sj.getId(), sj.getJourneyPatternRef().getValue().getRef());
         }
 
         if (serviceJourneyPattern != null && serviceJourneyPattern.getPointsInSequence() == null) {
-            // The log line is keyed on the PATTERN, so one covers every journey on it.
+            // The log line is keyed on the pattern, so one covers every journey on it.
             ctx.dropped().patternWithoutPoints++;
             logOnceError("pattern-no-points:" + serviceJourneyPattern.getId(),
                     "Dropping ServiceJourney " + sj.getId() + ": pattern "
@@ -683,10 +637,10 @@ public final class EpipJourneys {
             points.clear();
             points.addAll(onlyStops);
 
-            // After the Routes to ServiceLinks!
+            // Must run after the route-to-ServiceLink projection above.
             recoverLineRef(ctx, sj, serviceJourneyPattern);
 
-            // KNOWN GAP (OPEN.md §16): LinkSequenceProjectionRef / LinkSequenceProjection are
+            // KNOWN GAP: LinkSequenceProjectionRef / LinkSequenceProjection are
             // not carried onto the generated pattern.
 
             out.add(serviceJourneyPattern);
@@ -698,7 +652,7 @@ public final class EpipJourneys {
                 ctx.dayTypesIds(), ctx.uicOperatingPeriodsIds(), ctx.dayTypeAssignmentsIds(),
                 ctx.dropped()));
 
-        sj.setValidityConditions(null);            // validity_conditions_or_valid_between = []
+        sj.setValidityConditions(null);
         sj.getValidBetween().clear();
         sj.setTimeDemandTypeRef(null);
         sj.setKeyList(null);
@@ -707,11 +661,10 @@ public final class EpipJourneys {
         sj.setExtensions(null);
         sj.setNoticeAssignments(null);
         sj.setCalls(null);
-        sj.setLinkSequenceProjectionRef(null);     // link_sequence_projection_ref_or_... = None
+        sj.setLinkSequenceProjectionRef(null);
         sj.setLinkSequenceProjection(null);
         sj.setJourneyPatternView(null);
         sj.setDirectionType(null);
-        // Keep an existing vehicle-type/train ref; only backfill from the Block index when absent.
         if (sj.getVehicleTypeRef() == null) {
             sj.setVehicleTypeRef(ctx.vehicleTypes().get(sj.getId()));
         }
@@ -719,7 +672,6 @@ public final class EpipJourneys {
         out.add(sj);
     }
 
-    /// The nested recoverLineRef closure.
     private static void recoverLineRef(Ctx ctx, ServiceJourney serviceJourney,
                                        JourneyPattern_VersionStructure serviceJourneyPattern) {
         // A FlexibleLineRef and a LineRef both substitute into getLineRef(); a
@@ -730,15 +682,13 @@ public final class EpipJourneys {
             if (serviceJourneyPattern.getRouteView() != null) {
                 RouteView routeView = serviceJourneyPattern.getRouteView();
                 if (routeView.getLineRef() != null) {
-                    // There is already an existing LineRef, overwriting is not smart.
+                    // An existing LineRef is left alone.
                 } else if (sjLineRef != null) {
                     // The RouteView splits the union into lineRef + lineView slots, so null the
                     // view explicitly.
                     routeView.setLineRef(sjLineRef);
                     routeView.setLineView(null);
                 } else {
-                    // The pattern is emitted with a RouteView that names no Line, so nothing
-                    // downstream can attribute its journeys to a line.
                     ctx.dropped().routeViewWithoutLine++;
                     Log.warn("RouteView: no other option to recover the line");
                 }
@@ -755,15 +705,15 @@ public final class EpipJourneys {
                 serviceJourneyPattern.setRouteView(routeView);
 
                 if (serviceJourneyPattern.getDirectionType() == null && route.getDirectionType() != null) {
-                    serviceJourneyPattern.setDirectionType(route.getDirectionType());   // .value — wire-identical
+                    serviceJourneyPattern.setDirectionType(route.getDirectionType());
                 }
                 if (serviceJourneyPattern.getDirectionRef() == null
                         && serviceJourneyPattern.getDirectionView() == null) {
                     serviceJourneyPattern.setDirectionRef(route.getDirectionRef());
                 }
                 if (serviceJourneyPattern.getDistance() == null) {
-                    // KNOWN BUG (OPEN.md §16): the assignment is reversed. The guard tests the
-                    // PATTERN's distance for null, then writes that null onto the ROUTE.
+                    // KNOWN BUG: the assignment is reversed. The guard tests the
+                    // pattern's distance for null, then writes that null onto the route.
                     route.setDistance(serviceJourneyPattern.getDistance());
                 }
             }
@@ -776,7 +726,7 @@ public final class EpipJourneys {
 
     // ---------------------------------------------------------------- string primitives
 
-    /// Non-null AND non-empty — the test the fallback chains below use.
+    /// Non-null and non-empty.
     private static boolean truthy(String s) {
         return s != null && !s.isEmpty();
     }
@@ -791,17 +741,15 @@ public final class EpipJourneys {
         return b == null ? "None" : (b ? "True" : "False");
     }
 
-    /// A DETERMINISTIC, content-bearing string for a model bean that carries neither a `ref` nor an
-    /// `id` — the one place [#pisSignature]'s `or` chain falls all the way through.
+    /// A deterministic, content-bearing string for a model bean that carries neither a `ref` nor an
+    /// `id`, which is where the fallback chain in the notice signature ends up.
     ///
-    /// **Determinism is the whole requirement.** This string feeds a journey-pattern identity
-    /// signature, and a value that varied between runs — which `Object.toString()`'s identity hash
-    /// is — would merge or split ServiceJourneyPatterns at random. So: fields sorted by name
-    /// (declaration order is not specified by reflection), superclass fields included, nulls
-    /// omitted, no identity hash anywhere.
+    /// This string feeds a journey-pattern identity signature, so a value that varied between runs
+    /// — which `Object.toString()`'s identity hash is — would merge or split ServiceJourneyPatterns
+    /// at random. Fields are sorted by name (declaration order is not specified by reflection),
+    /// superclass fields included, nulls omitted, no identity hash anywhere.
     ///
-    /// The recursion depth cap bounds a reflective walk that sits inside a per-call signature
-    /// function; a parsed NeTEx tree has no cycles.
+    /// The depth cap bounds the reflective walk; a parsed NeTEx tree has no cycles.
     private static String beanRepr(Object bean) {
         return beanRepr(bean, 4);
     }
@@ -846,13 +794,12 @@ public final class EpipJourneys {
                 + ", content=" + content + ")";
     }
 
-    /// String rendering: single quotes, switching to double when the text contains a
-    /// single quote but no double quote; backslash/quote/\n/\r/\t escaped explicitly; every
-    /// other char where `str.isprintable()` is FALSE (Unicode categories Cc/Cf/Cs/Co/Cn/
-    /// Zl/Zp/Zs, except U+0020) escaped in lowercase hex: `\xNN` below 0x100, the 4-digit
-    /// backslash-u form on the rest of the BMP, the 8-digit backslash-U form for astral chars —
-    /// NBSP → `\xa0`, C1 → `\x85`, U+200B → backslash-u200b, U+E0041 → backslash-
-    /// U000e0041; printable non-ASCII (incl. astral emoji) stays literal.
+    /// String rendering: single quotes, switching to double when the text contains a single quote
+    /// but no double quote; backslash/quote/\n/\r/\t escaped explicitly; every char in Unicode
+    /// categories Cc/Cf/Cs/Co/Cn/Zl/Zp/Zs except U+0020 escaped in lowercase hex — `\xNN` below
+    /// 0x100, the 4-digit backslash-u form on the rest of the BMP, the 8-digit backslash-U form
+    /// for astral chars, so NBSP → `\xa0`, C1 → `\x85`, U+200B → backslash-u200b, U+E0041 →
+    /// backslash-U000e0041; printable non-ASCII (incl. astral emoji) stays literal.
     ///
     /// The printability categories come from Java's Unicode tables, which can lag a freshly
     /// assigned codepoint (category Cn).

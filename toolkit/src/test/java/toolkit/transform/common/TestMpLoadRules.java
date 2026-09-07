@@ -112,12 +112,6 @@ public class TestMpLoadRules {
 
     /// The blob and the reference index must describe the SAME object after a merge.
     ///
-    /// They did not. `insertOne` cleared the stored copy's ref rows, ran the extraction walk on the
-    /// INCOMING copy, and only then merged — so the blob became the quay union while the
-    /// edge/unresolved index described the incoming copy alone. Every quay contributed by the
-    /// stored copy was in the blob with its outgoing references missing from the index, and
-    /// unreachable to `resolve()`.
-    ///
     /// This is the load shape of the drivers that register this policy and see the same StopPlace
     /// arrive in a stop-offer member and again in a line file.
     @Test
@@ -149,20 +143,14 @@ public class TestMpLoadRules {
         }
     }
 
-    /// The two halves of the policy's LIFECYCLE, neither of which the tests above can see: they
-    /// both register the policy for their whole duration and assert only on the merged blob.
+    /// The two halves of the policy's LIFECYCLE. A merge is an OVERWRITE of the existing
+    /// (id, version, class) row: appending instead would grow the store a duplicate per re-arrival
+    /// of the same StopPlace, which for the two drivers carrying 10 of the 12 national feeds is
+    /// every stop in every line file.
     ///
-    /// A merge is an OVERWRITE of the existing (id, version, class) row. If it appended instead,
-    /// every assertion above would still hold — lookupFullKey would find one of the two rows and it
-    /// would be the merged one — while the store grew a duplicate per re-arrival of the same
-    /// StopPlace, which for the two drivers carrying 10 of the 12 national feeds is every stop in
-    /// every line file.
-    ///
-    /// And setMergePolicy(clazz, null) has to put the store back to plain last-wins replacement.
-    /// The clearing call appears in this file only in `finally` blocks, where nothing follows it,
-    /// so a store that kept merging after it was cleared would have gone unnoticed here and would
-    /// silently union across the boundary a driver draws between two loads. Ported from the retired
-    /// toolkit.smoke.Smoke.
+    /// And setMergePolicy(clazz, null) has to put the store back to plain last-wins replacement; a
+    /// store that kept merging after the policy was cleared would silently union across the
+    /// boundary a driver draws between two loads.
     @Test
     void testTheMergeIsAnOverwriteAndClearingThePolicyResumesLastWins(TestStore db)
             throws Exception {

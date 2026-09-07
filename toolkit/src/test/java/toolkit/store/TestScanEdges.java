@@ -1,35 +1,17 @@
 package toolkit.store;
 
-// WHAT IS PINNED. Store.scanEdges / Store.scanUnresolved are specified as ORDER-IDENTICAL to
-// Store.iterEdges / Store.iterUnresolved — same pairs, same order, same tombstone exclusions —
-// so that no consumer can branch on which of the two it called and so that the SPI's
-// recorded determinism of fetchAllReferencesByClass survives the second reader. The two take
-// completely different routes to that sequence: iterEdges concatenates every _edge_blocks block
-// through loadEdgeState's TreeMap, scanEdges holds ONE block at a time and recovers block order
-// by galloping binary search over the dense numbering. Identity between them is the contract.
+// Store.scanEdges and Store.scanUnresolved are order-identical to Store.iterEdges and
+// Store.iterUnresolved — same pairs, same order, same tombstone exclusions — so no consumer can
+// branch on which of the two it called. The two reach that sequence by different routes: iterEdges
+// concatenates every _edge_blocks block through loadEdgeState's TreeMap, scanEdges holds one block
+// at a time and recovers block order by galloping binary search over the dense numbering.
 //
-// WHY blockPairs = 1. The hazard is that a block key is [kind][block# u32 LE] in a BYTE-ordered
-// map, so LMDB cursor order stops being numeric order at block 256 — key [k,00,01,00,00] (block
-// 256) sorts before [k,01,00,00,00] (block 1). A store with 255 or fewer blocks of both kinds
-// CANNOT distinguish a correct reader from a cursor-order one. Runner sets blockPairs = 128 for the
-// whole suite, so 300 rows per kind would be 3 blocks; this test drops it to 1 for its own store
-// (restored in a finally) and gets 300 blocks per kind, 45 of them past 255.
-//
-// THE NEGATIVE CONTROL NEEDS NO SECOND READER. At one pair per block, block b holds exactly slot
-// b, so the sequence a cursor-ordered reader WOULD have emitted is the correct sequence permuted
-// by the cursor order of 0..299 — computable from the correct sequence alone, with no access to
-// the format. Digesting it must give a different answer. If it did not, this store could not tell
-// the two orders apart and the positive assertions above would prove nothing.
-//
-// NEUTER PROOF (each test names the edit that must break it):
-//   * testScanEdgesIsOrderIdenticalToIterEdges — make V2Store.blockOrder return its block numbers
-//     in LMDB cursor order; this test then fails on the pair-for-pair assertion while the counts
-//     still match, which is why the assertion is order-sensitive rather than a count.
-//   * testTheHazardIsExercised — raise blockPairs back to 128, so 300 rows fit in 3 blocks and
-//     numeric and cursor order coincide; the block-count assertion fails rather than the suite
-//     going quietly green on an unexercised hazard.
-//   * testWritableStoreAnswersFromLoadedState — make V2Store.scanEdges stream on a read-write
-//     store too; it then answers from the last commit instead of from the in-memory slot arrays.
+// blockPairs is 1 here. A block key is [kind][block# u32 LE] in a byte-ordered map, so LMDB cursor
+// order stops being numeric order at block 256: [k,00,01,00,00] (block 256) sorts before
+// [k,01,00,00,00] (block 1). A store with 255 or fewer blocks of both kinds cannot distinguish a
+// correct reader from a cursor-order one. Runner sets blockPairs = 128 for the whole suite, so 300
+// rows per kind would be 3 blocks; this file drops it to 1 for its own store (restored in a
+// finally) and gets 300 blocks per kind, 45 of them past 255.
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.model.PassengerStopAssignment;
@@ -54,13 +36,9 @@ public class TestScanEdges {
     /// 300 resolved + 300 unresolved rows; at one pair per block that is 300 blocks of each.
     private static final int N = 600;
 
-    // ---------------------------------------------------------------- the fixture
-
     /// One store, built once per test method, each in its own temp directory. blockPairs is
-    /// process-wide state, so it is set and restored around the whole of the build AND the reads:
-    /// the value is read per V2Store instance at construction, and reading blocks written under one
-    /// chunking with another would be a different defect
-    /// from the one under test.
+    /// process-wide state read per V2Store instance at construction, so it is set and restored
+    /// around the build and the reads together.
     private static Path build() throws Exception {
         Path dir = Files.createTempDirectory("toolkit-scanedges-").resolve("db");
         try (Store store = Stores.create(dir, Stores.V2)) {
@@ -113,16 +91,13 @@ public class TestScanEdges {
         try {
             body.run(build());
         } finally {
-            // Back to whatever the suite runs at -- Runner sets 128 for the whole JVM.
+            // Runner sets 128 for the whole JVM.
             Conf.override(Conf.V2_BLOCK_PAIRS, 128);
         }
     }
 
-    // ---------------------------------------------------------------- the tests
-
-    /// A green here is only worth something if the store can tell numeric block order from cursor
-    /// order, so that fact is asserted rather than assumed — `nx db check` makes the same
-    /// refusal on a real store.
+    /// The fixture really does tell numeric block order from cursor order. `nx db check` makes the
+    /// same refusal on a real store.
     @Test
     void testTheHazardIsExercised() throws Exception {
         atOnePairPerBlock(dir -> {
@@ -176,9 +151,8 @@ public class TestScanEdges {
         });
     }
 
-    /// A READ-WRITE store delegates to iterEdges, because the in-memory slot arrays carry appends
-    /// and tombstones the blocks do not hold until beforeCommit writes them. Identity still holds;
-    /// there is simply nothing to defer, since a writable store loads eagerly.
+    /// A read-write store delegates to iterEdges, because the in-memory slot arrays carry appends
+    /// and tombstones the blocks do not hold until beforeCommit writes them.
     @Test
     void testWritableStoreAnswersFromLoadedState() throws Exception {
         atOnePairPerBlock(dir -> {
@@ -201,8 +175,6 @@ public class TestScanEdges {
             }
         });
     }
-
-    // ---------------------------------------------------------------- helpers
 
     private static List<long[]> edges(Iterable<long[]> it) {
         List<long[]> out = new ArrayList<>();

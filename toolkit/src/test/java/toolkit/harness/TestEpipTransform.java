@@ -5,14 +5,10 @@ package toolkit.harness;
 // everywhere), and the reopened database is asserted phase by phase:
 //
 //   A de-embed .......... the ServiceCalendar-embedded DayType/UicOperatingPeriod/
-//                         DayTypeAssignment appear as first-class rows. This arm alone cannot fail
-//                         if A is skipped, because the loader already materializes embedded
-//                         children as rows; the REAL gate is
-//                         testDeembedGatedByEmbeddedOnlyCalendar;
+//                         DayTypeAssignment appear as first-class rows;
 //   NOT done here ....... psaA3 (QuayRef only) keeps NO StopPlaceRef and the coordinate-less
-//                         placeholder quay qA0 stays in spA. Both repairs left for noi-pipeline's
-//                         per-feed sanitize-stop-assignments step; asserted negatively below so
-//                         that re-adding them here fails loudly rather than silently;
+//                         placeholder quay qA0 stays in spA. Both repairs belong to noi-pipeline's
+//                         per-feed sanitize-stop-assignments step;
 //   B calendar .......... the regrouped calendar objects survive under their ids;
 //   B interchange ....... the JourneyMeeting becomes a stay-seated ServiceJourneyInterchange
 //                         (to-side falls back to AtStopPointRef: sj2 has no pattern yet);
@@ -30,8 +26,7 @@ package toolkit.harness;
 //                         short name, and nameless quays inherit their StopPlace name;
 //   C2 levelrefs ........ qA1's LevelRef at a Level nobody defines is cleared; qB1's, at the
 //                         <Level> spB does define, survives, and that <Level> is untouched, with
-//                         the G1-G6 guard armed over the whole run. The unit behaviour and both
-//                         negative tests of the guard are TestEpipLevelRefs.
+//                         the G1-G6 guard armed over the whole run.
 //
 // Each method builds a fresh CLOSED db file (buildDbFile — or, for the A gate, a direct store-API
 // insert that bypasses the loader) and runs the exact production path EpipToDb.inPlace on it.
@@ -83,15 +78,12 @@ public class TestEpipTransform {
     // calls journey (sj2), a JourneyMeeting coupling them at station spA, a Trenitalia-style
     // ServiceCalendar with embedded children, and four PassengerStopAssignments.
     //
-    // The assignments are a corpus that has ALREADY been through noi-pipeline's per-feed
-    // sanitize-stop-assignments step, which is this transform's documented precondition: every one
-    // that resolves to a station carries its StopPlaceRef explicitly. That matters for psaA2 in
-    // particular — the phase-C interchange repair maps ssp -> station through
-    // EpipInterchange.epipRepairInterchangePoints' sspToStop index, which is built ONLY from
-    // assignments carrying a StopPlaceRef, so a quay-only psaA2 would put sspA2 in no station and
-    // the to-point remap below could not find it. psaA3 is the deliberate exception, quay-only and
-    // referenced by nothing else, so the "this transform backfills nothing" assertion has a
-    // subject.
+    // The assignments have ALREADY been through noi-pipeline's per-feed sanitize-stop-assignments
+    // step, this transform's documented precondition: every one that resolves to a station carries
+    // its StopPlaceRef explicitly. psaA2 must keep hers —
+    // EpipInterchange.epipRepairInterchangePoints maps ssp -> station through an sspToStop index
+    // built ONLY from assignments carrying one. psaA3 is the deliberate exception, quay-only and
+    // referenced by nothing else, so "this transform backfills nothing" has a subject.
     //
     // spA deliberately has NO centroid: the location inference must fall back to quay qA1's
     // projected-CRS location for sspA (the PSA's StopPlaceRef arm finds no mapping entry).
@@ -216,8 +208,7 @@ public class TestEpipTransform {
         return out;
     }
 
-    /// The embedded Quay of that id, or null. By id, not by position: the placeholder quay is no
-    /// longer stripped, so the list order is the source's.
+    /// The embedded Quay of that id, or null. The list order is the source's, so lookup is by id.
     private static Quay quayById(List<JAXBElement<?>> quays, String id) {
         for (JAXBElement<?> el : quays) {
             if (el.getValue() instanceof Quay q && id.equals(q.getId())) return q;
@@ -239,8 +230,7 @@ public class TestEpipTransform {
             Check.that(dtas.containsKey("dta1"), "calendar-embedded DayTypeAssignment de-embedded to a row");
 
             // psaA3 has only a QuayRef and KEEPS only a QuayRef: the StopPlaceRef backfill is
-            // noi-pipeline's per-feed sanitize-stop-assignments step, not a phase here. Asserted
-            // negatively so that re-adding it to this transform fails rather than passing quietly.
+            // noi-pipeline's per-feed sanitize-stop-assignments step, not a phase here.
             Map<String, PassengerStopAssignment> psas = byId(db, txn, PassengerStopAssignment.class);
             PassengerStopAssignment psaA3 = psas.get("psaA3");
             Check.isNull(psaA3.getStopPlaceRef(), "psaA3 StopPlaceRef NOT backfilled by this transform");
@@ -256,17 +246,13 @@ public class TestEpipTransform {
             Check.that(dayTypes.containsKey("e1:DayType:1"), "AC-derived DayType generated");
             UicOperatingPeriod derived = uops.get("e1:UicOperatingPeriod:1");
             Check.that(derived != null, "AC-derived UicOperatingPeriod generated");
-            // getFromDate() is a carrier, so the comparison normalises. This period is SYNTHESIZED
-            // by EpipCalendar from a flattened date set, so its wire form is canonical while the
-            // value it carries is exactly this instant.
+            // getFromDate() is a carrier, so the comparison normalises.
             Check.equals(LocalDateTime.of(2026, 1, 5, 0, 0), derived.getFromDate().toLocalDateTime(),
                     "derived period FromDate");
             Check.equals(LocalDateTime.of(2026, 1, 7, 0, 0), derived.getToDate().toLocalDateTime(),
                     "derived period ToDate");
-            // This object came back OUT of the database, so its carrier was re-parsed from the
-            // stored fragment and does have a lexical. The CANONICAL form is what EpipCalendar
-            // wrote, i.e. the synthesis went through XmlDateTime.from(...) and did not copy an
-            // input element's lexical through.
+            // The lexical, re-parsed from the stored fragment, is EpipCalendar's: it comes from
+            // XmlDateTime.from(...) and not from an input element copied through.
             Check.equals("2026-01-05T00:00:00", derived.getFromDate().getLexical(),
                     "the derived period was STORED in canonical form");
             Check.equals("111", derived.getValidDayBits(), "derived period day bits (3 valid days)");
@@ -280,13 +266,11 @@ public class TestEpipTransform {
         }
     }
 
-    /// The A de-embed gate PROPER: calendar children that exist ONLY embedded. The XML loader
-    /// already materializes ServiceCalendar-embedded children as first-class rows, so the
-    /// NeTEx-built arm above cannot fail when A is skipped. Here the ServiceCalendar bean is
-    /// inserted DIRECTLY through the store API, so dtE/uopE/dtaE live ONLY inside the calendar's
-    /// embedded lists. dtaE's DayTypeRef deliberately dangles (ref="nope"), so the phase-B calendar
-    /// generator SKIPS its group and never re-yields any of the three: the ONLY producer of the
-    /// asserted rows is phase A.
+    /// The A de-embed gate: calendar children that exist ONLY embedded. The XML loader materializes
+    /// ServiceCalendar-embedded children as first-class rows, so the fixture is inserted DIRECTLY
+    /// through the store API instead and dtE/uopE/dtaE live only inside the calendar's embedded
+    /// lists. dtaE's DayTypeRef deliberately dangles (ref="nope"), so the phase-B calendar
+    /// generator SKIPS its group: the only producer of the asserted rows is phase A.
     @Test
     void testDeembedGatedByEmbeddedOnlyCalendar(TestStore ts) throws Exception {
         ObjectFactory factory = new ObjectFactory();
@@ -343,7 +327,6 @@ public class TestEpipTransform {
         try (Store db = transformed(ts, "epip-b.lmdb"); Txn txn = db.roTxn()) {
             // The coordinate-less placeholder qA0 is NOT stripped: that is noi-pipeline's per-feed
             // sanitize-stop-assignments step, run before this transform ever sees a corpus.
-            // Asserted negatively so that re-adding the strip here fails rather than passing.
             Map<String, StopPlace> stops = byId(db, txn, StopPlace.class);
             List<JAXBElement<?>> quays = stops.get("spA").getQuays().getQuayRefOrQuay();
             Check.equals(2, quays.size(), "spA keeps both quays — this transform strips none");
@@ -397,8 +380,8 @@ public class TestEpipTransform {
             Check.that(pos.get(0) > 47.0 && pos.get(0) < 48.5,
                     "sspA latitude in the UTM33/5300000 band, got " + pos.get(0));
             // ... and sspA2 the same way: psaA2's QuayRef also resolves to qA1, and its
-            // StopPlaceRef (spA) finds NO mapping entry — spA has no centroid —
-            // so the last-wins StopPlaceRef arm does not overwrite the quay hit.
+            // StopPlaceRef (spA) finds NO mapping entry — spA has no centroid — so the last-wins
+            // StopPlaceRef arm does not overwrite the quay hit.
             LocationStructure a2Loc = ssps.get("sspA2").getLocation();
             Check.that(a2Loc != null, "sspA2 location inferred from its quay");
             Check.equals(Projection.WGS84_URN, a2Loc.getSrsName(), "sspA2 location reprojected to WGS84");

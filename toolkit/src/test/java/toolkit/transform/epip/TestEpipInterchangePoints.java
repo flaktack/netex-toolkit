@@ -2,17 +2,17 @@ package toolkit.transform.epip;
 
 // The EPIP interchange-point repair.
 //
-// A feed's JourneyMeeting gives one station-level AtStopPointRef for both
-// sides, but each journey passes its own platform ScheduledStopPoint at that station. The fix
-// (a) resolves the from/to point to the SSP each journey actually uses (matched by StopPlace via
-// PassengerStopAssignment), and (b) drops interchanges whose journeys are not present in the data.
+// A feed's JourneyMeeting gives one station-level AtStopPointRef for both sides, but each journey
+// passes its own platform ScheduledStopPoint at that station. The fix (a) resolves the from/to
+// point to the SSP each journey actually uses (matched by StopPlace via PassengerStopAssignment),
+// and (b) drops interchanges whose journeys are not present in the data.
 //
-// No xsi:type on the point refs, as a property of the binding: the model has no
-// ScheduledStopPointRef CLASS at all — only the structure — so the projected point ref's runtime
-// class equals the declared ScheduledStopPointRefStructure field type and JAXB has no subtype to
-// stamp. EXPECTED below therefore carries neither `xsi:type="ScheduledStopPointRef"` nor its
-// `xmlns:xsi` declaration on the From/ToPointRef lines. It DOES carry
-// nameOfRefClass="ServiceJourney" on the journey refs, which is set explicitly.
+// The point refs carry no xsi:type: the model has no ScheduledStopPointRef class, only the
+// structure, so the projected point ref's runtime class equals the declared
+// ScheduledStopPointRefStructure field type and JAXB has no subtype to stamp. EXPECTED below
+// therefore carries neither `xsi:type="ScheduledStopPointRef"` nor its `xmlns:xsi` declaration on
+// the From/ToPointRef lines. It does carry nameOfRefClass="ServiceJourney" on the journey refs,
+// which is set explicitly.
 
 import org.junit.jupiter.api.Test;
 import toolkit.test.Check;
@@ -74,8 +74,7 @@ public class TestEpipInterchangePoints {
 """;
 
     // Only jm1 survives (jm2 references an absent journey -> dropped). from/to resolve to the
-    // platform SSP each journey actually passes (ssp_st_1 / ssp_st_2), not the station aggregate
-    // (From/ToPointRef stripped of the serializer artifacts — header note.)
+    // platform SSP each journey actually passes (ssp_st_1 / ssp_st_2), not the station aggregate.
     static final String EXPECTED = """
 <ServiceJourneyInterchange xmlns="http://www.netex.org.uk/netex" xmlns:gml="http://www.opengis.net/gml/3.2" id="jm1" version="1">
   <StaySeated>true</StaySeated>
@@ -97,23 +96,21 @@ public class TestEpipInterchangePoints {
         Xml.assertXmlEqual(Xml.toXmlAll(result), EXPECTED);
     }
 
-    /// IDENTITY ARM. The generator's ServiceJourney index pass reads each journey's id and
-    /// JourneyPatternRef off the compressed bytes; with
-    /// `-Dtoolkit.epip.peekInterchangeIndex=false` it unmarshals the whole journey instead. Both
-    /// must emit the same interchanges.
+    /// Identity arm. The generator's ServiceJourney index pass reads each journey's id and
+    /// JourneyPatternRef off the compressed bytes; with `-Dtoolkit.epip.peekInterchangeIndex=false`
+    /// it unmarshals the whole journey instead. Both must emit the same interchanges.
     ///
-    /// **This fixture is the one that can tell the difference.** Both patterns exist and are
-    /// matched, so EXPECTED's `ssp_st_1` / `ssp_st_2` are reachable ONLY through
-    /// `journeyToPattern` — an index that lost the pattern refs would fall back to the station
-    /// aggregate `ssp_st_gen` on both sides — and the ref is spelt `ServiceJourneyPatternRef`, a
-    /// substitution-group member rather than the head element, which a name-equality peek would get
-    /// wrong.
+    /// Both patterns exist and are matched here, so EXPECTED's `ssp_st_1` / `ssp_st_2` are
+    /// reachable only through `journeyToPattern`; an index that lost the pattern refs falls back to
+    /// the station aggregate `ssp_st_gen` on both sides. The ref is spelt
+    /// `ServiceJourneyPatternRef`, a substitution-group member rather than the head element, which
+    /// a name-equality peek gets wrong.
     @Test
     void testPeekedIndexEmitsWhatTheDecodedIndexEmits(TestStore db) throws Exception {
         db.loadNetex(NETEX);
 
-        // This fixture HAS patterns, so the `_id_idx` guard is closed on both arms and the
-        // knob below is the only thing that varies; it is passed as unset for the same reason.
+        // This fixture has patterns, so the `_id_idx` guard is closed on both arms and the knob
+        // below is the only thing that varies.
         String peeked = runWith(db, null, null);      // unset = the shipped default, the peek path
         String decoded = runWith(db, "false", null);  // the full-decode path
 
@@ -123,21 +120,16 @@ public class TestEpipInterchangePoints {
 
     // -------------------------------------------------------------------------------
     //
-    // The same station and the same two meetings, with NO ServiceJourneyPattern in the store —
-    // the shape a pattern-less feed has. The journeys still CARRY a ServiceJourneyPatternRef,
-    // deliberately: that makes the two blob routes build a NON-EMPTY journeyToPattern while the
-    // `_id_idx` route builds none at all, so "the map is dead when patternPoints is empty" is
-    // asserted against a route that disagrees with the others and must still emit the same bytes.
+    // The same station and the same two meetings, with no ServiceJourneyPattern in the store — the
+    // shape a pattern-less feed has. The journeys still carry a ServiceJourneyPatternRef, so the
+    // two blob routes build a non-empty journeyToPattern while the `_id_idx` route builds none at
+    // all, and all three must still emit the same bytes.
     //
-    // Both sides therefore fall back to the meeting's own AtStopPointRef, and TWO of the three
-    // meetings must still be DROPPED — which is the in-suite control on the id set's other
-    // direction, an `_id_idx` route returning a SUPERSET:
-    //   jm2's ToJourneyRef names `sj_absent`, an id NO row of any class carries — a route that
-    //     invented ids, or read the wrong slice of the key, emits it;
-    //   jm3's ToJourneyRef names `ssp_st_gen`, an id that IS in `_id_idx` and is a
-    //     ScheduledStopPoint — a route that dropped or mis-spelt the class filter emits it, and
-    //     nothing else in this file would notice. It is here because `_id_idx` is the ONE index
-    //     that spans every class, which the ServiceJourney class map the blob routes walk does not.
+    // Both sides therefore fall back to the meeting's own AtStopPointRef, and two of the three
+    // meetings are dropped: jm2's ToJourneyRef names `sj_absent`, an id no row of any class
+    // carries, and jm3's names `ssp_st_gen`, an id that is in `_id_idx` and is a
+    // ScheduledStopPoint. `_id_idx` is the one index that spans every class, which the
+    // ServiceJourney class map the blob routes walk does not.
     static final String NETEX_NO_PATTERNS = """
 <ServiceFrame id="sf" version="1">
   <scheduledStopPoints>
@@ -179,10 +171,10 @@ public class TestEpipInterchangePoints {
 </TimetableFrame>
 """;
 
-    /// jm1 with both sides on the station aggregate — the pattern-less fallback. jm2 dropped.
-    /// (`version="1"` next to the source's `versionRef="1"` is the loader's own
-    /// class/version repair on the meeting's `AtStopPointRef`, not this generator's doing;
-    /// the fallback hands that very object straight through.)
+    /// jm1 with both sides on the station aggregate — the pattern-less fallback. jm2 dropped. The
+    /// `version="1"` next to the source's `versionRef="1"` is the loader's own class/version repair
+    /// on the meeting's `AtStopPointRef`, not this generator's doing; the fallback hands that very
+    /// object straight through.
     static final String EXPECTED_FALLBACK = """
 <ServiceJourneyInterchange xmlns="http://www.netex.org.uk/netex" xmlns:gml="http://www.opengis.net/gml/3.2" id="jm1" version="1">
   <StaySeated>true</StaySeated>
@@ -194,10 +186,10 @@ public class TestEpipInterchangePoints {
   <ToJourneyRef nameOfRefClass="ServiceJourney" version="1" ref="sj_b"/>
 </ServiceJourneyInterchange>""";
 
-    /// IDENTITY ARM. With `patternPoints` empty the index pass takes `_id_idx` and opens no blob;
+    /// Identity arm. With `patternPoints` empty the index pass takes `_id_idx` and opens no blob;
     /// the two blob routes still decompress (peek) or unmarshal (decode) every journey. All three
-    /// must emit the same interchanges, and this arm also watches the dangling meeting get dropped
-    /// and the fallback point get chosen.
+    /// must emit the same interchanges, the dangling meetings dropped and the fallback point
+    /// chosen.
     @Test
     void testIdIndexRouteEmitsWhatTheBlobRoutesEmit(TestStore db) throws Exception {
         db.loadNetex(NETEX_NO_PATTERNS);
@@ -211,15 +203,13 @@ public class TestEpipInterchangePoints {
         Xml.assertXmlEqual(viaIdx, EXPECTED_FALLBACK);
     }
 
-    /// The verify arm on the suite path. `-Dtoolkit.epip.idIndexJourneys.verify`
-    /// builds the id set BOTH ways and throws on the first id they disagree about, in either
-    /// direction; here it must run clean and must not change a byte of the output.
+    /// The verify arm on the suite path. `-Dtoolkit.epip.idIndexJourneys.verify` builds the id set
+    /// both ways and throws on the first id they disagree about, in either direction; here it must
+    /// run clean and must not change a byte of the output.
     ///
-    /// **This fixture is one on which the superset direction is REACHABLE**, which is why the arm
-    /// is asserted here and not on the patterned store: `_id_idx` holds rows for `ssp_st_gen`, the
-    /// three PassengerStopAssignments and the ScheduledStopPoints, and only the `full_key` class
-    /// filter keeps them out of `presentJourneys`. Drop that filter and this test fails
-    /// INDEX-ONLY.
+    /// On this fixture `_id_idx` holds rows for `ssp_st_gen`, the three PassengerStopAssignments
+    /// and the ScheduledStopPoints, and only the `full_key` class filter keeps them out of
+    /// `presentJourneys`. Drop that filter and this test fails on the index arm alone.
     @Test
     void testIdIndexVerifyArmRunsCleanAndChangesNothing(TestStore db) throws Exception {
         db.loadNetex(NETEX_NO_PATTERNS);
@@ -233,10 +223,10 @@ public class TestEpipInterchangePoints {
         Xml.assertXmlEqual(verified, EXPECTED_FALLBACK);
     }
 
-    /// THE GUARD, WATCHED TO FAIL. `_id_idx` carries ids and nothing else, so the route is correct
+    /// The guard, watched to fail. `_id_idx` carries ids and nothing else, so the route is correct
     /// only where `journeyToPattern` cannot reach an output — which is exactly
     /// `patternPoints.isEmpty()`. Take the same route with the guard forced open on the fixture
-    /// that HAS patterns and the resolved `ssp_st_1`/`ssp_st_2` collapse to the station aggregate.
+    /// that has patterns and the resolved `ssp_st_1`/`ssp_st_2` collapse to the station aggregate.
     @Test
     void testIdIndexRouteIsWrongWhenPatternsExistWhichIsWhyItIsGuarded(TestStore db)
             throws Exception {

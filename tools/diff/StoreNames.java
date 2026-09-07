@@ -27,12 +27,6 @@
 //     layout and equally cannot see a store that is bloated but logically identical.
 //   - `_edge_blocks` TOMBSTONES are compared verbatim, as slots. A compacted store and an
 //     uncompacted one can hold the same live edges in different slots and will DIFFER.
-//   - It is O(store bytes): every value in every map is read and hashed.
-//
-// Both packed formats are decoded, not just the two keyed maps: `_edge_blocks` kind 0 is
-// (referrer full_key, target full_key), kind 1 is (referrer full_key, `_unres_keys` intern id),
-// and an intern id is followed into `_unres_keys` so its target key's class trailer is re-keyed
-// too.
 //
 // REFUSALS. "CLASS MAPS BY NAME: identical=0 differ=0" reads exactly like a pass, so the gate
 // refuses rather than reports whenever it cannot prove it had something to look at:
@@ -434,9 +428,6 @@ public class StoreNames {
 
     // ------------------------------------------------------------------------------ self-test
     //
-    // Both halves are demonstrated: a comparator that always says "differ" would pass a bites-test
-    // and be useless.
-    //
     //   1  PURE RENUMBERING -> exit 0, the positive control.
     //   2  ONE BYTE OF ONE BLOB -> exit 1, naming the class.
     //   3  AN EDGE RETARGETED -> exit 1. Only `_edge_blocks` differs.
@@ -445,9 +436,6 @@ public class StoreNames {
     //      like a pass.
     //   6  AN UNLABELLED CLASS MAP -> exit 2, never a silent skip.
     //   7  A PATH THAT IS NOT A STORE -> exit 2.
-    //
-    // The stores are synthetic and tiny: no feed data, no model jar. This is the part of the gate
-    // that runs in CI.
 
     static void put(Env<byte[]> env, String name, byte[]... kv) {
         put(env, name.getBytes(StandardCharsets.UTF_8), kv);
@@ -621,7 +609,7 @@ public class StoreNames {
         if (!ok) {
             System.err.println("StoreNames: SELF-TEST FAILED. Until every arm passes, this gate's");
             System.err.println("  green means nothing — and a store comparator that cannot fail is the");
-            System.err.println("  §7.8 shape it was written to escape.");
+            System.err.println("  shape it was written to escape.");
             return 2;
         }
         System.out.println("StoreNames: self-test OK — it agrees on a pure renumbering, bites on a");

@@ -1,19 +1,9 @@
 package toolkit.harness;
 
-// ONE SEQUENCE, TWO WAYS IN.
-//
 // FeedToDb takes a .zip (via ZipLoad.run, which walks members) or a bare .xml/.xml.gz (via
 // NetexLoader.load). Everything after the bytes are in -- the post pass, then the mandatory
 // resolve()/resolveEmbeddings() pair -- must be identical, because none of it is a property of the
 // container format.
-//
-// IT WAS NOT IDENTICAL. The resolve pair lived inside ZipLoad.run, so the single-file arm restated
-// it wrongly: postLoad AFTER the resolve instead of before. A post pass that inserts objects
-// therefore had its references resolved when the feed arrived as a zip and left dangling when the
-// same bytes arrived as a bare .xml -- decided by the file extension.
-//
-// testPostLoadRunsBeforeResolveOnBothArms is that bug, executable, and the reason the sequence now
-// lives in the harness.
 //
 // NEUTER PROOF: move the postLoad call in FeedToDb.finishLoad below store.resolve() and the
 // single-arm assertion fails on the dangling reference.
@@ -40,11 +30,9 @@ public class TestFeedToDbArms {
     /// A Line whose OperatorRef points at an Operator the feed does NOT contain, so the reference
     /// lands in `_unresolved` and stays there until something supplies the target.
     ///
-    /// This shape is load-bearing. An earlier fixture put the Operator IN the feed and had
-    /// postLoad insert the referrer — which proves nothing, because `insertOne` resolves
-    /// eagerly against the id index when the target is already present. `_unresolved` only
-    /// ever holds FORWARD references, so the ordering was invisible and the test passed with the
-    /// bug reintroduced.
+    /// The forward reference is load-bearing: `_unresolved` only ever holds FORWARD references, and
+    /// `insertOne` resolves eagerly against the id index when the target is already present, so a
+    /// fixture carrying the Operator would make the ordering invisible.
     private static String feedXml() {
         return TestStore.SKELETON.replace("__FRAMES__",
                 "<ServiceFrame id=\"sf\" version=\"1\"><lines>"

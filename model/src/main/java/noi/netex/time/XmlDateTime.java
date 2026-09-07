@@ -6,30 +6,23 @@ import java.time.ZoneOffset;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/// Carrier for `xs:dateTime` **and** `xs:date` — one type for both.
+/// Carrier for `xs:dateTime` and `xs:date` — one type for both.
 ///
-/// Binding both to a single carrier is mandatory, not a convenience: `EpipCalendar` mixes
-/// `DayTypeAssignment.getDate()` (an `xs:date`) with
-/// `AvailabilityCondition.getFromDate()` (an `xs:dateTime`) in one collection. Two
-/// types would make that collection untypeable.
+/// The single carrier is load-bearing: `EpipCalendar` mixes `DayTypeAssignment.getDate()` (an
+/// `xs:date`) with `AvailabilityCondition.getFromDate()` (an `xs:dateTime`) in one collection, and
+/// two types would make that collection untypeable.
 ///
-/// A SERIALIZATION CARRIER, not a value type: it retains the source lexical form so a re-marshal
-/// is byte-exact, and keeps the timezone offset a plain LocalDateTime binding parses and discards.
+/// A serialization carrier: it retains the source lexical form so a re-marshal is byte-exact, and
+/// keeps the timezone offset a plain LocalDateTime binding parses and discards.
 ///
-/// NORMALISE BEFORE COMPARING, and never put a carrier in a Set — in particular not in the EPIP
+/// Normalise before comparing, and never put a carrier in a Set — in particular not in the EPIP
 /// calendar flattener, whose set membership decides the valid-day bits. A naive and an
 /// offset-bearing carrier naming the same wall clock are not interchangeable, and two carriers
 /// naming the same instant may differ lexically. [#hashCode()] therefore throws, turning a silent
 /// cardinality change into a failure; `equals` is left as identity.
 ///
-/// [#toLocalDateTime()] is the local part with the offset discarded, or `atStartOfDay()` on the
-/// date arm.
-///
-/// [#toString()] returns the LEXICAL form.
-///
-/// Unparseable input is NOT an error: the carrier keeps the raw text, reports [#isUnparsed()] and
-/// returns null, preserving the value rather than dropping it. Counted in [UnparsedTally], the only
-/// place it is visible — the adapter returned an object, so JAXB raises nothing.
+/// Unparseable input is not an error: the carrier keeps the raw text, reports [#isUnparsed()] and
+/// returns null from [#toLocalDateTime()]. It is counted in [UnparsedTally].
 public final class XmlDateTime {
 
     private static final Pattern DATE_TIME_LEXICAL = Pattern.compile(
@@ -56,12 +49,11 @@ public final class XmlDateTime {
 
     // ------------------------------------------------------------------ factories
 
-    /// Parses an `xs:dateTime` lexical form, retaining it verbatim (after whitespace
-    /// trimming) so a re-marshal is byte-exact.
+    /// Parses an `xs:dateTime` lexical form, retaining it verbatim (after whitespace trimming) so a
+    /// re-marshal is byte-exact.
     ///
-    /// Strict about the arm: a date-only value in an `xs:dateTime` field yields an
-    /// [unparsed][#isUnparsed()] carrier rather than being silently promoted. Use [#parseDate] for
-    /// `xs:date` fields.
+    /// A date-only value in an `xs:dateTime` field yields an [unparsed][#isUnparsed()] carrier
+    /// rather than being silently promoted. Use [#parseDate] for `xs:date` fields.
     ///
     /// @return `null` for `null` or blank input; never throws.
     public static XmlDateTime parse(String text) {
@@ -86,7 +78,7 @@ public final class XmlDateTime {
             int nano = nanoOf(m.group(7));
             LocalDateTime value;
             if (hour == 24 && minute == 0 && second == 0 && nano == 0) {
-                // xs:dateTime's end-of-day form; the old adapter's SMART resolver did the same.
+                // xs:dateTime's end-of-day form.
                 value = date.plusDays(1).atStartOfDay();
             } else if (hour > 23) {
                 return unparsed(text, false);
@@ -99,8 +91,8 @@ public final class XmlDateTime {
         }
     }
 
-    /// Parses an `xs:date` lexical form. The result reports [#isDateOnly()] and
-    /// normalises to `atStartOfDay()`.
+    /// Parses an `xs:date` lexical form. The result reports [#isDateOnly()] and normalises to
+    /// `atStartOfDay()`.
     ///
     /// @return `null` for `null` or blank input; never throws.
     public static XmlDateTime parseDate(String text) {
@@ -130,9 +122,10 @@ public final class XmlDateTime {
     }
 
     /// The one place an unparsed carrier is built for either arm — counted here because the carrier
-    /// raises no `ValidationEvent` and is therefore invisible to `BindEvents`. The two
-    /// arms are counted apart: a date-only lexical in an `xs:dateTime` field is a DIFFERENT
-    /// defect from unparseable text, and both land here.
+    /// raises no `ValidationEvent` (the adapter returned an object, so JAXB saw a success) and is
+    /// therefore invisible to `toolkit.codec.BindEvents`. The two arms are counted apart: a
+    /// date-only lexical in an `xs:dateTime` field is a different defect from unparseable text, and
+    /// both land here.
     private static XmlDateTime unparsed(String raw, boolean dateOnly) {
         UnparsedTally.record(dateOnly ? UnparsedTally.Kind.DATE : UnparsedTally.Kind.DATE_TIME, raw);
         return new XmlDateTime(null, null, dateOnly, raw, true);
@@ -140,6 +133,8 @@ public final class XmlDateTime {
 
     // ------------------------------------------------------------------ normalisation
 
+    /// The local part with the offset discarded, or `atStartOfDay()` on the date arm.
+    ///
     /// @return `null` if this carrier is [unparsed][#isUnparsed()].
     public LocalDateTime toLocalDateTime() {
         return local;

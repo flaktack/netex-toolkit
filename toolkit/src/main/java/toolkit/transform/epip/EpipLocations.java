@@ -1,8 +1,7 @@
 package toolkit.transform.epip;
 
 // Infers ScheduledStopPoint locations from their Quay or StopPlace and applies them — EPIP
-// generator 5. Its own file rather than ScheduledStopPoints, which holds the
-// synthesize/backfill/plan cluster.
+// generator 5.
 //
 // Binding decisions:
 //  - StopPlace.quays is getQuays().getQuayRefOrQuay(), a List<JAXBElement<?>>; an embedded Quay is
@@ -11,7 +10,6 @@ package toolkit.transform.epip;
 //    FareScheduledStopPointRefStructure, which is the sibling that must be excluded.
 //  - the PSA quay union: getQuayRef() value present AND NOT a TaxiStandRefStructure.
 //  - the PSA stop-place union: getStopPlaceRef() value present AND NOT a TaxiRankRefStructure.
-//  - ssp.location, ssp.projections and ssp.stopAreas are plain fields.
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.model.FareScheduledStopPointRefStructure;
@@ -42,7 +40,6 @@ public final class EpipLocations {
     /// location, then re-emit EVERY ScheduledStopPoint with `projections`/`stopAreas` cleared and a
     /// missing `location` backfilled from the map. The index passes run eagerly, before any
     /// emission; only the SSP re-emit streams, its cursor opened on first pull.
-    /// `generatorDefaults` is accepted and unused.
     public static Iterator<Object> inferLocationsFromQuayOrStopplaceAndApply(
             Store dbRead, Txn txn, GeneratorDefaults generatorDefaults) {
         Map<String, LocationStructure> mapping = new HashMap<>();
@@ -98,8 +95,7 @@ public final class EpipLocations {
             public Object next() {
                 if (!hasNext()) throw new NoSuchElementException();
                 ScheduledStopPoint ssp = (ScheduledStopPoint) ssps.next();
-                // Neither belongs in an EPIP ScheduledStopPoint; cleared here because this pass
-                // already re-emits every SSP.
+                // Neither belongs in an EPIP ScheduledStopPoint.
                 ssp.setProjections(null);
                 ssp.setStopAreas(null);
                 if (ssp.getLocation() == null) {

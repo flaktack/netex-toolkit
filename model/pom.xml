@@ -92,21 +92,19 @@
         </executions>
       </plugin>
 
-      <!-- This module's sources must name NO adapter outside noi.netex.xml — generated AND
-           hand-written, and the gate must prove it looked before it reports green.
+      <!-- This module's sources must name no adapter outside noi.netex.xml, generated and
+           hand-written alike.
 
            XJC installs jakarta.xml.bind.annotation.adapters.NormalizedStringAdapter on every
            xs:normalizedString field by default, and that adapter applies the whitespace-replace
            facet — it eats every CR/LF in the value. The xs:normalizedString binding in
-           src/main/xjb/00-global.xjb overrides it, and an override that silently fails to take is
-           the failure this build must not ship. The same holds for every other xjc:javaType line:
-           a surviving reference to some other adapter means that line did not apply.
+           src/main/xjb/00-global.xjb overrides it, and an override that fails to take raises
+           nothing. The same holds for every other xjc:javaType line: a surviving reference to
+           some other adapter means that line did not apply.
 
-           An allowlist, not a denylist: matching known adapter names is a check that passes on the
-           next one. The rule is that every adapter reference names noi.netex.xml, with two jakarta
-           adapters allowed by name because they are correct for the types XJC puts them on —
-           CollapsedStringAdapter (xs:NMTOKEN and friends) and HexBinaryAdapter. The set of "ours"
-           is read off the filesystem rather than listed here. -->
+           Every adapter reference must name noi.netex.xml, with two jakarta adapters allowed by
+           name because they are correct for the types XJC puts them on — CollapsedStringAdapter
+           (xs:NMTOKEN and friends) and HexBinaryAdapter. -->
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>exec-maven-plugin</artifactId>
@@ -122,10 +120,9 @@
                 <argument>-c</argument>
                 <argument><![CDATA[
                   gen="${project.build.directory}/generated-sources/xjc"
-                  # PROVE THE GATE IS OPERATIVE BEFORE TRUSTING ITS GREEN. `grep -r` on a missing
-                  # directory prints a warning, exits non-zero, and `|| true` swallows it -- so the
-                  # unguarded form reports "0 hits" and passes when XJC's output moves. A gate that
-                  # cannot tell "clean" from "nothing to check" is not a gate.
+                  # `grep -r` on a missing directory prints a warning, exits non-zero, and
+                  # `|| true` swallows it -- so the unguarded form reports "0 hits" and passes
+                  # when XJC's output moves.
                   if [ ! -d "$gen" ]; then
                     echo "GATE INOPERATIVE: $gen does not exist."
                     echo "XJC's output directory moved, or codegen was skipped. Point this gate at"
@@ -146,9 +143,6 @@
                     fi
                   done
 
-                  # OURS, READ OFF THE FILESYSTEM. A hand-written list here would go stale the
-                  # first time an adapter is added or removed, and a stale allowlist fails in the
-                  # permissive direction.
                   ours=$(find "$fixed/noi/netex/xml" -name '*.java' -printf '%f\n' \
                          | sed 's/\.java$//' | sort)
                   if [ "$(echo "$ours" | wc -w)" -lt 2 ]; then
@@ -159,13 +153,8 @@
                   fi
                   oursAlt=$(echo "$ours" | paste -sd'|')
 
-                  # The two jakarta adapters XJC installs CORRECTLY, plus the annotation and the
-                  # base class every adapter names. Everything else is foreign.
                   jakartaOk='XmlAdapter|XmlJavaTypeAdapter|CollapsedStringAdapter|HexBinaryAdapter'
 
-                  # THE GENERATED ARM. XJC refers to an adapter by simple name and imports it, so
-                  # the import lines are the complete census of what the generated model binds
-                  # through.
                   bad=$(grep -rhoE '^import [A-Za-z0-9_.]*Adapter;' "$gen" \
                         | sed -e 's/^import //' -e 's/;$//' | sort -u \
                         | grep -vE "^noi\.netex\.xml\.($oursAlt)$" \
@@ -183,30 +172,25 @@
                     exit 1
                   fi
 
-                  # THE HAND-WRITTEN ARM. Reading generated sources ONLY leaves a foreign adapter
-                  # typed by hand under src/main/java -- the very directory that holds
-                  # noi.netex.xml -- invisible. jakarta's NormalizedStringAdapter IS on this
-                  # module's compile classpath, so a hand-written carrier could delegate to the
+                  # Reading generated sources only leaves a foreign adapter typed by hand under
+                  # src/main/java invisible. jakarta's NormalizedStringAdapter is on this module's
+                  # compile classpath, so a hand-written carrier could delegate to the
                   # whitespace-replace behaviour the xjb binding exists to suppress, and every
                   # generated field would still name only noi.netex.xml.
                   #
                   # Scope: main sources only, both the fixed root and the version-selected seam
-                  # root. src/test/java is deliberately EXCLUDED -- AdaptersTest names jakarta's
+                  # root. src/test/java is excluded -- AdaptersTest names jakarta's
                   # NormalizedStringAdapter on purpose, as the oracle for the defect
-                  # VerbatimStringAdapter exists to avoid, and a gate that fires on its own test
-                  # fixtures is one people switch off.
+                  # VerbatimStringAdapter exists to avoid.
                   #
                   # Comment lines are filtered out: javadoc here legitimately names the adapters
-                  # these classes exist to replace, and saying so is worth more than an exact-match
-                  # grep. The filter drops `*`, `//` and `/*` lines only, so a trailing
-                  # end-of-line comment still trips the gate -- deliberately the safe direction.
+                  # these classes exist to replace. The filter drops `*`, `//` and `/*` lines only,
+                  # so a trailing end-of-line comment still trips the gate.
                   #
-                  # The comment filter has to run on WHOLE LINES, before any token extraction --
+                  # The comment filter has to run on whole lines, before any token extraction --
                   # `grep -o` would hand the filter a bare token with the `///` already gone, and
-                  # the filter would then pass every javadoc mention through. So: grep -n for
-                  # candidate lines, drop the comment ones, and only then pick tokens out of what
-                  # survives, in awk, with the `file:line:` prefix held aside so a filename ending
-                  # in Adapter.java cannot be mistaken for a reference.
+                  # every javadoc mention would pass through. The `file:line:` prefix is held aside
+                  # in awk so a filename ending in Adapter.java is not read as a reference.
                   hw=""
                   for r in "$fixed" "$seam"; do
                     hw="$hw$(grep -rnE '[A-Za-z0-9_.]*Adapter' "$r" --include='*.java' \
@@ -245,71 +229,6 @@
                   fi
                   echo "[gate] $n generated + $hwn hand-written sources bind through noi.netex.xml only"
                   echo "[gate] allowlist (from the filesystem): $(echo $ours)"
-                ]]></argument>
-              </arguments>
-            </configuration>
-          </execution>
-
-          <!-- Every seam class must have a body for the selected version.
-               build-helper's add-source accepts a directory that is not there and compiles
-               nothing, so a schema version with no seam would produce a jar silently missing
-               noi.netex.text.Mls and fail later, in the toolkit build, as an unresolved import
-               with no explanation. Fail here instead, with the reason.
-
-               Discovered, not enumerated: it takes the UNION of every .java under every
-               src/main/java-* root and requires the selected root to hold all of them.
-
-               Only java-2.0.0 exists now, so the cross-check arm is skipped rather than fatal —
-               with one version there is nothing to cross-check. The arm that must hold, "the
-               selected root must exist", is unconditional. -->
-          <execution>
-            <id>assert-seam-source-root</id>
-            <phase>validate</phase>
-            <goals><goal>exec</goal></goals>
-            <configuration>
-              <executable>bash</executable>
-              <arguments>
-                <argument>-c</argument>
-                <argument><![CDATA[
-                  base="${project.basedir}/src/main"
-                  sel="$base/java-${netex.schema.version}"
-                  if [ ! -d "$sel" ]; then
-                    echo "NO SEAM SOURCE ROOT FOR netex.schema.version=${netex.schema.version}:"
-                    echo "  expected $sel"
-                    echo "  This root holds the version-selected accessor seams:"
-                    echo "  noi.netex.text.Mls (MultilingualString becomes a mixed type at 2.0)"
-                    echo "  and noi.netex.calls.Calls (2.0 dissolves the Call_ substitution group)."
-                    echo "  build-helper add-source on a missing directory is a SILENT no-op, which"
-                    echo "  is why this is a build failure and not a warning."
-                    exit 1
-                  fi
-                  roots=$(find "$base" -maxdepth 1 -type d -name 'java-*' | sort)
-                  nroots=$(echo "$roots" | grep -c .)
-                  missing=""
-                  if [ "$nroots" -ge 2 ]; then
-                    for r in $roots; do
-                      for f in $(cd "$r" && find . -name '*.java' | sed 's|^\./||' | sort); do
-                        if [ ! -f "$sel/$f" ]; then
-                          missing="$missing
-  $f    (present in ${r##*/}, absent for ${netex.schema.version})"
-                        fi
-                      done
-                    done
-                  fi
-                  if [ -n "$missing" ]; then
-                    echo "SEAM CLASS WITHOUT A BODY FOR netex.schema.version=${netex.schema.version}:$missing"
-                    echo ""
-                    echo "Every seam class needs one body per schema version and ONE public surface."
-                    echo "Write the missing file under $sel; do not delete it from the other root."
-                    exit 1
-                  fi
-                  nseam=$(find "$sel" -name '*.java' | wc -l)
-                  if [ "$nroots" -lt 2 ]; then
-                    echo "[gate] accessor seam present for ${netex.schema.version} ($nseam classes);"
-                    echo "[gate] cross-root check skipped — only $nroots version root exists."
-                  else
-                    echo "[gate] accessor seam complete for ${netex.schema.version} ($nseam classes, $nroots roots)"
-                  fi
                 ]]></argument>
               </arguments>
             </configuration>

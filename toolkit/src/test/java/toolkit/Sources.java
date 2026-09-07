@@ -2,13 +2,9 @@ package toolkit;
 
 // The repository's source tree, as a list of .java files a test can scan.
 //
-// WHY THIS IS SHARED. Two honesty scans read the tree and hold it to a declared table:
-// TestProvenance pins the PROV-CAP markers against toolkit.prov.Capabilities, and TestConf pins
-// property reads against toolkit.util.Conf. A copy of a scan is a copy that can silently stop
-// finding things, which is the failure both scans exist to prevent, so there is one.
-//
-// assertOperative exists because a walk that degrades to zero files reports
-// success, and "green" then means "found nothing to check" rather than "checked and it was clean".
+// TestProvenance pins the PROV-CAP markers against toolkit.prov.Capabilities and TestConf pins
+// property reads against toolkit.util.Conf; both hold the tree to a declared table and both walk
+// it through here, so a scan cannot silently stop finding things in one of them alone.
 
 import toolkit.test.Check;
 
@@ -34,9 +30,7 @@ public final class Sources {
     /// caller under `tools/`), then cwd.
     ///
     /// `toolkit.repo.dir` and not a relative path off cwd, because surefire runs with the MODULE as
-    /// its working directory while three of these roots are the module's siblings. A guessed
-    /// `../` would be right under Maven and wrong under an IDE runner, and wrong here means every
-    /// root missing -- which [#all] refuses rather than reports green over.
+    /// its working directory while three of these roots are the module's siblings.
     public static Path root() {
         String p = System.getProperty("toolkit.repo.dir");
         if (p != null) return Path.of(p).toAbsolutePath().normalize();
@@ -45,9 +39,7 @@ public final class Sources {
         return Path.of("").toAbsolutePath();
     }
 
-    /// Every `.java` file under [#ROOTS], minus the ones `skip` accepts.
-    ///
-    /// Proves the subject exists and is the expected size before any caller believes a pass:
+    /// Every `.java` file under [#ROOTS], minus the ones `skip` accepts. Refuses a vacuous scan:
     /// every root must be a real directory, and the walk must find a plausible number of files.
     public static List<Path> all(java.util.function.Predicate<Path> skip) throws IOException {
         Path repo = root();
@@ -68,7 +60,6 @@ public final class Sources {
         return out;
     }
 
-    /// The file's text.
     public static String read(Path p) throws IOException {
         return Files.readString(p, StandardCharsets.UTF_8);
     }

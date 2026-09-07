@@ -3,14 +3,10 @@ package toolkit.util;
 // The probe must not eat its first element.
 //
 // EpipDbToXml wraps every member generator of every exported frame in a PeekIterator and builds the
-// NeTEx rel-structure only when hasAny() says there is something in it. So the probe runs on EVERY
-// container of EVERY split file, and the failure mode of getting it wrong is not an exception: the
-// head element is consumed by the probe and the export is short by exactly one member per
-// container, in valid XML that no schema check rejects.
-//
-// PeekIterator has no other caller in the suite, so all three states of its contract are pinned
-// here — they are three DIFFERENT return values from iterator(): probed-true (head first, then the
-// rest), probed-false (empty), never-probed (the underlying stream untouched).
+// NeTEx rel-structure only when hasAny() says there is something in it, so the probe runs on every
+// container of every split file. Getting it wrong raises no exception: the head element is consumed
+// by the probe and the export is short by exactly one member per container, in valid XML that no
+// schema check rejects.
 
 import org.junit.jupiter.api.Test;
 import toolkit.test.Check;

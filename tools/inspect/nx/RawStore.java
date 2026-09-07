@@ -23,10 +23,10 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.BiPredicate;
 
-/// Read-only point access to a v2 store's class maps and id index, **bypassing `V2Store`**.
+/// Read-only point access to a v2 store's class maps and id index, bypassing `V2Store`.
 ///
 /// The SPI store's constructor materialises the whole resolved and unresolved edge set plus the
-/// intern table on the heap before the first read, which a "show me one object" tool must not pay.
+/// intern table on the heap before the first read.
 ///
 /// What it therefore knows about the on-disk layout:
 ///
@@ -40,8 +40,9 @@ import java.util.function.BiPredicate;
 /// - a class-map row is `localKey(4, LE)` -&gt; `[4-byte LE inflated length][LZ4 block]`
 ///    (A5's fragment codec value format).
 ///
-/// One long-lived read transaction is held open for the life of the handle — safe here (read-only
-/// env, single thread, no writer to starve), and it makes a lookup a few microseconds.
+/// One long-lived read transaction is held open for the life of the handle. That holds only while
+/// the env is opened read-only and read from one thread, with no writer to starve. Nothing here
+/// enforces it.
 public final class RawStore implements AutoCloseable {
 
     /// One `_id_idx` row that matched an address.
@@ -91,7 +92,7 @@ public final class RawStore implements AutoCloseable {
         this.formatMarker = fmt == null ? null : new String(fmt, StandardCharsets.UTF_8);
         if (formatMarker == null && names.contains("_class_idx")) {
             // The retired v1 map layout: the class table is not in _meta there and the values are
-            // pickles, not fragment blobs, so there is nothing to decode. Say which, and stop.
+            // pickled, not fragment blobs, so there is nothing to decode.
             String have = String.join(", ", names);
             txn.close();
             env.close();
@@ -152,11 +153,8 @@ public final class RawStore implements AutoCloseable {
         return out;
     }
 
-    /// Every `_id_idx` row at the `id NUL` prefix, i.e. **every version and every
-    /// class** stored under this id.
-    ///
-    /// All of them: duplicate ids are legal, and picking the first row silently could render a
-    /// different object from the one the operator asked about.
+    /// Every `_id_idx` row at the `id NUL` prefix, i.e. every version and every class stored under
+    /// this id. Duplicate ids are legal, so all of them are returned.
     public List<Hit> lookup(String id, String version, String className) {
         byte[] prefix = NulKeyCodec.encodePrefix(id, version, null, false);
         List<Hit> out = new ArrayList<>();
@@ -204,15 +202,12 @@ public final class RawStore implements AutoCloseable {
         return n;
     }
 
-    /// Row count of a class map (a cursor walk; cheap enough at these sizes).
+    /// Row count of a class map, by cursor walk.
     public long countClass(int classIdx) {
         return scanClass(classIdx, (k, v) -> true);
     }
 
     /// Row count from LMDB's own `MDB_stat` — O(1), no cursor walk and no value copies.
-    ///
-    /// [#countClass] reads every value to count keys. A sweep that must size every class map before
-    /// sampling needs this one instead.
     public long entries(int classIdx) {
         Dbi<byte[]> d = classDbi(classIdx);
         return d == null ? 0 : d.stat(txn).entries;
@@ -220,12 +215,6 @@ public final class RawStore implements AutoCloseable {
 
 
     // ================================================================ the side maps
-    //
-    // v2's side maps are readable point-wise or streaming, and none of them needs the SPI store's
-    // constructor.
-    //
-    // There is no edge decoder here: the SPI's streaming readers are the one reader of
-    // _edge_blocks. edgeBlockKeys() reads block KEYS and never a pair.
 
     /// Raw sub-database names exactly as `Env.getDbiNames()` returns them (for `stat`).
     public List<byte[]> dbiNames() { return allDbiNames; }
@@ -294,13 +283,12 @@ public final class RawStore implements AutoCloseable {
     /// The `_edge_blocks` block NUMBERS present, per kind, ascending — `[0]` kind 0,
     /// `[1]` kind 1. A keys-only cursor pass: no block value is read and no pair is decoded.
     ///
-    /// One caller: `nx db check` compares `Store.scanEdges` against `Store.iterEdges` on an
-    /// order-sensitive digest, and that comparison is **vacuous on a store with ≤255 blocks of both
-    /// kinds**, where lexicographic and numeric block order coincide. Whether a store exercises the
-    /// hazard is a question about the KEYS (`[kind][block# u32 LE]`, so `[k,00,01,00,00]` = block
-    /// 256 sorts before `[k,01,00,00,00]` = block 1), so it is asked here rather than through the
-    /// SPI. The cursor-order permutation of these numbers must differ from their numeric order, or
-    /// the check has proved nothing.
+    /// Keys are `[kind][block# u32 LE]`, so `[k,00,01,00,00]` = block 256 sorts before
+    /// `[k,01,00,00,00]` = block 1. `nx db check` compares `Store.scanEdges` against
+    /// `Store.iterEdges` on an order-sensitive digest, and that comparison is vacuous on a store
+    /// with ≤255 blocks of both kinds, where lexicographic and numeric block order coincide: the
+    /// cursor-order permutation of these numbers must differ from their numeric order, or the check
+    /// has proved nothing.
     public int[][] edgeBlockKeys() {
         Dbi<byte[]> d = side("_edge_blocks", false);
         int[][] out = new int[2][];

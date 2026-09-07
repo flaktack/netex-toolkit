@@ -2,16 +2,11 @@ package toolkit.geo;
 
 // Reprojection on proj4j and the proj4j-epsg registry.
 //
-// Nothing here knows a profile: crsTo is a parameter and the geo classes come from the model. The
-// policy — send every geo class to WGS84 — is one Ensemble.Operation registration in the driver.
-// Package toolkit.geo rather than toolkit.model, which is reflection over the generated classes
-// and depends on nothing outside the model.
-//
 // srsName RESOLUTION RULE:
 //   * LocationStructure with a pos: pos.srsName, else location.srsName, else WGS84_URN — null and
 //     empty both fall through;
 //   * everything else: its own srsName, else WGS84_URN;
-//   * the comparison against crsTo is on RAW STRINGS, so "EPSG:4326" != the URN form and an
+//   * the comparison against crsTo is on raw strings, so "EPSG:4326" != the URN form and an
 //     EPSG:4326-labelled geometry still takes an identity transform plus a requantize;
 //   * proj4j accepts "AUTH:CODE" only, so the OGC URN form is reduced to AUTH:CODE with the
 //     authority uppercased; everything else passes through verbatim;
@@ -19,11 +14,8 @@ package toolkit.geo;
 //
 // AXIS ORDER: the EPSG database orders geographic CRS axes (lat, lon) and projected ones (easting,
 // northing), while proj4j always works in (x = lon/easting, y = lat/northing). Transform swaps the
-// pair on the geographic side, keyed off isGeographic(). KNOWN LIMIT (OPEN.md §16): an exotic
-// northing-easting projected CRS would deviate.
-//
-// Precision: outputs are quantized as new BigDecimal(double) — the exact binary expansion — then
-// setScale(n, HALF_UP).
+// pair on the geographic side, keyed off isGeographic(). Known limit: an exotic northing-easting
+// projected CRS would deviate.
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.gml.AbstractRingPropertyType;
@@ -83,17 +75,9 @@ public final class Projection {
 
     // --------------------------------------------------------------- what a pass could not project
     //
-    // Three counters, because three sites here silently produce coordinates the surrounding
-    // document lies about:
-    //
-    //   * the CRS fallback is CACHED, and the log fires on the BUILD, so one line covers every
-    //     later geometry resolving the same unparseable srsName. What is counted here is the USE.
-    //   * both projectLocation arms leave coordinates in the SOURCE CRS when they cannot project.
-    //     With crsTo = WGS84 the export then carries source-CRS numbers inside a document that
-    //     says WGS84 — the one failure here that produces WRONG values rather than missing ones.
-    //
-    // The message strings are shared between the site, which refuses when strict, and the
-    // aggregate, which warns when not.
+    // Three counters, for the three sites that silently produce coordinates the surrounding
+    // document contradicts. The message strings are shared between the site, which refuses when
+    // strict, and the aggregate, which warns when not.
 
     private static final String TAG = "projection";
 
@@ -124,8 +108,8 @@ public final class Projection {
     /// was reported. Idempotent: a second call after a first reports zero, which
     /// [Strictness#require] keeps silent.
     ///
-    /// Called by the driver, not here: this class owns no pass — it is the body of an
-    /// `Ensemble.Operation` registered per object — so only the caller knows when the pass ends.
+    /// Called by the driver: this class owns no pass — it is the body of an `Ensemble.Operation`
+    /// registered per object — so only the caller knows when the pass ends.
     public static Dropped reportDropped(String tag) {
         Dropped d = new Dropped(FALLBACK_USES.getAndSet(0), LOCATIONS_NO_COORDS.getAndSet(0),
                 LOCATIONS_SOURCE_CRS.getAndSet(0));
@@ -139,9 +123,9 @@ public final class Projection {
     }
 
     /// Count one occurrence, and — under `-Dtoolkit.strict.droppedOutput=true` — refuse at the
-    /// site. The rest of the policy refuses at the harness boundary instead; this concern cannot,
-    /// because the only boundary reachable from here is a shutdown hook, whose exception would
-    /// print and leave the exit code 0.
+    /// site rather than at the harness boundary the rest of the policy uses: the only boundary
+    /// reachable from here is a shutdown hook, whose exception would print and leave the exit
+    /// code 0.
     private static void countDropped(AtomicLong counter, String what) {
         long n = counter.incrementAndGet();
         if (Strictness.DROPPED_OUTPUT) Strictness.require(true, "droppedOutput", n, TAG, what);
@@ -184,9 +168,8 @@ public final class Projection {
     }
 
     /// Whether `name` resolves to a CRS under the rule in the class header — no logging, no
-    /// fallback, nothing counted. For a caller that has to decide whether a name is a CRS at all
-    /// BEFORE any geometry is stamped with it; going through [#resolveTransform] instead would
-    /// count the answer as a dropped geometry and fire the fallback ERROR.
+    /// fallback, nothing counted. Not [#resolveTransform], which would count the answer as a
+    /// dropped geometry and fire the fallback error.
     ///
     /// Answers from the same proj4j registry that [#resolveCrs] uses, so it cannot reject a name
     /// this class would go on to accept.
@@ -214,7 +197,8 @@ public final class Projection {
                 Boolean.TRUE.equals(src.isGeographic()), Boolean.TRUE.equals(dst.isGeographic()));
     }
 
-    /// The shared cache + CRSError-fallback body of get_transformer_by_srs_name / project_polygon.
+    /// The shared cache and CRSError-fallback body behind `getTransformerBySrsName` and
+    /// `projectPolygon`.
     public static Transform resolveTransform(String srsName, String crsTo) {
         String mapping = srsName + "_" + crsTo;
         Transform transformer = TRANSFORMERS.get(mapping);
@@ -230,7 +214,7 @@ public final class Projection {
             }
             TRANSFORMERS.put(mapping, transformer);
         }
-        // Counted on every USE, cache hits included: the assumption is taken once per srsName and
+        // Counted on every use, cache hits included: the assumption is taken once per srsName and
         // paid once per geometry.
         if (!FALLBACK_KEYS.isEmpty() && FALLBACK_KEYS.contains(mapping)) {
             countDropped(FALLBACK_USES, WHAT_FALLBACK);
@@ -250,9 +234,8 @@ public final class Projection {
 
     // ------------------------------------------------- getTransformerBySrsName
 
-    /// `location` is a LocationStructure or a gml LineString (
-    /// `LocationStructure2 | LineString`). Returns null when the resolved source srs IS
-    /// `crsTo` (string comparison) — i.e. nothing to do.
+    /// `location` is a [LocationStructure] or a gml [LineStringType]. Returns null when the
+    /// resolved source srs is `crsTo` (string comparison) — nothing to do.
     public static Transform getTransformerBySrsName(Object location, String crsTo) {
         String srsName;
         if (location instanceof LocationStructure loc && loc.getPos() != null) {
@@ -306,8 +289,7 @@ public final class Projection {
                 return true;
             }
         } else {
-            // Neither a pos nor a lat/lon pair: nothing here to read, so the location keeps its
-            // srsName and passes through.
+            // Neither a pos nor a lat/lon pair: the location keeps its srsName and passes through.
             countDropped(LOCATIONS_NO_COORDS, WHAT_NO_COORDS);
             Log.warn("projection: unsupported CRS, location left unprojected");
         }
@@ -345,9 +327,10 @@ public final class Projection {
         } else if (location.getSrsName() != null
                 && !location.getSrsName().equals("EPSG:4326")
                 && !location.getSrsName().equals(WGS84_URN)) {
-            // A NON-WGS84 CRS with no pos to transform: the latitude/longitude attributes stay as
+            // A non-WGS84 CRS with no pos to transform: the latitude/longitude attributes stay as
             // they are, in that CRS, from a method whose contract is "the result is WGS84", and
-            // every consumer reads them as degrees. This counter measures WRONG coordinates.
+            // every consumer reads them as degrees. This counter measures wrong values, not
+            // missing ones.
             countDropped(LOCATIONS_SOURCE_CRS, WHAT_SOURCE_CRS);
             Log.warn("projection: unsupported CRS, location left unprojected");
         }
@@ -392,12 +375,12 @@ public final class Projection {
                 if (val instanceof DirectPositionType pos) {
                     xx.add(pos.getValue().get(0));
                     yy.add(pos.getValue().get(1));
-                    // z only exists for srs_dimension 3 — a 2D Pos has two values
+                    // z only exists at srsDimension 3 — a 2D Pos has two values
                     if (srsDimension >= 3) zz.add(pos.getValue().get(2));
                 }
             }
         } else {
-            return; // KNOWN DECISION (OPEN.md §16): guarded, where the bare access would throw
+            return; // no coordinates in either encoding
         }
 
         if (srsDimension == 2) {
@@ -453,8 +436,8 @@ public final class Projection {
         }
         if (crsTo.equals("EPSG:4326")) {
             // Extra requantize pass for a bare-EPSG:4326 target, which the URN-form crsTo never
-            // reaches. Exterior: requantize the posList in place, guarded. Interior: requantized
-            // only when the first union element is still a Pos, which post-projection it is not.
+            // reaches. The interior arm runs only while the first union element is still a Pos,
+            // which after projection it is not.
             if (exteriorRing != null && exteriorRing.getPosList() != null) {
                 List<Double> v = exteriorRing.getPosList().getValue();
                 v.replaceAll(d -> quantizeDouble(d, 6));
@@ -485,7 +468,7 @@ public final class Projection {
 
     /// Project every geometry of the object to `crsTo` in place; return whether anything was
     /// modified. Objects already in the target CRS — explicitly, or srs-less and therefore assumed
-    /// to be — pass through untouched, so the caller can skip re-emitting them. This IS the
+    /// to be — pass through untouched, so the caller can skip re-emitting them. This is the
     /// ensemble operation body: register it for every class in `GeoClasses.all()` the store holds.
     public static boolean reprojectionChanged(Object deserialized, String crsTo) {
         boolean[] changed = {false};
@@ -541,9 +524,8 @@ public final class Projection {
     // lives here instead. Visits every geo sub-object of the tree, root excluded; geo objects and
     // references are leaves.
 
-    // Compared with getPackageName().equals(...), not a prefix test. This walk is the ONE place
-    // that deliberately spans BOTH packages, and under the shared noi.netex. root a prefix test
-    // could not tell them apart.
+    // Compared with getPackageName().equals(...), not a prefix test: this walk deliberately spans
+    // both packages, and under the shared noi.netex. root a prefix test could not tell them apart.
     private static final String NETEX_PKG = EntityStructure.class.getPackageName();
     private static final String GML_PKG = PolygonType.class.getPackageName();
 
@@ -601,9 +583,9 @@ public final class Projection {
         }
         Class<?> c = v.getClass();
         if (!inWalkedPackages(c) || c.isEnum()) return;
-        if (v instanceof VersionOfObjectRefStructure) return;       // refs are leaves
+        if (v instanceof VersionOfObjectRefStructure) return;
         if (isGeo(v)) {
-            visitor.accept(v);                                      // geo objects are leaves too
+            visitor.accept(v);
             return;
         }
         walkGeo(v, visitor);

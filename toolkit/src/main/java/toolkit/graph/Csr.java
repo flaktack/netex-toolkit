@@ -4,19 +4,15 @@ import it.unimi.dsi.fastutil.longs.LongArrays;
 
 import java.util.Arrays;
 
-/// In-memory CSR adjacency, forward AND inverse, over full_key edge pairs: ~30 bytes per edge
+/// In-memory CSR adjacency, forward and inverse, over full_key edge pairs: ~30 bytes per edge
 /// retained.
 ///
-/// [#build] accepts edges in ANY order — pairs are co-sorted by (src, dst) and exact duplicates
+/// [#build] accepts edges in any order — pairs are co-sorted by (src, dst) and exact duplicates
 /// dropped, matching the DUPSORT edge-map semantics where a pair stored twice is one row.
 ///
 /// Arrays: nodes\[n\] sorted distinct full_keys; fwdOff\[n+1\]/fwdKeys\[E\] targets grouped by
-/// referrer; invOff\[n+1\]/invKeys\[E\] referrers grouped by target.
-///
-/// The int node-index mirrors are NOT retained: they cost 8 bytes per deduped edge for the life of
-/// a run and nothing reads them after the build. An index is `Arrays.binarySearch(nodes, key)`,
-/// which is what [#nodeIndex] is. The forward mirror survives as a build-local, the inverse pass
-/// needing it.
+/// referrer; invOff\[n+1\]/invKeys\[E\] referrers grouped by target. The int node-index mirrors are
+/// not retained; an index is [#nodeIndex], a binary search over `nodes`.
 public final class Csr {
     public final long[] nodes;
     public final long[] fwdOff, invOff;
@@ -33,13 +29,14 @@ public final class Csr {
         this.e = fwdKeys.length;
     }
 
-    /// Build from parallel src/dst full_key arrays (any order; duplicates collapse). Destructive on inputs.
+    /// Build from parallel src/dst full_key arrays (any order; duplicates collapse). Destructive on
+    /// inputs.
     public static Csr build(long[] src, long[] dst) {
         if (src.length != dst.length) throw new IllegalArgumentException("src/dst length mismatch");
         int rawE = src.length;
         // co-sort pairs by (src, dst)
         LongArrays.parallelQuickSort(src, dst);
-        // dedup identical pairs (DUPSORT semantics)
+        // dedup identical pairs
         int E = 0;
         for (int i = 0; i < rawE; i++) {
             if (i > 0 && src[i] == src[E - 1] && dst[i] == dst[E - 1]) continue;
@@ -68,7 +65,6 @@ public final class Csr {
         if (e != E) throw new IllegalStateException("src key not in node table");
         long[] fwdKeys = Arrays.copyOf(dst, E);
 
-        // target indices via binary search
         int[] dstIdx = new int[E];
         for (int i = 0; i < E; i++) dstIdx[i] = Arrays.binarySearch(nodes, fwdKeys[i]);
 

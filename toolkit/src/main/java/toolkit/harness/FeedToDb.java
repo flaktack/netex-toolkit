@@ -13,16 +13,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 
-/// The LOADER sandwich — feed to a fresh store — beside [DbToDb] (transforms) and
-/// [InPlace] (fixes). A loader driver is a [ZipLoad.Options] configuration plus one
-/// `driverMain` call; the harness owns the CLI, the validate-before-destroy guard, store
-/// creation, the load, the mandatory resolve pair, and the post-conditions.
+/// The LOADER sandwich: a feed into a fresh store. A loader driver is a [ZipLoad.Options]
+/// configuration plus one `driverMain` call; the harness owns the CLI, the validate-before-destroy
+/// guard, store creation, the load, the mandatory resolve pair, and the post-conditions.
 ///
-/// It takes `.xml`, `.xml.gz` and `.zip`, because the loader does. A harness restricted to zips
-/// would force the single-file driver to hand-roll its own `main`, and with it every
-/// post-condition.
+/// It takes `.xml`, `.xml.gz` and `.zip`, because the loader does.
 ///
-/// The target is DELETED and recreated. Appending into a pre-populated store is out of scope.
+/// The target is deleted and recreated. Appending into a pre-populated store is out of scope.
 ///
 /// Script usage (uncompiled, JEP 458):
 ///
@@ -44,15 +41,12 @@ public final class FeedToDb {
         return lower.endsWith(".zip") || lower.endsWith(".xml") || lower.endsWith(".xml.gz");
     }
 
-    /// Two ways in, ONE sequence out.
+    /// Two ways in, one sequence out. [ZipLoad#run] reads a zip's members, [NetexLoader#load] a
+    /// single file. Everything after the bytes are in — the post pass, then the `resolve()` +
+    /// `resolveEmbeddings()` pair — happens here, once, for both.
     ///
-    /// [ZipLoad#run] reads a zip's members, [NetexLoader#load] a single file. Everything after the
-    /// bytes are in — the post pass, then the `resolve()` + `resolveEmbeddings()` pair — happens
-    /// HERE, once, for both. Owned by the container format instead, a post pass that inserts objects
-    /// would have its references resolved on one path and left dangling on the other.
-    ///
-    /// Merge policies apply on BOTH paths, being dedup rules over inserted objects and nothing to
-    /// do with zip membership. Genuinely zip-only options REFUSE rather than being dropped quietly.
+    /// Merge policies apply on both paths, being dedup rules over inserted objects and nothing to do
+    /// with zip membership. Genuinely zip-only options refuse rather than being dropped quietly.
     private static LoadStats load(Path feed, Store store, ZipLoad.Options opts) throws Exception {
         if (opts == null) opts = ZipLoad.Options.DEFAULTS;
         LoadStats stats;
@@ -96,7 +90,7 @@ public final class FeedToDb {
         Path db = Path.of(a.positional().get(1));
         String format = a.get("--format", Stores.V2);
 
-        // Everything below the line is destructive, so every input check happens ABOVE it.
+        // Everything below the line is destructive, so every input check happens above it.
         if (!Stores.V2.equals(format)) {
             Log.error(Stores.RETIRED_V1.equals(format)
                     ? "--format v1: that store format was retired; v2 is the only format."
@@ -114,15 +108,14 @@ public final class FeedToDb {
         try (Store store = Stores.create(db, format)) {
             stats = load(feed, store, opts);
             Log.info("[%s] loaded %,d objects (%.1f s)", tag, stats.objects(), Log.secs(t0));
-            // THE POST-CONDITIONS, decided here once with the totals in hand: a load that inserted
+            // The post-conditions, decided here once with the totals in hand: a load that inserted
             // nothing, and a load whose fragment capture failed and stored re-marshals instead of
             // source bytes. Both otherwise exit 0 with only a warning.
             Strictness.refuseIf(Strictness.EMPTY_OUTPUT, "emptyOutput", stats.objects() == 0,
                     tag, "this load inserted no objects — the feed matched nothing loadable");
             Strictness.require(Strictness.REMARSHAL, "remarshal", stats.captureFallbacks(),
                     tag, "objects were stored as a JAXB re-marshal instead of their source bytes");
-            // What came in, by class: on a load the interesting reading is the SHAPE of the feed,
-            // which the total alone does not give. No zero note; emptyOutput has already refused.
+            // What came in, by class. No zero note; emptyOutput has already refused.
             Harness.reportInserted(tag, store, "loaded", null);
         } catch (Exception e) {
             Log.error("%s", Log.trace(e));
@@ -130,7 +123,7 @@ public final class FeedToDb {
         }
         Log.info("[%s] done: %s (%.1f s, peak RSS %,d kB)", tag, db, Log.secs(t0), Log.peakRssKb());
         Harness.finish(tag);
-        // Persist what this load TOLERATED: the store itself holds no record, so a downstream stage
+        // Persist what this load tolerated: the store itself holds no record, so a downstream stage
         // cannot otherwise tell a clean build from one that swallowed its bind losses.
         LoadReport.write(db, tag, Map.of(
                 "remarshal", stats.captureFallbacks(),

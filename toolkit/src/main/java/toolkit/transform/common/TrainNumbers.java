@@ -1,16 +1,13 @@
 package toolkit.transform.common;
 
 // TrainNumber synthesis, plus the Trenitalia-specific normalizeTrainNumber, trainNumberForJourney,
-// tnId and trainNumberUpdates.
-//
-// A COUNTRY'S POLICY IS COMPILED HERE, against this package's own rule, because it is the worked
-// example for BOTH transform sandwiches -- TrenitaliaDbToDb (DbToDb) and TrenitaliaInPlace
-// (InPlace) in scripts/ -- and a source-launched driver can reach nothing but the jar. The generic
-// half is [#synthesizeTrainNumbers], which takes the two policy functions; `updates`, `tnId` and
-// `trainNumberForJourney` are the Trenitalia arguments to it.
+// tnId and updates. The generic half is synthesizeTrainNumbers, which takes the two policy
+// functions; the other three are the Trenitalia arguments to it. The country policy is compiled
+// into the jar because scripts/TrenitaliaDbToDb.java and scripts/TrenitaliaInPlace.java are
+// source-launched and can reach nothing else.
 //
 // One streaming pass re-emits every ServiceJourney and interleaves a first-class TrainNumber
-// BEFORE its first referrer, so the journey's TrainNumberRef resolves the moment it is inserted.
+// before its first referrer, so the journey's TrainNumberRef resolves the moment it is inserted.
 // One TrainNumber per distinct normalized number; journeys already carrying trainNumbers are
 // skipped; only the small per-distinct-number map is retained, so the journeys themselves are
 // never held in memory.
@@ -65,7 +62,7 @@ public final class TrainNumbers {
         return "IT:TrainNumber:" + num;
     }
 
-    /// One TrainNumber per distinct number found in a journey's NAME.
+    /// One TrainNumber per distinct number found in a journey's name.
     public static Iterator<Object> updates(Store db, Txn txn) {
         return synthesizeTrainNumbers(db, txn, TrainNumbers::trainNumberForJourney,
                 TrainNumbers::tnId, "trenitalia train-numbers");

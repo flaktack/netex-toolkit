@@ -3,7 +3,7 @@ package toolkit.transform.epip;
 // EPIP calendar: DayTypeAssignment grouping and dangling-DayTypeRef tolerance.
 //
 // 1. The EPIP service calendar groups assignments per DayType with a run-length grouping, which
-//    only merges ADJACENT equal keys, so the input is sorted by the grouping key first. Unsorted,
+//    only merges adjacent equal keys, so the input is sorted by the grouping key first. Unsorted,
 //    interleaved assignments (dt1, dt2, dt1 in document order) split dt1 into two groups.
 // 2. An assignment whose DayTypeRef targets a DayType that is not loaded is skipped with a warning,
 //    matching the tolerance applied to dangling operating-period refs.
@@ -65,7 +65,6 @@ public class TestEpipCalendarGrouping {
         </ServiceCalendarFrame>
         """;
 
-    /// Non-adjacent assignments form one group, and a dangling DayTypeRef is skipped.
     @Test
     void testNonAdjacentAssignmentsFormOneGroupAndDanglingDayTypeIsSkipped(TestStore db)
             throws Exception {
@@ -74,14 +73,10 @@ public class TestEpipCalendarGrouping {
         List<Object> result = Gen.run(db,
                 (s, txn) -> EpipCalendar.epipServiceCalendar(s, txn, GeneratorDefaults.TEST));
 
-        // Each DayType is yielded exactly once (unsorted: dt1 twice, from two grouping runs),
-        // and dta4's dangling dt_missing is skipped instead of throwing.
         Check.equals(List.of("dt1", "dt2"), ids(result, DayType.class),
                 "each DayType yielded exactly once");
-        // Groups are emitted in sorted-by-ref order, each with all of its assignments.
         Check.equals(List.of("dta1", "dta3", "dta2"), ids(result, DayTypeAssignment.class),
                 "assignments grouped per DayType in sorted-by-ref order");
-        // Every assignment's operating period rides along with its group.
         Check.equals(List.of("op1", "op2", "op1"), ids(result, UicOperatingPeriod.class),
                 "operating periods ride along with their group");
     }

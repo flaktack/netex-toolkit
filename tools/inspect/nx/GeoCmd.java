@@ -39,95 +39,35 @@ import java.util.zip.GZIPOutputStream;
 
 /// `nx geo` — geometry extract and self-contained map.
 ///
-/// ## Why a map
+/// | subcommand | what it produces |
+/// |---|---|
+/// | `census` | per (class, fragment path): how many objects carry geometry, of what kind, the
+///   point-count histogram, the `srsName` buckets, and for lines the straight-line delta and
+///   endpoint-gap distributions. |
+/// | `extract` | GeoJSON, scoped by class / bbox / radius / metric threshold. `--max` is a hard cap
+///   that truncates and says so; it never silently samples. |
+/// | `html` | one self-contained file: no network, no basemap, no tiles, no CDN. |
+/// | `compare` | two stores joined on (class, id, version), with a displacement histogram and a
+///   tolerance: reprojection moves coordinates by ~1e-6°, a truncated link moves kilometres. |
 ///
-/// Geometry is the one defect class where a census is weak. A `ServiceLink` that keeps only its
-/// first link's geometry moves no element count and no attribute count: it shortens a polyline,
-/// which is visible on a map and invisible in a TSV.
+/// Coordinates come from the stored fragment bytes, not from the bean: what will be emitted, not
+/// what the binding reconstructs.
 ///
-/// The second customer is routing fidelity: how far the true path deviates from the straight line
-/// a consumer draws between two stops.
+/// Every geometry carries its declared `srsName` verbatim and is bucketed by [Crs#bucket]. A
+/// resolvable non-WGS84 CRS is reprojected into WGS84 for output, GeoJSON being defined in WGS84,
+/// and flagged `reprojected`; `absent` and `not-a-CRS` pass through flagged `assumed_wgs84`.
 ///
-/// ## What it does
-///
-/// - `census` — the scale statement. Per (class, fragment path): how many objects carry geometry,
-///    of what kind, the point-count histogram, the `srsName` buckets, and for lines the
-///    straight-line delta and endpoint-gap distributions. Run it BEFORE extracting: it says what a
-///    scope will cost.
-/// - `extract` — GeoJSON, scoped by class / bbox / radius / metric threshold. GeoJSON because QGIS
-///    and geojson.io already read it; the HTML is a convenience, not a lock-in.
-/// - `html` — one self-contained file. No network, no basemap, no tiles, no CDN: it opens from
-///    disk with the machine offline.
-/// - `compare` — two stores joined on (class, id, version), with a displacement histogram, and
-///    with a tolerance: reprojection moves coordinates by ~1e-6° while a truncated link moves
-///    kilometres, and those are not one finding.
-///
-/// ## Coordinates come from the stored fragment bytes, not from the bean
-///
-/// What will be emitted, not what the binding reconstructs. So a `<gml:posList>None</gml:posList>`
-/// is visible here — the bean binds that to an empty list — and gets its own bucket rather than
-/// counting as "no geometry".
-///
-/// ## `srsName` buckets
-///
-/// Every geometry carries its declared `srsName` verbatim, bucketed three ways:
-///
-/// - `declared` — a name that resolves to a CRS.
-/// - `absent` — none in scope. WGS84 is assumed, as the rest of the stack assumes it, and the map
-///    says so rather than implying the source did.
-/// - `not-a-CRS` — present and unresolvable. Feeds put timezones where a CRS belongs, the loader
-///    stamping the frame default verbatim with no validation. A map that assumed WGS84 would render
-///    those and show nothing; the bucket is the finding.
-///
-/// Resolution is not re-implemented: the same lexical rules feed the same `CRSFactory` the
-/// reprojection uses, so a `geo` verdict and a transform's CRS error cannot disagree. A resolvable
-/// non-WGS84 CRS is reprojected into WGS84 for output, GeoJSON being defined in WGS84, and flagged
-/// `reprojected`; `absent` and `not-a-CRS` pass through flagged `assumed_wgs84`.
-///
-/// ## Scale
-///
-/// This is a drill-down from an object, not a whole-corpus viewer: `extract` has a hard `--max`
-/// that says so when it truncates and never silently samples, and every scope is printed back with
-/// what it does and does not cover.
-///
-/// ## What it cannot reach
-///
-/// - The EXPORT. It reads stored fragments; an export census is a different number.
-/// - `V2Store`'s edge graph. [RawStore] is used instead — the SPI store's constructor materialises
-///    the whole edge state — so a `ServiceLink`'s endpoints resolve through `_id_idx` by id, not
-///    through resolved edges. An endpoint whose stop point is not in the same store is reported
-///    `unresolved`, never as a gap of zero.
-/// - Correctness of a shape. It can say a polyline is 6 km long where the straight line is 800 m,
-///    or that it ends 4 km from the point it claims to end at. It cannot say which is the road.
-///
-/// ## What `AXIS_SWAPPED` does and does not claim
-///
-/// The `--endpoints` arm measures ONE thing: the distance from a polyline's first and last vertex
-/// to the location of the `From`/`ToPoint` it names. Those endpoints come from NAMED
-/// `<Longitude>`/`<Latitude>` elements and are unambiguous; a `gml:posList` is a bare pair
-/// sequence and is not. When swapping the polyline's two ordinates collapses a continent-scale gap
-/// to under a metre, the posList is `(lon lat)` relative to its own endpoints. That is a fact
-/// about the data, and all this measures.
-///
-/// It is not a claim that any reader gets it wrong. The reprojection path takes authority order and
-/// swaps on the geographic side, so both arms are faithful; and where `srsName` is absent it
-/// defaults to the target CRS, the transform is skipped and the posList is exported byte for byte.
-/// The exposure is downstream, in whatever reads the export.
-///
-/// With one exception, which the `VERDICT x srsName` cross-tab exists to count: a geometry whose
-/// `srsName` is present and merely DIFFERS from the target — including an unresolvable one, where
-/// the fallback builds an identity transform — has the target CRS stamped onto it. Its numbers and
-/// their order survive; its declaration does not. That converts an ambiguous encoding into one
-/// this chain positively asserts to be EPSG:4326, whose authority order is the opposite. For
-/// those, a conformant GML reader placing the line thousands of kilometres away is not a reader
-/// defect.
+/// [RawStore] is used rather than the SPI store, whose constructor materialises the whole edge
+/// state, so a `ServiceLink`'s endpoints resolve through `_id_idx` by id and never through resolved
+/// edges. An endpoint whose stop point is not in the same store is reported `unresolved`, never as
+/// a gap of zero.
 ///
 /// A diagnostic, not a gate: no pass/fail. A zero here is a statement about the store you pointed
 /// at, not about the corpus.
 public final class GeoCmd {
 
     private static final String RULE = "=".repeat(100);
-    /// IUGG mean Earth radius, metres — the constant every haversine in this file uses.
+    /// IUGG mean Earth radius, metres.
     private static final double R_EARTH = 6_371_008.8;
 
     private GeoCmd() {}
@@ -204,13 +144,13 @@ public final class GeoCmd {
                       SCOPES -- combine freely; every one is printed back with what it covers:
                       --class C[,C..]   only these class maps
                       --id SUBSTR       only objects whose @id contains this -- the drill-down
-                                        from one object §2.5 says this tool is FOR
+                                        from one object this tool is FOR
                       --kind point|line|polygon
                       --bbox W,S,E,N    keep geometries INTERSECTING this box (degrees)
                       --around <id> --radius 2km    box of that radius around that object's
                                         first coordinate.  Resolved through _id_idx, not edges.
                       --dev-min M       lines whose max deviation from their own straight line
-                                        exceeds M metres.  This is OTP_SERVICELINK_GEOMETRY's
+                                        exceeds M metres.  This is the
                                         57.2%-over-50m figure, per link.
                       --ratio-min R     lines whose path/straight-line ratio exceeds R
                       --gap-min M       links whose endpoint gap exceeds M metres (--endpoints)
@@ -235,7 +175,7 @@ public final class GeoCmd {
 
                 nx geo compare --a <store> --b <store> --out cmp.geojson[.gz]
                       join on (class,id,version), per-vertex displacement, WITH A TOLERANCE.
-                      EXPORT_AB §5.10 corrected EPIP_TRANSFORM dev. 6 twice: reprojected
+                      A correction was needed twice: reprojected
                       coordinates are NOT bit-identical, delta ~1e-6 deg ~ 0.1 m.  So the output
                       is a HISTOGRAM plus features carrying disp_max/disp_mean, and
                       "0.1 m everywhere" and "one link truncated" are visibly different findings
@@ -274,8 +214,8 @@ public final class GeoCmd {
 
     /// The reprojection's own rules, reused rather than re-derived: an OGC URN collapses to
     /// `AUTH:CODE`, the authority is upper-cased, and the result goes to the same `CRSFactory` the
-    /// transformer would use. A name this class calls `declared` is one that would not take the
-    /// fallback.
+    /// transformer would use. A name this class calls `declared` is one that would not take
+    /// `Projection`'s CRS-error fallback.
     static final class Crs {
         static final String WGS84_URN = "urn:ogc:def:crs:EPSG::4326";
         private static final Pattern URN =
@@ -314,7 +254,13 @@ public final class GeoCmd {
             return o == UNRESOLVABLE ? null : (CoordinateReferenceSystem) o;
         }
 
-        /// `declared` / `absent` / `not-a-CRS` — the three §2.5 asks for.
+        /// The three `srsName` buckets:
+        ///
+        /// - `declared` — a name that resolves to a CRS.
+        /// - `absent` — none in scope. WGS84 is assumed, as the rest of the stack assumes it, and
+        ///   the output says so rather than implying the source did.
+        /// - `not-a-CRS` — present and unresolvable. Feeds put timezones where a CRS belongs, the
+        ///   loader stamping the frame default verbatim with no validation.
         static String bucket(String srsName) {
             if (srsName == null || srsName.isEmpty()) return ABSENT;
             return resolve(srsName) == null ? NOT_A_CRS : DECLARED;
@@ -366,12 +312,12 @@ public final class GeoCmd {
 
     /// What the reprojection pass does with a geometry carrying this `srsName`:
     ///
-    /// - `srsName` equals the target as a RAW STRING — untouched.
+    /// - `srsName` equals the target as a raw string — untouched.
     /// - `srsName` absent — defaulted to WGS84, which equals the target, so no transform is built.
-    ///    The coordinates are never read and the geometry is exported still undeclared.
+    ///   The coordinates are never read and the geometry is exported still undeclared.
     /// - anything else, unresolvable names included, where the fallback supplies an identity
-    ///    transform — the geometry is projected and its `srsName` is OVERWRITTEN with the target.
-    ///    Numbers and their order survive; the declaration does not.
+    ///   transform — the geometry is projected and its `srsName` is overwritten with the target.
+    ///   Numbers and their order survive; the declaration does not.
     ///
     /// The third case matters for axis order: a geometry whose axis convention was merely ambiguous
     /// ships declared as the CRS whose authority order is the opposite one.
@@ -415,10 +361,9 @@ public final class GeoCmd {
 
     // ================================================================== fragment -> geometry
 
-    /// Walk the parsed fragment in document order and lift every geometry out of it. The
-    /// `srsName` in scope is inherited downward exactly as `Projection`'s
-    /// `get_transformer_by_srs_name` inherits it: a `gml:pos`'s own name beats its
-    /// `Location`'s, which beats anything above.
+    /// Walk the parsed fragment in document order and lift every geometry out of it. The `srsName`
+    /// in scope is inherited downward exactly as `Projection.getTransformerBySrsName` inherits it:
+    /// a `gml:pos`'s own name beats its `Location`'s, which beats anything above.
     static void collect(XmlDoc.Node n, String prefix, String inherited, List<Geom> out) {
         String name = n.name;
         String path = prefix.isEmpty() ? name : prefix + "/" + name;
@@ -500,8 +445,8 @@ public final class GeoCmd {
         if (pl != null) {
             String t = pl.text;
             if (t != null && t.trim().equals("None")) {
-                // The bean binds this to an empty list and the defect vanishes; the fragment still
-                // says None, so this arm can still see it.
+                // The bean binds this to an empty list; the fragment still says None, so this arm
+                // sees it and gives it its own bucket.
                 g.noneLiteral = true;
                 finish(g, out);
                 return;
@@ -624,9 +569,8 @@ public final class GeoCmd {
     }
 
     /// The greatest distance from any interior vertex to the straight chord first→last, in metres.
-    /// That chord is what a consumer draws when a link has no geometry, so this is "how wrong the
-    /// straight line is" for this link. Computed in a local equirectangular frame, whose error is
-    /// well under a metre at link scale.
+    /// That chord is what a consumer draws when a link has no geometry. Computed in a local
+    /// equirectangular frame, whose error is well under a metre at link scale.
     static double maxDeviation(double[] xy) {
         int n = xy.length / 2;
         if (n < 3) return 0;
@@ -675,8 +619,7 @@ public final class GeoCmd {
         long max = 50_000;
         long maxIndex = 3_000_000;
         int precision = 6;
-        /// The target CRS the reprojection pass runs with, which decides the FATE column below.
-        /// An option because it is a chain configuration, not a law.
+        /// The target CRS the reprojection pass runs with, which decides the FATE column.
         String crsTo = Crs.WGS84_URN;
 
         boolean wantsKind(String k) { return kinds.isEmpty() || kinds.contains(k); }
@@ -718,8 +661,8 @@ public final class GeoCmd {
         long devOver50, devTotal, straightAlready, singlePoint;
         long gapResolved, gapUnresolved, truncated;
         final Map<String, Long> gapVerdicts = new TreeMap<>();
-        /// Examples are the LOWEST `@id`s, not the first ones a worker happened to see, so a
-        /// re-run diffs to zero. A thread-order-dependent example list makes that uncheckable.
+        /// Examples are the lowest `@id`s, not the first ones a worker happened to see, so a re-run
+        /// diffs to zero.
         final Map<String, TreeMap<String, Feat>> examples = new TreeMap<>();
         final TreeMap<String, Feat> notACrsExamples = new TreeMap<>();
 
@@ -801,9 +744,9 @@ public final class GeoCmd {
             for (int idx : store.populatedClassIdxs()) {
                 String name = store.className(idx);
                 boolean wanted = sc.only.isEmpty() || sc.only.contains(name);
-                // --endpoints resolves From/ToPointRef against a point index built during THIS scan,
-                // so a --class filter that excludes the points would make every gap UNRESOLVED and
-                // the tool would report an absence it manufactured. Read them anyway; emit nothing.
+                // --endpoints resolves From/ToPointRef against a point index built during this
+                // scan, so a --class filter that excluded the points would make every gap
+                // UNRESOLVED. Read them anyway; emit nothing.
                 boolean forIdxOnly = !wanted && sc.endpoints && geoNames.contains(name);
                 if (!wanted && !forIdxOnly) continue;
                 if (sc.skip.contains(name)) continue;
@@ -980,9 +923,14 @@ public final class GeoCmd {
     static final String BOTH_ENDS_ADRIFT = "BOTH_ENDS_ADRIFT";
     static final String UNRESOLVED = "UNRESOLVED";
 
-    /// Turn two distances into a NAMED finding — the difference between a tool and a column of
-    /// numbers. `SHORT_AT_TO` is the signature this section exists for: the polyline starts where
-    /// it should and stops short of the `ToPoint`.
+    /// Two distances into a named finding. `SHORT_AT_TO` is the truncated-link signature: the
+    /// polyline starts where it should and stops short of the `ToPoint`.
+    ///
+    /// `AXIS_SWAPPED` says that exchanging the polyline's two ordinates collapses the gap to under
+    /// `gapMin`, i.e. the posList is `(lon lat)` relative to the same object's `From`/`ToPoint`,
+    /// whose named `<Longitude>`/`<Latitude>` elements are unambiguous where a bare posList is not.
+    /// That is a fact about this object's own endpoints, not about what a reader assumes; the
+    /// `VERDICT x srsName` cross-tab is where the consumer question is counted.
     private static String verdict(Feat f, double worst, double gapMin) {
         if (worst <= gapMin) return ENDPOINTS_OK;
         if (f.gapSwapped >= 0 && f.gapSwapped <= gapMin && f.gapSwapped * 20 < worst) return AXIS_SWAPPED;
@@ -1124,10 +1072,8 @@ public final class GeoCmd {
 
             considered.incrementAndGet();
             if (keep && interesting) {
-                // Bounded DURING the scan, not after: holding every passing geometry just to drop
-                // most of them would OOM at scale. What survives is the first --max the scan
-                // reached, in class-map order, and it is printed back as such -- "the first N" and
-                // "a sample of N" are different claims.
+                // Bounded during the scan: what survives is the first --max the scan reached, in
+                // class-map order, and it is printed back as such rather than as a sample.
                 synchronized (feats) {
                     if (feats.size() < sc.max) feats.add(f);
                 }
@@ -1271,7 +1217,7 @@ public final class GeoCmd {
             o.println("3. LINES — point counts, and how wrong the straight line is");
             o.println(RULE);
             o.printf("   The chord first->last is exactly what OTP draws when it takes the%n");
-            o.printf("   MissingProjectionInServiceLink branch (OTP_SERVICELINK_GEOMETRY §2), so 'max%n");
+            o.printf("   MissingProjectionInServiceLink branch, so 'max%n");
             o.printf("   deviation' below is 'how wrong that straight line is', per link.%n%n");
             for (String b : PT_BUCKETS) {
                 Long v = a.pointHist.get(b);
@@ -1288,7 +1234,7 @@ public final class GeoCmd {
                 o.printf("    lines with >=3 points   %,10d%n", a.devTotal);
                 o.printf("    max deviation from the straight line, metres%n");
                 pct(o, a.devSample, "      ", a.sampleCapped);
-                o.printf("      over 50 m             %,10d   %5.1f%%   <- OTP_SERVICELINK_GEOMETRY's headline%n",
+                o.printf("      over 50 m             %,10d   %5.1f%%   <- the headline%n",
                         a.devOver50, 100.0 * a.devOver50 / a.devTotal);
                 o.printf("    true path / straight line%n");
                 pctRatio(o, a.ratioSample, "      ", a.sampleCapped);
@@ -1386,7 +1332,7 @@ public final class GeoCmd {
     }
 
     /// Percentiles over the whole population, not a sample, up to [Acc#SAMPLE_CAP]. When that cap
-    /// bites it is PRINTED: past it the retained values depend on worker order and the quantiles
+    /// bites it is printed: past it the retained values depend on worker order and the quantiles
     /// stop being reproducible.
     private static void pct(PrintStream o, List<Double> xs, String pad, boolean capped) {
         if (xs.isEmpty()) { o.println(pad + "(none)"); return; }
@@ -1517,7 +1463,7 @@ public final class GeoCmd {
         PrintStream o = System.out;
         sc.max = Long.MAX_VALUE / 4;
         header(o, "nx geo compare — displacement, WITH A TOLERANCE", sc);
-        o.println("EXPORT_AB §5.10 corrected EPIP_TRANSFORM dev. 6 TWICE because reprojected coordinates");
+        o.println("A correction was needed TWICE because reprojected coordinates");
         o.println("are not bit-identical: delta ~1e-6 deg ~ 0.1 m. A comparison without a tolerance calls");
         o.println("that and a truncated link both 'geometry differs'. This one does not.");
         o.println();
@@ -1578,7 +1524,7 @@ public final class GeoCmd {
         o.printf("                                        the truncated-link signature is here, not in the%n");
         o.printf("                                        histogram below.%n");
         o.printf("  displaced                      %,d%n", moved);
-        String[] labels = {"exact", "<= 0.15 m (quantization, EXPORT_AB §5.10)", "<= 1 m",
+        String[] labels = {"exact", "<= 0.15 m (quantization)", "<= 1 m",
                            "<= 10 m", "<= 100 m", "> 100 m"};
         for (int i = 0; i < hist.length; i++) o.printf("    %-42s %,10d%n", labels[i], hist[i]);
         if (!disp.isEmpty()) {
@@ -2044,10 +1990,8 @@ public final class GeoCmd {
 
     /// One file, no network. The payload is inlined raw below 4 MB and gzip+base64 above it,
     /// inflated with `DecompressionStream('gzip')` — no library. Rendering is canvas plus a uniform
-    /// grid for picking.
-    ///
-    /// No coastline: the graticule, labelled degrees, scale bar and cursor readout are here, but a
-    /// decorative outline is indistinguishable from a basemap that failed to load.
+    /// grid for picking. There is no coastline: the graticule, labelled degrees, scale bar and
+    /// cursor readout are the reference.
     static byte[] htmlPage(byte[] json, String title) throws Exception {
         String payload;
         String mode;

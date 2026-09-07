@@ -12,19 +12,18 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.TreeMap;
 
-/// What a stage had to TOLERATE while building a store — written beside [Provenance]'s
-/// sidecar, as `.loadreport.json`.
+/// What a stage had to tolerate while building a store — written beside [Provenance]'s sidecar, as
+/// `.loadreport.json`.
 ///
-/// NOT part of the provenance sidecar: that records what the writing JAR was capable of — a
-/// property of the CODE, intersected across a merge. What a load had to tolerate belongs to THIS
-/// run over THIS input, does not intersect, and must not shift a capability check.
+/// Not part of the provenance sidecar: that records what the writing jar was capable of, a property
+/// of the code, intersected across a merge. What a load had to tolerate belongs to this run over
+/// this input, does not intersect, and must not shift a capability check.
 ///
-/// It exists because where [toolkit.util.Strictness] tolerates, the anomaly happened and the store
-/// carries no record: a store built from a feed full of bind losses and re-marshalled fragments is
-/// byte for byte a store, and a downstream stage cannot tell.
+/// Where [toolkit.util.Strictness] tolerates, the anomaly happened and the store carries no record:
+/// a store built from a feed full of bind losses and re-marshalled fragments is byte for byte a
+/// store, and a downstream stage cannot tell.
 ///
-/// Absent file means "no report was written", NOT "nothing was tolerated". Do not read absence as
-/// clean.
+/// An absent file means "no report was written", not "nothing was tolerated".
 ///
 /// Disabled with `-Dtoolkit.prov=off`, alongside the sidecar.
 public final class LoadReport {
@@ -66,8 +65,8 @@ public final class LoadReport {
         }
     }
 
-    /// The tolerated counts recorded for `dir`, or null when there is no report. Null is
-    /// UNKNOWN, not zero — see the class note.
+    /// The tolerated counts recorded for `dir`, or null when there is no report. Null is unknown,
+    /// not zero.
     public static Map<String, Long> read(Path dir) {
         Path f = dir.resolve(FILE);
         if (!Files.exists(f)) return null;

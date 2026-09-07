@@ -4,21 +4,16 @@ package toolkit.transform.epip;
 //   serviceJourneyOperatorOp   (op factory)
 //   vehicleTypeShortNameOp     (per-object op)
 //   quayNameOp                 (per-object op)
+// plus the abbreviation rules they share: makeAbbreviation / abbreviateInitials /
+// abbreviateHybrid.
 //
-// None of the three is gated on a codespace or an id prefix: EpipToDb wires them unconditionally
-// and they act on every object of their class. They are profile backfills, not a vendor repair,
-// which is why they live here and not in feedfix.
-//   makeAbbreviation / abbreviateInitials / abbreviateHybrid
+// None of the three is gated on a codespace or an id prefix: EpipToDb wires them unconditionally and
+// they act on every object of their class.
 //
-// Union-field mapping: a single-slot choice field maps to a pair of sibling getters, where
-// setting the ref also nulls the view.
-//   sj operator union   -> getOperatorRef() / getOperatorView()
-//   sj line union       -> getLineRef() (a JAXBElement covering LineRef AND FlexibleLineRef) /
-//                          getLineView() / getFlexibleLineView()
-//   sjp route union     -> getRouteRef() / getRouteView()
-//   RouteView line union-> RouteView.getLineRef() / getLineView()
-//   sj journey-pattern  -> JAXBElement value instanceof ServiceJourneyPatternRefStructure
-//   sp.quays            -> getQuays().getQuayRefOrQuay(); a Quay is value instanceof Quay
+// Union-field mapping: a single-slot choice field maps to a pair of sibling getters, where setting
+// the ref also nulls the view — getOperatorRef()/getOperatorView(), getRouteRef()/getRouteView().
+// The line union is three-way: getLineRef() is a JAXBElement covering LineRef AND FlexibleLineRef,
+// against getLineView() / getFlexibleLineView().
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.model.FlexibleLine;
@@ -50,12 +45,12 @@ public final class Backfills {
     // ------------------------------------------------- serviceJourneyOperatorOp
 
     /// Query phase: build the line/route/pattern -&gt; operator indexes once, and return the
-    /// per-object operation (ServiceJourney -&gt; changed?). All information the operation needs is
-    /// ready before the first object is processed, so it can run in any stream/ensemble/worker.
+    /// per-object operation (ServiceJourney -&gt; changed?). Everything the operation needs is ready
+    /// before the first object is processed.
     ///
     /// FlexibleLines carry operators exactly like Lines, so both classes feed the same index; every
     /// lookup is via `Map.get`, so an unresolvable line/route/pattern ref leaves the journey
-    /// unchanged rather than crashing the ensemble. A line without an operator maps its id to null.
+    /// unchanged. A line without an operator maps its id to null.
     public static Ensemble.Operation serviceJourneyOperatorOp(Store dbRead, Txn txn) {
         Map<String, OperatorRefStructure> lineOperatorRef = new HashMap<>();
         for (Object o : dbRead.iterOnlyObjects(txn, Line.class)) {
@@ -108,8 +103,8 @@ public final class Backfills {
                     op = sjpOperatorRef.get(jpRef.getRef());
                 }
                 if (op != null) {
-                    sj.setOperatorRef(op);                         // union assignment: the ref
-                    sj.setOperatorView(null);                      // replaces any view
+                    sj.setOperatorRef(op);
+                    sj.setOperatorView(null);
                 }
             }
             Object after = sj.getOperatorRef() != null ? sj.getOperatorRef() : sj.getOperatorView();
@@ -131,8 +126,7 @@ public final class Backfills {
     }
 
     /// First letter of the first word, then the remaining letters of EVERY word (the first word
-    /// included) until `maxLen`; uppercased. Both exits uppercase — the early return and the final
-    /// one, which also covers a result shorter than `maxLen`.
+    /// included) until `maxLen`; uppercased. A result shorter than `maxLen` is returned as is.
     public static String abbreviateHybrid(String text, int maxLen) {
         java.util.List<String> words = new java.util.ArrayList<>();
         Matcher m = WORDS.matcher(text);
@@ -153,7 +147,7 @@ public final class Backfills {
     /// included); otherwise initials, falling back to the hybrid scheme when the initials come up
     /// short. Locale-independent upper-casing.
     ///
-    /// KNOWN LIMIT (OPEN.md §16): `String.strip()` does not treat U+00A0 NBSP as whitespace, so an
+    /// KNOWN LIMIT: `String.strip()` does not treat U+00A0 NBSP as whitespace, so an
     /// NBSP-padded name of ≤ maxLen letters is measured with the padding included.
     public static String makeAbbreviation(String text, int maxLen) {
         text = text.strip();
@@ -168,8 +162,6 @@ public final class Backfills {
         return s.toUpperCase(Locale.ROOT);
     }
 
-    // ----------------------------------------------- vehicleTypeShortNameOp
-
     /// Per-object operation: derive the short name from the name. Needs no query phase. A name bean
     /// with a null value — an empty content list — is SKIPPED rather than indexed into.
     public static boolean vehicleTypeShortNameOp(Object obj) {
@@ -180,8 +172,6 @@ public final class Backfills {
         }
         return false;
     }
-
-    // --------------------------------------------------------------- quayNameOp
 
     /// Per-object operation: backfill missing quay names from the StopPlace name.
     public static boolean quayNameOp(Object obj) {

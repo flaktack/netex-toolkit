@@ -4,25 +4,18 @@ package toolkit.transform.epip;
 // helpers in its closure: getDepartureTime, getDuration, getArrivalTime, getDepartureTimeOffset,
 // getWaitTimesFromPointInJourneyPattern.
 //
-// Time-arithmetic contract:
-//  - The running clock is an int of SECONDS SINCE THE JOURNEY'S OPERATING-DAY MIDNIGHT, with day
-//    offsets folded in as day*86400. Day offset = floorDiv(seconds, 86400), time-of-day =
-//    floorMod, so negatives behave.
-//  - Passing times are tz-less local times throughout, so every helper drops the offset.
-//  - Durations decompose into days/hours/minutes/seconds; months and years are ignored, which
-//    java.time.Duration cannot represent anyway, and toSeconds() truncates fractional seconds.
+// Time-arithmetic contract: the running clock is an int of SECONDS SINCE THE JOURNEY'S
+// OPERATING-DAY MIDNIGHT, with day offsets folded in as day*86400. Day offset = floorDiv(seconds,
+// 86400), time-of-day = floorMod, so negatives behave. Passing times are tz-less local times
+// throughout, so every helper drops the offset.
 //
-// The model hands this file noi.netex.time.XmlTime / XmlDuration carriers; every one is
-// normalised at the point of use via toLocalTime() / toDuration(), and every value the clock ever
-// sees is a plain int of seconds.
-//
-// getDepartureTime reads the RAW hour, not the wrapped wall clock: hour 24 is accepted only as
-// exactly 24:00:00, and every later value stays a raw string whose hour cannot be read at all. See
-// getDepartureTime below for the refusal arm.
+// The model hands this file noi.netex.time.XmlTime / XmlDuration carriers; every one is normalised
+// at the point of use via toLocalTime() / toDuration(), and every value the clock ever sees is a
+// plain int of seconds.
 //
 // QUIRK KEPT: the emitted TimetabledPassingTime's DEPARTURE time is computed from `arrival`, not
-// `departure` — departure_time == arrival_time on every row. The wait time still advances the
-// clock for subsequent stops.
+// `departure` — departure_time == arrival_time on every row. The wait time still advances the clock
+// for subsequent stops.
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.model.JourneyPatternWaitTimes_RelStructure;
@@ -68,13 +61,11 @@ public final class CallsProfile {
     public record TimeWithDayOffset(LocalTime time, int dayOffset) {}
 
     /// getArrivalTime: seconds-since-operating-day-midnight → (time-of-day, day offset).
-    /// `day_offset = arrival // 86400`; hour/minute/second from the mod-86400 remainder.
-    /// (The tz offset parameter is dropped — see the class note.)
     public static TimeWithDayOffset getArrivalTime(int arrival) {
-        int dayOffset = Math.floorDiv(arrival, 86400);                 // arrival // 86400
-        int hour = Math.floorMod(arrival, 86400) / 3600;               // (arrival % 86400) // 3600
-        int minute = Math.floorMod(arrival, 3600) / 60;                // (arrival % 3600) // 60
-        int second = Math.floorMod(arrival, 60);                       // arrival % 60
+        int dayOffset = Math.floorDiv(arrival, 86400);
+        int hour = Math.floorMod(arrival, 86400) / 3600;
+        int minute = Math.floorMod(arrival, 3600) / 60;
+        int second = Math.floorMod(arrival, 60);
         return new TimeWithDayOffset(LocalTime.of(hour, minute, second), dayOffset);
     }
 
@@ -87,32 +78,30 @@ public final class CallsProfile {
         return new TimeWithDayOffset(LocalTime.of(hour, minute, second), dayOffset);
     }
 
-    /// getDuration: total seconds of a duration; null → 0. Sums
-    /// days*86400 + hours*3600 + minutes*60 + int(seconds) and IGNORES months/years —
-    /// [java.time.Duration] cannot carry months, and `toSeconds()` drops the fractional second.
+    /// getDuration: total seconds of a duration. A null duration, and one whose lexical form could
+    /// not be parsed at all, are both 0. Sums days*86400 + hours*3600 + minutes*60 + int(seconds)
+    /// and IGNORES months/years — [java.time.Duration] cannot carry months, and `toSeconds()` drops
+    /// the fractional second.
     public static int getDuration(XmlDuration duration) {
         if (duration == null) return 0;
-        // NORMALISATION BOUNDARY. toDuration() sums days/hours/minutes/seconds, IGNORES years and
-        // months, and returns null for a value that could not be parsed at all — 0 either way.
+        // Normalisation boundary.
         java.time.Duration value = duration.toDuration();
         return value == null ? 0 : (int) value.toSeconds();
     }
 
     /// getDepartureTime: the journey's departure as seconds since its operating-day midnight —
-    /// `(departure day offset, or 0) * 86400 + h*3600 + m*60 + s`. The departure time must
-    /// be present.
+    /// `(departure day offset, or 0) * 86400 + h*3600 + m*60 + s`. The departure time must be
+    /// present.
     ///
-    /// The RAW hour, read with no guard, so `24:00:00` — the one hour-24 form that parses —
-    /// contributes a whole extra day where a normalising read would fold it to zero. That fold is
-    /// the failure mode where a midnight departure moves to the START of the same day.
+    /// The RAW hour is read, not the wrapped wall clock, so `24:00:00` — the one hour-24 form that
+    /// parses — contributes a whole extra day.
     ///
-    /// KNOWN DEFECT (OPEN.md §16): for a value the parser rejects, the field holds no time at all
-    /// and this unguarded access throws.
+    /// KNOWN DEFECT: for a value the parser rejects, the field holds no time at all and this
+    /// unguarded access throws.
     public static int getDepartureTime(ServiceJourney serviceJourney) {
         XmlTime departure = serviceJourney.getDepartureTime();
         if (departure == null) throw new IllegalStateException("serviceJourney.departureTime is absent");
         if (!departure.isXsdValid()) {
-            // The raw string has no readable hour (see the Javadoc).
             throw new IllegalStateException("serviceJourney.departureTime is the unconvertible raw"
                     + " string '" + departure.toXmlFormat() + "', which has no readable hour");
         }
@@ -121,22 +110,21 @@ public final class CallsProfile {
                 + departure.getHour() * 3600 + departure.getMinute() * 60 + departure.getSecond();
     }
 
-    /// getWaitTimesFromPointInJourneyPattern, over the `waitTime`/`waitTimes`
-    /// union; the choice binds as the point's `getWaitTime()` (the XmlDuration
-    /// arm) and `getWaitTimes()` (the JourneyPatternWaitTimesRelStructure arm) — pass both.
-    /// Resolution: a plain duration wins; else, with a TimeDemandType given,
-    /// the first JourneyPatternWaitTime whose time-demand-type/timeband ref
-    /// matches its id, falling back to the FIRST entry's wait time; else null.
-    /// (List entries are JourneyPatternWaitTime or JourneyPatternWaitTimeRef — a ref entry has
-    /// no waitTime and raises a ClassCastException.)
+    /// getWaitTimesFromPointInJourneyPattern, over the `waitTime`/`waitTimes` union; the choice
+    /// binds as the point's `getWaitTime()` (the XmlDuration arm) and `getWaitTimes()` (the
+    /// JourneyPatternWaitTimesRelStructure arm) — pass both. Resolution: a plain duration wins;
+    /// else, with a TimeDemandType given, the first JourneyPatternWaitTime whose
+    /// time-demand-type/timeband ref matches its id, falling back to the FIRST entry's wait time;
+    /// else null. (List entries are JourneyPatternWaitTime or JourneyPatternWaitTimeRef — a ref
+    /// entry has no waitTime and raises a ClassCastException.)
     public static XmlDuration getWaitTimesFromPointInJourneyPattern(
             XmlDuration waitTime, JourneyPatternWaitTimes_RelStructure waitTimes, TimeDemandType timeDemandType) {
         if (waitTime != null) return waitTime;
 
         if (waitTimes != null) {
             List<Object> entries = waitTimes.getJourneyPatternWaitTimeRefOrJourneyPatternWaitTime();
-            // KNOWN LIMIT (OPEN.md §16): the FIRST matching wait time wins. Several can match
-            // when Timebands are in play, and nothing here disambiguates them.
+            // KNOWN LIMIT: the FIRST matching wait time wins. Several can match when Timebands are
+            // in play, and nothing here disambiguates them.
             if (timeDemandType != null) {
                 for (Object o : entries) {
                     JourneyWaitTime_VersionedChildStructure x = (JourneyWaitTime_VersionedChildStructure) o;
@@ -153,28 +141,24 @@ public final class CallsProfile {
     }
 
     /// getPassingTimesFromTimeDemandType: expand a (ServiceJourneyPattern, TimeDemandType) pair
-    /// into the journey's TimetabledPassingTimes, IN PLACE on `serviceJourney`. No-op when
-    /// passing times already exist or either provided object does not match the journey's refs.
-    /// See the class note for the time-arithmetic contract and the kept departure==arrival quirk.
+    /// into the journey's TimetabledPassingTimes, IN PLACE on `serviceJourney`. No-op when passing
+    /// times already exist or either provided object does not match the journey's refs.
     public static void getPassingTimesFromTimeDemandType(ServiceJourney serviceJourney,
             ServiceJourneyPattern serviceJourneyPattern, TimeDemandType timeDemandType) {
-        // If passing times are present, we don't have to do anything
         if (serviceJourney.getPassingTimes() != null) return;
 
-        // Guard that the provided ServiceJourneyPattern equals to the ref
         if (!Objects.equals(serviceJourney.getJourneyPatternRef().getValue().getRef(),
                 serviceJourneyPattern.getId())) {
             return;
         }
 
-        // Guard that the provided TimeDemandType equals to the ref
         if (!Objects.equals(serviceJourney.getTimeDemandTypeRef().getRef(), timeDemandType.getId())) {
             return;
         }
 
         // Index the journey run times by their TimingLink ref — insertion-ordered.
-        // KNOWN LIMIT (OPEN.md §16): duplicate keys last-win, with no disambiguation when
-        // Timebands or same-named points make several entries match.
+        // KNOWN LIMIT: duplicate keys last-win, with no disambiguation when Timebands or same-named
+        // points make several entries match.
         Map<String, JourneyRunTime> tdtTl = new LinkedHashMap<>();
         if (timeDemandType.getRunTimes() != null) {
             for (JourneyRunTime jrt : timeDemandType.getRunTimes().getJourneyRunTime()) {
@@ -182,8 +166,8 @@ public final class CallsProfile {
             }
         }
 
-        // Index the journey wait times by their timing-point ref — the union is
-        // getTimingPointRef() JAXBElement (ScheduledStopPointRef substitutes into it).
+        // Index the journey wait times by their timing-point ref — the union is getTimingPointRef()
+        // JAXBElement (ScheduledStopPointRef substitutes into it).
         Map<String, JourneyWaitTime> tdtPoint = new LinkedHashMap<>();
         if (timeDemandType.getWaitTimes() != null) {
             for (JourneyWaitTime jwt : timeDemandType.getWaitTimes().getJourneyWaitTime()) {
@@ -197,7 +181,7 @@ public final class CallsProfile {
 
         if (serviceJourneyPattern.getLinksInSequence() != null) {
             int i = 0;
-            // A link's own run_times is an OVERRIDE, so a missing one is skipped -- but ``i`` must
+            // A link's own runTimes is an OVERRIDE, so a missing one is skipped — but `i` must
             // still advance with the link.
             for (LinkInLinkSequence_VersionedChildStructure lis : serviceJourneyPattern
                     .getLinksInSequence().getServiceLinkInJourneyPatternOrTimingLinkInJourneyPattern()) {
@@ -205,16 +189,16 @@ public final class CallsProfile {
                         && sl.getRunTimes() != null) {
                     for (JourneyRunTime jrt : sl.getRunTimes().getJourneyRunTime()) {
                         tdtTl.put(sl.getServiceLinkRef().getRef(), jrt);
-                        // KNOWN GAP (OPEN.md §16): the link's begin point is not checked against
-                        // the point it is being assigned to.
+                        // KNOWN GAP: the link's begin point is not checked against the point it is
+                        // being assigned to.
                         setOnwardServiceLinkRef(points.get(i), sl);
                     }
                 } else if (lis instanceof TimingLinkInJourneyPattern_VersionedChildStructure tl
                         && tl.getRunTimes() != null) {
                     for (JourneyRunTime jrt : tl.getRunTimes().getJourneyRunTime()) {
                         tdtTl.put(tl.getTimingLinkRef().getRef(), jrt);
-                        // KNOWN GAP (OPEN.md §16): the link's begin point is not checked against
-                        // the point it is being assigned to.
+                        // KNOWN GAP: the link's begin point is not checked against the point it is
+                        // being assigned to.
                         setOnwardTimingLinkRef(points.get(i), tl);
                     }
                 }
@@ -224,12 +208,10 @@ public final class CallsProfile {
 
         int departure = getDepartureTime(serviceJourney);
         int arrival = departure;
-        // The departure's tz offset would be read here — LocalTime carries none.
 
         TimetabledPassingTimes_RelStructure tpts = new TimetabledPassingTimes_RelStructure();
 
         int order = 0;
-        // If there are no onward timing links, we must consider links in sequence
         for (PointInLinkSequence_VersionedChildStructure pis : points) {
             order++;
             // The carrier travels UNCONVERTED through the selection logic; getDuration() is where
@@ -237,7 +219,7 @@ public final class CallsProfile {
             XmlDuration waitTime = null;
             JourneyRunTime runTime = null;
             StopPointInJourneyPattern_VersionedChildStructure spijp = null;
-            // KNOWN GAP (OPEN.md §16): the VDV462 shape is not handled here.
+            // KNOWN GAP: the VDV462 shape is not handled here.
             if (pis instanceof StopPointInJourneyPattern_VersionedChildStructure spp) {
                 spijp = spp;
 
@@ -284,11 +266,9 @@ public final class CallsProfile {
                 tpt.setVersion(serviceJourney.getVersion());
                 tpt.setPointInJourneyPatternRef(wrapPointInJourneyPatternRef(
                         (PointInJourneyPatternRefStructure) NetexUtils.getRef(spijp)));
-                // SYNTHESIS SITES. These times are COMPUTED from the running seconds clock, not
+                // Synthesis sites. These times are COMPUTED from the running seconds clock, not
                 // copied from a source element, so they are built with XmlTime.from(): no retained
                 // lexical, no offset, canonical "HH:mm:ss" on the wire.
-                // getArrivalTime/getDepartureTimeOffset derive the hour with floorMod(_, 86400) /
-                // 3600, so it is always 0..23 and nothing is lost.
                 tpt.setArrivalTime(XmlTime.from(arrivalT.time()));
                 tpt.setArrivalDayOffset(BigInteger.valueOf(arrivalT.dayOffset()));
                 tpt.setDepartureTime(XmlTime.from(departureT.time()));
@@ -314,8 +294,8 @@ public final class CallsProfile {
         return rt;
     }
 
-    /// Set the point's onward ServiceLink ref. ONLY StopPointInJourneyPattern declares one, so any
-    /// other point type THROWS: swallowing it would emit a pattern whose links go nowhere.
+    /// Set the point's onward ServiceLink ref. ONLY StopPointInJourneyPattern declares one; any
+    /// other point type throws.
     private static void setOnwardServiceLinkRef(PointInLinkSequence_VersionedChildStructure point,
             ServiceLinkInJourneyPattern_VersionedChildStructure lis) {
         if (point instanceof StopPointInJourneyPattern_VersionedChildStructure spp) {
@@ -327,7 +307,7 @@ public final class CallsProfile {
     }
 
     /// Set the point's onward TimingLink ref. Declared by BOTH StopPointInJourneyPattern and
-    /// TimingPointInJourneyPattern; any other point type throws, for the same reason as above.
+    /// TimingPointInJourneyPattern; any other point type throws.
     private static void setOnwardTimingLinkRef(PointInLinkSequence_VersionedChildStructure point,
             TimingLinkInJourneyPattern_VersionedChildStructure lis) {
         if (point instanceof StopPointInJourneyPattern_VersionedChildStructure spp) {
@@ -340,10 +320,9 @@ public final class CallsProfile {
         }
     }
 
-    /// TimetabledPassingTime's point-in-journey-pattern ref is a JAXBElement union in the
-    /// model — wrap the ref in the element matching its runtime
-    /// type so it substitutes into PointInJourneyPatternRef correctly. Shared with
-    /// [TimetabledPassingTimesProfile].
+    /// TimetabledPassingTime's point-in-journey-pattern ref is a JAXBElement union in the model —
+    /// wrap the ref in the element matching its runtime type so it substitutes into
+    /// PointInJourneyPatternRef correctly. Shared with [TimetabledPassingTimesProfile].
     static JAXBElement<? extends PointInJourneyPatternRefStructure> wrapPointInJourneyPatternRef(
             PointInJourneyPatternRefStructure ref) {
         if (ref instanceof StopPointInJourneyPatternRefStructure s) {

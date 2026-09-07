@@ -1,26 +1,10 @@
 package toolkit.store;
 
-// Pins WHY the embedding-index allowlist is the set it is, so neither the removal nor the fix can
-// silently become wrong. The list is now Stores.NETEX_EMBEDDING_SCOPE — injected into the store
-// rather than compiled into it (the storage engine names no NeTEx class) — so this file asks the
-// PROFILE for the set and asks the store only whether it can see the names. Everything checked
-// before is checked here; what a store does with a scope OTHER than this one is
+// The embedding-index allowlist is Stores.NETEX_EMBEDDING_SCOPE, injected into the store rather
+// than compiled into it — the storage engine names no NeTEx class. So this file asks the profile
+// for the set, and asks the store only whether it can see the names. The store's class table is
+// ModelRegistry.classes(). What a store does with a scope other than this one is
 // TestEmbeddingScopeInjection.
-//
-//   1. every allowlist entry is a name AbstractLmdbStore.inEmbeddingScope can actually see, i.e.
-//      a registrable model class (the store's class table is ModelRegistry.classes()) — with the
-//      single, deliberate exception of `Entrance`, which is kept as documentation;
-//   2. RouteView — the removed entry — is unreachable BY CONSTRUCTION, not by luck: it is
-//      a DerivedViewStructure, not an EntityStructure, so it can carry no id and can never be an
-//      embedding-index key. If a model regeneration ever made it an entity, this test fails and
-//      the removal must be revisited;
-//   3. `Entrance` is STILL LISTED and STILL cannot fire, because the NeTEx <Entrance> element
-//      binds to SiteEntrance_VersionStructure in the JAXB name space, which is why a name-only
-//      list does not work here. The allowlist lists SiteEntrance_VersionStructure ALONGSIDE it,
-//      which is what makes every id-bearing Entrance index;
-//   4. the SAME class of error is re-checked across the other visible entries: each must bind to
-//      a class of exactly its own name. Many global NeTEx elements bind to a registrable class
-//      with a different simple name, so this is asserted mechanically.
 
 import noi.netex.model.EntityStructure;
 import noi.netex.model.ObjectFactory;
@@ -45,9 +29,8 @@ public class TestEmbeddingScope {
         return SCOPE.classNames();
     }
 
-    /// Every allowlist entry except the deliberately-kept `Entrance` label names a
-    /// registrable class — otherwise inEmbeddingScope's `nameToIdx.containsKey(name)` guard
-    /// drops it silently.
+    /// Every allowlist entry except the kept `Entrance` label names a registrable class —
+    /// otherwise inEmbeddingScope's `nameToIdx.containsKey(name)` guard drops it silently.
     @Test
     void testEveryAllowlistEntryIsAVisibleName() {
         List<String> invisible = new ArrayList<>();
@@ -59,9 +42,8 @@ public class TestEmbeddingScope {
                         + "Entrance label; its JAXB alias SiteEntrance_VersionStructure carries it");
     }
 
-    /// The exact scope, pinned — every visible entry is an id-carrying entity, and the SET is the
-    /// eight plus SiteEntrance_VersionStructure. The set assertion is what makes this test
-    /// mutation-detectable.
+    /// Every visible entry is an id-carrying entity, and the set is exactly the eight names plus
+    /// SiteEntrance_VersionStructure.
     @Test
     void testEveryVisibleEntryCanCarryAnId() {
         Check.equals(
@@ -84,9 +66,9 @@ public class TestEmbeddingScope {
         }
     }
 
-    /// RouteView was REMOVED as genuinely unreachable. The reason is structural: it is a view.
-    /// Pin the reason, not the removal — a listed RouteView would still be dead, but an entity
-    /// RouteView would mean the removal has become a real gap.
+    /// RouteView is a DerivedViewStructure rather than an EntityStructure, so it can carry no id
+    /// and can never be an embedding-index key. If a model regeneration ever makes it an entity,
+    /// its absence from the allowlist becomes a real gap.
     @Test
     void testRouteViewIsAViewAndSoCanNeverBeIndexed() {
         Check.that(!allow().contains("RouteView"),
@@ -98,9 +80,9 @@ public class TestEmbeddingScope {
                 "RouteView is a view: it can carry no id, so it can never be an embedding key");
     }
 
-    /// The Entrance name mismatch is CLOSED, and closed by addition rather than by substitution.
-    /// The label stays (it is the element's name and deleting it would cement the gap),
-    /// and the class the parser actually builds for `<Entrance>` is listed next to it.
+    /// The NeTEx `<Entrance>` element binds to SiteEntrance_VersionStructure — XJC emits no class
+    /// named Entrance for an element with a named type — so the allowlist carries both names: the
+    /// element name, and the class the parser actually builds.
     @Test
     void testEntranceIsCarriedByItsJaxbAlias() {
         Set<String> allow = allow();
@@ -123,14 +105,13 @@ public class TestEmbeddingScope {
                 "…and it is exactly what the <Entrance> element declaration binds to");
     }
 
-    /// The generalisation of the Entrance defect: for every allowlist name that IS visible, the
-    /// NeTEx element of that name must bind to a class of exactly that name. A name/class mismatch
-    /// is the failure mode that made Entrance dead, and it is common in the model at large (122
-    /// global elements bind to a registrable class of a different name), so it is asserted here
-    /// rather than assumed.
+    /// For every allowlist name that is visible, the NeTEx element of that name must bind to a
+    /// class of exactly that name. A name/class mismatch is common in the model at large — 122
+    /// global elements bind to a registrable class of a different simple name — so this is asserted
+    /// mechanically.
     ///
-    /// `SiteEntrance_VersionStructure` is exempt: it is by construction the alias for an
-    /// element named something else, which is what the entry is for.
+    /// `SiteEntrance_VersionStructure` is exempt: it is by construction the alias for an element
+    /// named something else.
     @Test
     void testNoOtherAllowlistNameIsAnElementClassMismatch() {
         List<String> mismatched = new ArrayList<>();
@@ -147,15 +128,10 @@ public class TestEmbeddingScope {
                         + "element actually binds to — the Entrance failure mode, re-checked");
     }
 
-    /// The completion marker's value must NAME the scope, because that is the only reason the
-    /// marker can survive a widening of the allowlist honestly. The bug it closes: the marker used
-    /// to be a bare flag, so adding SiteEntrance_VersionStructure left every existing
-    /// store asserting a completeness it no longer had — the index-driven path was taken and the
-    /// new class's containers were never selected, silently.
-    ///
-    /// What is asserted is the PROPERTY the fix rests on, not the literal string: every
-    /// allowlist entry appears in the tag, so no widening can leave it unchanged, and the
-    /// generative half carries a version of its own since no name can speak for it.
+    /// The completion marker's value names the scope. Asserted as a property rather than as a
+    /// literal string: every allowlist entry appears in the tag, so no widening can leave the tag
+    /// unchanged and let a stale index keep claiming completeness. The generative half carries a
+    /// version of its own, since no name can speak for it.
     @Test
     void testScopeTagNamesEveryEntryAndTheGenerativeRule() {
         String tag = SCOPE.tag();
@@ -171,10 +147,9 @@ public class TestEmbeddingScope {
                 "the tag must be stable for a given scope — it is compared against stored bytes");
     }
 
-    /// The scope also decides the TypeOf* half's answers, and that half is CODE rather than data —
-    /// a caller cannot vary it, which is why the tag versions it instead of listing it. Pinned
-    /// because `inEmbeddingScope` delegates the whole predicate here and nothing else asserts
-    /// that the generative rule survived the move out of the store.
+    /// The scope also decides the TypeOf* half's answers, and that half is code rather than data:
+    /// a caller cannot vary it, which is why the tag versions it instead of listing it.
+    /// `inEmbeddingScope` delegates the whole predicate here.
     @Test
     void testTheGenerativeHalfIsPartOfEveryScope() {
         Check.that(SCOPE.admits("TypeOfProductCategory"),
@@ -189,10 +164,9 @@ public class TestEmbeddingScope {
                 "…but the curated half is entirely the caller's, and an empty one admits nothing");
     }
 
-    /// The store-side static that `tools/inspect/nx` reports the scope from must be the
-    /// profile's own set. It is the one place the engine still answers a question about NeTEx
-    /// classes, and the answer has to be a delegation rather than a second copy — a drifting copy
-    /// would make the inspector describe a scope no store was ever built under.
+    /// The store-side static that `tools/inspect/nx` reports the scope from delegates to the
+    /// profile's set rather than holding a second copy. It is the one place the engine answers a
+    /// question about NeTEx classes.
     @Test
     void testTheReportedDefaultIsTheProfileScope() {
         Check.equals(allow(), AbstractLmdbStore.embeddingIndexClassNames(),

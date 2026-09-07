@@ -20,12 +20,12 @@ public final class Direction {
 
     /// The process and directions that direction inference returns.
     ///
-    /// **Drain-after contract**: [#op] populates [#inferred] lazily DURING the ensemble pass — a
+    /// Drain-after contract: [#op] populates [#inferred] lazily DURING the ensemble pass — a
     /// Direction is synthesized the first time its direction type is seen. Obtain
     /// `inferred().values().iterator()` only AFTER the [Ensemble#applyOperations] iterator has been
     /// fully drained (e.g. two sequential `insertAnyObjects` calls on the same txn); iterating the
-    /// values view concurrently with the pass throws `ConcurrentModificationException` and would
-    /// miss later insertions.
+    /// values view concurrently with the pass throws `ConcurrentModificationException` and misses
+    /// later insertions.
     public record InferDirections(Ensemble.Operation op,
                                   Map<String, noi.netex.model.Direction> inferred) {}
 
@@ -42,7 +42,6 @@ public final class Direction {
 
         Ensemble.Operation process = obj -> {
             ServiceJourneyPattern sjp = (ServiceJourneyPattern) obj;
-            // a direction type but no direction ref or view
             if (sjp.getDirectionType() != null
                     && sjp.getDirectionRef() == null && sjp.getDirectionView() == null) {
                 String key = sjp.getDirectionType().value();

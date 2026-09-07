@@ -7,30 +7,26 @@ import toolkit.util.Conf;
 
 /// Stops the JAXB runtime from re-creating a `ThreadLocalMap.Entry` on every XML event.
 ///
-/// **The defect, in the library.** `Coordinator` — the shared base of `UnmarshallingContext` and
-/// `XMLSerializer` — brackets every single SAX-level callback with:
+/// `Coordinator` — the shared base of `UnmarshallingContext` and `XMLSerializer` — brackets every
+/// SAX-level callback with:
 ///
 /// ```
 /// pushCoordinator() { old = activeTable.get(); activeTable.set(this); }
 /// popCoordinator()  { if (old != null) activeTable.set(old); else activeTable.remove(); }
 /// ```
 ///
-/// Those callbacks are NOT nested, so `old` is always null and every event ends with
+/// Those callbacks are not nested, so `old` is always null and every event ends with
 /// `ThreadLocal.remove()`. The next event's `get()` misses, and `ThreadLocalMap.set` allocates a
 /// fresh `Entry` — one per XML event, plus the stale-slot scan that follows it.
 ///
-/// The fix: leave one sentinel `Coordinator` pushed on the thread for its whole life. `old` is
-/// then never null, so `popCoordinator` takes the `set(old)` branch, the entry is never deleted,
-/// `get()` always hits and `set()` overwrites in place. The sentinel is never popped and never
-/// escapes — it is pushed only by itself, never handed to the library.
+/// One sentinel `Coordinator` stays pushed on the thread for its whole life, so `old` is never
+/// null, `popCoordinator` takes the `set(old)` branch, the entry is never deleted, `get()` always
+/// hits and `set()` overwrites in place. The sentinel must never be popped and must never escape:
+/// it is pushed only by itself, never handed to the library. Its one observable effect is what
+/// `Coordinator._getInstance()` returns when no JAXB operation is on the stack — the sentinel
+/// rather than null.
 ///
-/// It cannot change behaviour: the sole observable difference is what `Coordinator._getInstance()`
-/// returns when NO JAXB operation is on the stack — null before, the sentinel after. Every class
-/// in jaxb-runtime that reads `_getInstance` does so from inside a marshal or unmarshal, where the
-/// real context is pushed on top and shadows it completely.
-///
-/// `-Dtoolkit.jaxbPin=false` restores the old behaviour for A/B measurement; no output byte
-/// differs either way.
+/// `-Dtoolkit.jaxbPin=false` disables it.
 public final class JaxbPin extends Coordinator {
 
     private static final boolean ENABLED =
@@ -45,7 +41,7 @@ public final class JaxbPin extends Coordinator {
     public static void pin() {
         if (!ENABLED || PINNED.get() != null) return;
         JaxbPin p = new JaxbPin();
-        p.pushCoordinator();   // sets activeTable = p, and p.old = whatever was there (null)
+        p.pushCoordinator();
         PINNED.set(p);
     }
 

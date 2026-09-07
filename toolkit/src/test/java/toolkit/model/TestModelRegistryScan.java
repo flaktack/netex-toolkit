@@ -1,24 +1,20 @@
 package toolkit.model;
 
-// THE SILENCE THAT SURFACED THREE LAYERS AWAY.
-//
 // ModelRegistry.scan() enumerates every .class resource of the model package out of the model's OWN
-// code source and calls Class.forName on each. It then did `catch (Throwable t) { continue; }`. The
-// name came from a file that is demonstrably there, so a failure is never "no such class" -- it is a
-// classpath problem: a missing transitive dependency, a truncated jar, a version skew. Swallowing it
-// turned that into "that NeTEx element type does not exist", which then reappears in NetexLoader as
-// an `unmapped` element on a feed that is perfectly valid, with nothing anywhere connecting the two.
+// code source and calls Class.forName on each. The name came from a file that is demonstrably
+// there, so a failure is never "no such class" -- it is a classpath problem: a missing transitive
+// dependency, a truncated jar, a version skew. Swallowed, it reappears in NetexLoader as an
+// `unmapped` element on a feed that is perfectly valid, with nothing connecting the two.
 //
-// WHY FATAL AND NOT COUNTED. classes() is where the model jar BECOMES the store's class table: it
-// is the sole feeder of V2Store.populateClassTable -> assignIdx(), and a fresh database writes that
-// name->idx map once for every later reader. A dropped class does not go missing, it SHIFTS every
-// idx assigned after it, so the store stays internally consistent, is silently smaller than the
-// model, and is not comparable with any store built on a healthy classpath. There is no useful
-// degraded mode, so this one gets no Strictness flag.
+// classes() is where the model jar BECOMES the store's class table: it is the sole feeder of
+// V2Store.populateClassTable -> assignIdx(), and a fresh database writes that name->idx map once
+// for every later reader. A dropped class does not go missing, it SHIFTS every idx assigned after
+// it, so the store stays internally consistent, is silently smaller than the model, and is not
+// comparable with any store built on a healthy classpath. There is no useful degraded mode, so
+// this one gets no Strictness flag.
 //
-// The refusal is exercised directly because its precondition is a broken classpath, which a test
-// running inside a healthy one cannot manufacture; testTheScanIsWholeOnThisClasspath is the other
-// half, asserting that the healthy path is in fact healthy and this is not dead code.
+// The refusal is exercised directly: its precondition is a broken classpath, which a test running
+// inside a healthy one cannot manufacture.
 
 import org.junit.jupiter.api.Test;
 import toolkit.test.Check;
@@ -56,8 +52,8 @@ public class TestModelRegistryScan {
         Check.that(true, "an empty offender list is the normal case and returns");
     }
 
-    /// The healthy-path control. Without it the refusal above could be passing against a registry
-    /// that is quietly dropping half the model on this very classpath.
+    /// The healthy-path control: the registry is not quietly dropping half the model on this
+    /// classpath.
     @Test
     void testTheScanIsWholeOnThisClasspath() {
         int registrable = ModelRegistry.classes().size();

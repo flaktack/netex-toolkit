@@ -8,14 +8,14 @@ import java.util.concurrent.atomic.LongAdder;
 
 /// How many date/time lexicals did not parse, and what they looked like.
 ///
-/// [XmlTime], [XmlDateTime] and [XmlDuration] answer an unparseable lexical with
-/// an UNPARSED CARRIER — raw text kept, re-marshal still byte-exact, normalisation returning null.
-/// Right for storage, silent everywhere else: from JAXB's point of view the adapter SUCCEEDED and
-/// returned an object, so no `ValidationEvent` is raised and `toolkit.codec.BindEvents` cannot see
-/// one of them. An unparseable time becomes a null at every arithmetic site downstream.
+/// [XmlTime], [XmlDateTime] and [XmlDuration] answer an unparseable lexical with an unparsed
+/// carrier — raw text kept, re-marshal still byte-exact, normalisation returning null. From JAXB's
+/// point of view the adapter succeeded and returned an object, so no `ValidationEvent` is raised
+/// and `toolkit.codec.BindEvents` cannot see one of them; this tally is the only place they are
+/// visible. An unparseable time becomes a null at every arithmetic site downstream.
 ///
-/// This class is the number. It counts and changes nothing; the harness reads [#total()] at the
-/// end of a load and hands it to the `unparsedTime` concern, where refuse-or-tolerate is decided.
+/// This class counts and changes nothing. The harness reads [#total()] at the end of a load and
+/// hands it to the `unparsedTime` concern, where refuse-or-tolerate is decided.
 public final class UnparsedTally {
 
     private UnparsedTally() {}
@@ -39,7 +39,7 @@ public final class UnparsedTally {
         }
     }
 
-    /// Distinct sample lexicals kept per kind, so a count is actionable without being a leak.
+    /// Distinct sample lexicals kept per kind.
     public static final int SAMPLE_CAP = 3;
 
     /// Sample lexicals are truncated to this many characters — a lexical is untrusted input.
@@ -105,12 +105,9 @@ public final class UnparsedTally {
         return BUCKETS[kind.ordinal()].samplesCopy();
     }
 
-    /// One line for a harness to log, with the samples in it — a bare count tells an operator that
-    /// seventeen values are gone but not which shape to go looking for, and the shape is the whole
-    /// of what makes it fixable.
+    /// One line for a harness to log, with the samples in it.
     ///
-    /// @return `"0"` when nothing failed to parse, so the caller can print the clean case too;
-    ///         a silent instrument and an absent instrument look identical.
+    /// @return `"0"` when nothing failed to parse, so the caller can print the clean case too.
     public static String summary() {
         long total = total();
         if (total == 0) return "0";

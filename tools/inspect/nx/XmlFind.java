@@ -33,14 +33,11 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
-/// Layers **S** (source feed) and **E** (export zip): find one element by `@id` in a pile
-/// of XML and hand back its subtree.
+/// Layers S (source feed) and E (export zip): find one element by `@id` in a pile of XML and hand
+/// back its subtree.
 ///
-/// Both layers are the same operation over different piles, so they share one implementation.
-///
-/// The capture is a StAX event copy, with in-scope namespace prefixes hoisted onto the captured
-/// root and nothing else changed — hoisting is what makes an extracted subtree parseable
-/// standalone. Text, attribute order, attribute quoting and child order all survive.
+/// The capture is a StAX event copy: text, attribute order, attribute quoting and child order all
+/// survive.
 ///
 /// There is no index, so S and E are linear scans of exactly the files the operator names.
 /// Scanning is parallel per zip member and stops as soon as the requested hits are in hand.

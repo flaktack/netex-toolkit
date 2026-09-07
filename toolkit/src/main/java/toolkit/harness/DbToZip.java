@@ -11,13 +11,9 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
-/// The EXPORT sandwich — one store OUT to a zip — beside [FeedToDb] (load),
-/// [DbToDb] (transform), [MergeToDb] (merge) and [InPlace] (fix).
-///
-/// A fifth sandwich rather than a flag on [DbToDb], because an export opens READ-ONLY: it writes no
-/// object, so it has no resolve pair and cannot have one, and it has no target store, no
-/// `--format`, no insert tally and no empty-output post-condition — but it does have a FILE to
-/// produce atomically.
+/// The EXPORT sandwich: one store out to a zip. It opens read-only and writes no object, so it has
+/// no resolve pair, no target store, no `--format`, no insert tally and no empty-output
+/// post-condition.
 ///
 /// What is owned here: the common flags, the input-exists guard, the read-only store and its read
 /// transaction, the atomic `.tmp` + rename (a half-written zip must never appear under the final
@@ -42,8 +38,7 @@ public final class DbToZip {
         void export(Store db, Txn tx, ZipWriter out) throws Exception;
     }
 
-    /// Two stages, because an export's own options must be read BEFORE its store is opened.
-    ///
+    /// Two stages, because an export's own options must be read before its store is opened.
     /// [ExportFn] takes no options: a driver's own flags are read here off the parsed [Args] and
     /// captured by the returned function, which keeps every flag error ahead of the first byte.
     @FunctionalInterface
@@ -102,8 +97,6 @@ public final class DbToZip {
                     tag, zipPath, objects, bytes / 1e6, Files.size(zipPath) / 1e6, wall,
                     bytes / 1e6 / wall, Log.peakRssKb());
         }
-        // An export reads its store through the same reference path a transform does, so the
-        // fallback and bind-event counts matter here too.
         Harness.finish(tag);
     }
 }

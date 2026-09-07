@@ -6,6 +6,5 @@
 /// object deciding, per concern, whether a detected degradation is refused or tolerated-and-counted.
 /// [toolkit.util.PeekIterator] probes one element and replays it.
 ///
-/// Deliberately small: the test for admission is "does every other package plausibly need this",
-/// not "where else would it go".
+/// The admission test is "does every other package plausibly need this".
 package toolkit.util;

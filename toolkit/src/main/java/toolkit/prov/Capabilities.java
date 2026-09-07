@@ -8,9 +8,8 @@ import java.util.Set;
 
 /// The capability vector every provenance stamp is derived from.
 ///
-/// A capability is a fix whose absence changes **stored or exported bytes**. A pure performance
-/// change never earns a name: giving it one would make every store built before it spuriously
-/// stale.
+/// A capability is a fix whose absence changes stored or exported bytes. A pure performance change
+/// never earns a name.
 ///
 /// The list is pinned from both ends by `toolkit/src/test/java/toolkit/prov/TestProvenance.java`:
 /// every name here must appear in at least one `PROV-CAP: <name>` marker at its fix site, and every
@@ -69,13 +68,9 @@ public final class Capabilities {
     /// The capability set of the code that is running right now — [#ALL] minus every
     /// capability whose gating knob does not hold.
     ///
-    /// The subtraction exists because knobs decide entries: `-Dtoolkit.refPatch=false` takes the
-    /// whole-blob re-marshal path, which is the ABSENCE of `no-remarshal-resolve`. A sidecar that
-    /// OVERSTATES is worse than no sidecar: a downstream stage cannot refuse what it is told is
-    /// there.
-    ///
-    /// The gate lives on the [toolkit.util.Conf.Flag], not on [Cap], so this package keeps not
-    /// knowing what a knob is. A set of names crosses, nothing else.
+    /// Knobs decide entries: `-Dtoolkit.refPatch=false` takes the whole-blob re-marshal path, which
+    /// is the absence of `no-remarshal-resolve`. The gate lives on the [toolkit.util.Conf.Flag], not
+    /// on [Cap]: a set of names crosses, nothing else.
     public static Set<String> current() {
         Set<String> withheld = toolkit.util.Conf.withheldCaps();
         Set<String> s = new LinkedHashSet<>();

@@ -23,29 +23,24 @@ import java.util.Set;
 
 /// The whitespace facet JAXB forgets on enums (PROV-CAP: enum-collapse).
 ///
-/// Every NeTEx enumeration is a restriction of `xs:NMTOKEN`, whose whitespace facet is
-/// **collapse**: `<TransportMode>bus </TransportMode>` and `bus` are the same value.
-/// XJC binds such a type to an `@XmlEnum` with the DEFAULT base `String.class`, and the
-/// RI parses an enum by handing the raw lexical to the `String` transducer — facet
-/// **preserve** — and looking the result up in a map keyed on the exact `@XmlEnumValue`
-/// text. A padded value misses the map and the RI returns `null` **silently**: no
-/// ValidationEvent, no exception. The element ceases to exist on the bean, and on the next marshal
-/// it ceases to exist in the XML. (jakarta's `CollapsedStringAdapter` is already installed on
-/// the 52 plain NMTOKEN *string* fields; it is not reachable from `@XmlEnum`.)
+/// Every NeTEx enumeration is a restriction of `xs:NMTOKEN`, whose whitespace facet is `collapse`:
+/// `<TransportMode>bus </TransportMode>` and `bus` are the same value. XJC binds such a type to an
+/// `@XmlEnum` with the default base `String.class`, and the RI parses an enum by handing the raw
+/// lexical to the `String` transducer — facet `preserve` — and looking the result up in a map keyed
+/// on the exact `@XmlEnumValue` text. A padded value misses the map and the RI returns `null`
+/// silently: no ValidationEvent, no exception. The element ceases to exist on the bean, and on the
+/// next marshal it ceases to exist in the XML. (jakarta's `CollapsedStringAdapter` is already
+/// installed on the plain NMTOKEN *string* fields; it is not reachable from `@XmlEnum`.)
 ///
-/// The consequence downstream is not a missing string: a Line whose `transportMode` binds to null
-/// is exported with no mode, and a consumer that rejects an unsupported mode discards the whole
-/// Route.
+/// Downstream, a Line whose `transportMode` binds to null is exported with no mode, and a consumer
+/// that rejects an unsupported mode discards the whole Route.
 ///
-/// The substitution fires only when the collapsed text differs from the raw text AND the collapsed
+/// The substitution fires only when the collapsed text differs from the raw text and the collapsed
 /// text is a declared lexical value of an enum the model binds to an element of this local name.
-/// The second condition is what makes a name-keyed table sound even though some element names bind
-/// to an enum in one class and to a String elsewhere: a string only loses whitespace if it
-/// collapses onto a declared lexical, in which case both spellings denote the same NMTOKEN.
+/// The name-keyed table stays sound while that second condition holds, even though some element
+/// names bind to an enum in one class and to a String elsewhere.
 ///
-/// NOT applied to enum-valued attributes, which have the same hole; intercepting attribute reads
-/// would put a set lookup on the loader's hottest accessor. The symptom would be identical — a
-/// silent null.
+/// Not applied to enum-valued attributes, which have the same hole and the same silent null.
 public final class EnumWhitespace {
 
     /// Element local name -> the declared lexical values of every enum bound to that name.
@@ -53,8 +48,7 @@ public final class EnumWhitespace {
 
     private EnumWhitespace() {}
 
-    /// The name table, built once per JVM by reflection over the model package. Derived, not
-    /// written out: `netex.schema.version` is a swappable build input.
+    /// The name table, built once per JVM by reflection over the model package.
     public static Map<String, Set<String>> table() {
         Map<String, Set<String>> v = values;
         if (v == null) {
@@ -151,9 +145,8 @@ public final class EnumWhitespace {
     /// Wrap a reader so the unmarshaller sees collapsed text for enum-valued elements.
     ///
     /// The wrapper reports a different value; it never changes which events occur, so a
-    /// `CopyingCapture` underneath still tees the RAW source events into the stored fragment. That
-    /// asymmetry is intentional: the stored fragment keeps `"bus "` while the bound object carries
-    /// `"bus"`.
+    /// `CopyingCapture` underneath still tees the raw source events into the stored fragment. The
+    /// stored fragment therefore keeps `"bus "` while the bound object carries `"bus"`.
     public static Reader wrap(XMLStreamReader r) {
         return new Reader(r);
     }
@@ -172,7 +165,7 @@ public final class EnumWhitespace {
             observe(r.getEventType());
         }
 
-        /// Forget the element context. Needed when the caller advances the UNDERLYING reader behind
+        /// Forget the element context. Needed when the caller advances the underlying reader behind
         /// this wrapper's back, which the loader does: its outer cursor loop positions the fragment
         /// root itself and only then hands the wrapper to the unmarshaller.
         public void reset() {
@@ -204,14 +197,14 @@ public final class EnumWhitespace {
             }
         }
 
-        /// Runs for EVERY text event of every fragment ever decoded, so the steady state must not
+        /// Runs for every text event of every fragment ever decoded, so the steady state must not
         /// hash, allocate or copy.
         ///
         /// The pre-filter — does the text start or end with whitespace — is read straight off the
-        /// parser's buffer, and it is SOUND: every enum lexical in the model is an NMTOKEN and
-        /// contains no space, so a text whose first and last characters are non-space can differ
-        /// from its collapse only by an INTERNAL run, which puts a space in the collapsed form and
-        /// cannot match any constant.
+        /// parser's buffer. It holds only while every enum lexical in the model is an NMTOKEN
+        /// containing no space: a text whose first and last characters are non-space then differs
+        /// from its collapse only by an internal run, which puts a space in the collapsed form and
+        /// matches no constant.
         private void maybeCollapse() {
             if (elementName == null) return;
             char[] buf = super.getTextCharacters();
@@ -275,7 +268,7 @@ public final class EnumWhitespace {
         }
 
         /// Funnelled through [#next()] so the collapsed text is what accumulates; the inherited
-        /// delegate would advance the WRAPPED reader and bypass this wrapper entirely (and, in the
+        /// delegate would advance the wrapped reader and bypass this wrapper entirely (and, in the
         /// loader, `CopyingCapture`'s fragment tee with it).
         @Override
         public String getElementText() throws XMLStreamException {

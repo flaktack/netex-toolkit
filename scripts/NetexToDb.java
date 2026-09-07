@@ -4,11 +4,6 @@
 //
 // FeedToDb accepts everything NetexLoader.load dispatches on, a bare .xml or .xml.gz included, so
 // this driver is the harness call and nothing else.
-//
-// THE FORMAT DEFAULT. Whatever this defaults to is what the whole downstream chain becomes, since
-// every db-to-db driver inherits its source's format when no --format is given. There is one
-// format now, and the flag is kept only so existing "--format v2" command lines keep parsing —
-// FeedToDb still rejects v1 by name rather than with "unknown format".
 
 import toolkit.harness.FeedToDb;
 import toolkit.load.ZipLoad;

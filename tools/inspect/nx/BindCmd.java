@@ -42,18 +42,11 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /// `nx bind` — the silent-null sweep.
 ///
-/// ## The predicate
-///
-/// A value present in the fragment, a field null in the bean, and no error raised anywhere. `nx
-/// lens` checks it for one object; this is the same check with a corpus loop around it.
-///
-/// Per stored object: flatten the fragment to `path -> text`, render the bean to `path -> value`
-/// with DECLARED-BUT-NULL fields included, and join. A non-empty fragment text whose bean row is
-/// null is a finding. Nothing else in this stack can see one: the fragment is byte-perfect so every
-/// round-trip gate passes, the census counts the element on both arms, and the JAXB RI raises no
-/// `ValidationEvent`.
-///
-/// ## Both arms
+/// The predicate: a value present in the fragment, a field null in the bean, and no error raised
+/// anywhere — the JAXB RI raises no `ValidationEvent` when an enum lexical misses its map. Per
+/// stored object, flatten the fragment to `path -> text`, render the bean to `path -> value` with
+/// declared-but-null fields included, and join; a non-empty fragment text whose bean row is null is
+/// a finding.
 ///
 /// `FragmentCodec.decode` wraps its reader in [EnumWhitespace], so on a current jar the defect that
 /// fix repairs is invisible because it is repaired. Every object is therefore bound twice:
@@ -69,38 +62,27 @@ import java.util.concurrent.atomic.AtomicLong;
 ///
 /// | B0 | B | verdict | reading |
 /// |---|---|---|---|
-/// | null | null | `SILENT_NULL` | LIVE DEFECT. The value is in the fragment and in nobody's bean. |
+/// | null | null | `SILENT_NULL` | the value is in the fragment and in nobody's bean. |
 /// | null | set | `REPAIRED` | the defect shape is present in the DATA and an interception catches
 ///   it. After a model regeneration, going to zero means either the data changed or the repair
 ///   stopped firing. |
 /// | set | null | `TOOLKIT_NULL` | an interception LOSES a value naive JAXB kept — a regression. |
 /// | \- | \- | `NO_FIELD` | the path vocabulary did not resolve. |
 ///
-/// ## The enum-attribute hole
-///
-/// Enum-valued ATTRIBUTES have the same whitespace-collapse defect, and intercepting them was
-/// rejected because it would put a set lookup on the loader's hottest accessor. This sweep confirms
-/// the corpus zero two independent ways, both free once the objects are being walked:
-///
-/// 1. a name-keyed census — the enum-valued attribute names are rebuilt HERE by reflection, so a
-///    model regeneration that adds one is picked up, and every occurrence is counted with the
-///    padded ones counted separately;
-/// 2. the main sweep — a padded enum attribute binds null, so it appears as a `SILENT_NULL` on an
-///    `@`-path even without the census existing at all.
-///
-/// ## The path-vocabulary proof
+/// Enum-valued ATTRIBUTES carry the same whitespace-collapse defect and have no interception. They
+/// are counted two independent ways: a name-keyed census, whose attribute names are rebuilt HERE by
+/// reflection so a model regeneration that adds one is picked up, with the padded occurrences
+/// counted separately; and the main sweep, where a padded enum attribute binds null and so appears
+/// as a `SILENT_NULL` on an `@`-path.
 ///
 /// Every matched path is tallied by the [BeanRender.Origin] that named it, so "0 unmatched" can be
 /// read against the risky cases: choice fields going through `@XmlElements`/`@XmlElementRef`
 /// alternatives, and `@XmlAnyElement` falling back to the value's class name.
 ///
-/// ## Scale
+/// [RawStore] does point access instead of `V2Store`. LMDB stays on one reader thread and the
+/// CPU-bound half (decompress, parse, two binds, two renders) fans out to `--workers`.
 ///
-/// `V2Store` is not used — its constructor materialises the whole edge state — so [RawStore] does
-/// point access instead. LMDB stays on one reader thread and the CPU-bound half (decompress,
-/// parse, two binds, two renders) fans out to `--workers`.
-///
-/// ## What it cannot reach
+/// What it cannot reach:
 ///
 /// - `@XmlAnyElement` content. Extension blocks are DOM subtrees, not beans. Reported as
 ///    `DOM_SUBTREE` and counted, never as loss: the marshaller writes the DOM back verbatim.
@@ -303,8 +285,7 @@ public final class BindCmd {
         o.println();
 
         // The production handler is a process-global tally, so clear it first: the number printed
-        // must be about THESE objects and nothing else. Each store's decode arm is labelled with
-        // its path so a multi-store sweep stays attributable.
+        // must be about THESE objects and nothing else.
         toolkit.codec.BindEvents.reset();
 
         Acc total = new Acc();
@@ -354,10 +335,9 @@ public final class BindCmd {
                 present += n;
                 Class<?> c = ModelRegistry.classForName(name);
                 if (c == null) { unknown++; unknownRows += n; continue; }
-                // Sampling skips the BIND, not the SCAN. Local keys are block-allocated and
+                // Sampling skips the BIND, not the SCAN: local keys are block-allocated and
                 // strided, not dense from 0, so a point-lookup sample over [0,maxKey] misses almost
-                // everything; a cursor walk taking every Nth row saves the CPU half (two binds and
-                // two renders per object) and not the I/O half.
+                // everything.
                 long stride = sample > 0 && n > sample ? Math.max(1, n / sample) : 1;
                 plan.add(new Plan(idx, name, c, n, stride));
                 planned += stride == 1 ? n : n / stride;
@@ -498,8 +478,7 @@ public final class BindCmd {
             } catch (RuntimeException e) {
                 acc.bErrors++;
             }
-            // Both arms or nothing: a one-armed object cannot produce a B0/B verdict, and guessing
-            // one from a single arm is how a tool starts reporting its own failures as findings.
+            // Both arms or nothing: a one-armed object cannot produce a B0/B verdict.
             if (b == null || b0 == null) {
                 acc.notAnalysed.merge(cls, 1L, Long::sum);
                 return;
@@ -510,9 +489,8 @@ public final class BindCmd {
             List<BeanRender.Row> bRows = BeanRender.render(b, maxDepth, true);
             Map<String, BeanRender.Row> m1 = BeanRender.byPath(bRows);
 
-            // Paths the bean walk stopped short of, so their descendants are "not rendered",
-            // not "not bound". Without this a depth cap manufactures NO_FIELD rows, i.e. the
-            // tool would fabricate exactly the signal it exists to report.
+            // Paths the bean walk stopped short of, so their descendants are "not rendered", not
+            // "not bound". Without this a depth cap manufactures NO_FIELD rows.
             List<String> capped = null, domRoots = null;
             for (BeanRender.Row r : bRows) {
                 if (r.origin() == BeanRender.Origin.DEPTH_CAP
@@ -520,9 +498,8 @@ public final class BindCmd {
                     if (capped == null) capped = new ArrayList<>(2);
                     capped.add(r.path());
                 }
-                // @XmlAnyElement content lives as a DOM subtree: its descendants have no bean
-                // field BY DESIGN and are not lost, the marshaller writing the DOM back verbatim.
-                // Calling them NO_FIELD would be a false alarm on the tool's loudest signal.
+                // @XmlAnyElement content lives as a DOM subtree: its descendants have no bean field
+                // BY DESIGN and are not lost, the marshaller writing the DOM back verbatim.
                 if (r.origin() == BeanRender.Origin.ANY && r.complex()) {
                     if (domRoots == null) domRoots = new ArrayList<>(2);
                     domRoots.add(r.path());
@@ -578,8 +555,8 @@ public final class BindCmd {
                         path = tp;
                     } else {
                         // The bean models this element as complex and the type declares no
-                        // @XmlValue: there is nowhere for the characters to go. That is a genuine
-                        // drop, not a vocabulary miss, and it belongs in the ledger as one.
+                        // @XmlValue: there is nowhere for the characters to go. A genuine drop,
+                        // not a vocabulary miss.
                         have0 = have1 = false;
                         path = tp;
                     }
@@ -838,7 +815,7 @@ public final class BindCmd {
                 a.byVerdict(TOOLKIT_NULL), head, minCount, values);
 
         o.println(RULE);
-        o.println("3. THE ENUM-ATTRIBUTE HOLE  (#104 recorded-not-fixed; T5_OTP_GATE §5)");
+        o.println("3. THE ENUM-ATTRIBUTE HOLE  (#104 recorded-not-fixed)");
         o.println(RULE);
         o.println("  Enum-valued ATTRIBUTES have the identical whitespace-collapse defect and NO");
         o.println("  repair: intercepting attribute reads would put a set lookup on the loader's");

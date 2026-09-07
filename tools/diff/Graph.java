@@ -10,15 +10,15 @@
 // order — what the reference sort is defined in.
 //
 // SCALE: a dump that does not fit in heap spills as sorted chunks and k-way merges. The sort is
-// in-process because the build container ships uutils, not GNU sort. Small dumps sort in memory
-// through the same write path. The OBJ label map stays resident.
+// in-process because the build container ships uutils, not GNU sort. The OBJ label map stays
+// resident.
 //
 // Options / knobs:
 //   --no-sort                 emit lines UNSORTED (escape hatch; sort later with LC_ALL=C sort)
-//   SHARD MODE (two phases; per-shard output is UNSORTED, --no-sort implied). The expensive step
-//   is the per-object decode, and EDGE/UNRES endpoint labels need the DECODED (class, id, version)
-//   of BOTH endpoints — the _id_idx key alone is lossy, since version null and version "any"
-//   encode identically — so labels travel through sidecar files.
+//   SHARD MODE (two phases; per-shard output is UNSORTED, --no-sort implied). EDGE/UNRES endpoint
+//   labels need the DECODED (class, id, version) of BOTH endpoints — the _id_idx key alone is
+//   lossy, since version null and version "any" encode identically — so labels travel through
+//   sidecar files.
 //   --shard I/N [--labels-out F]   phase 1: decode ONLY objects with full_key % N == I. Local keys
 //                             come from one global sequence, so the slices are uniform. Shard 0
 //                             also emits every COUNT line, key-only and without decoding. Writes a
@@ -35,17 +35,12 @@
 //   -Dgraphdump.tmpdir=DIR    where spill chunks go (default: beside the output). Peak extra disk
 //                             is about the final dump size, removed afterwards and on failure.
 //
-// SIDECAR CONTRACT. An incomplete or corrupt set silently produces a wrong-but-well-formed dump,
-// so every clause here is checked and FATAL, never degraded-and-exit-0:
-//   * every sidecar starts with "#graphdump-labels<TAB>I<TAB>N"; phase 2 requires the I values to
-//     be exactly {0..N-1}, each once, all with the same N;
-//   * a sidecar whose last byte is not '\n' is truncated -> rejected; so is any body line with no
-//     TAB;
-//   * every '?' label substitution — an endpoint with no sidecar entry — is COUNTED and printed in
-//     the summary; a real dump has zero;
-//   * SAME-LANGUAGE ONLY: the full key is written with signed Long.toString here and as an
-//     unbounded integer on the other arm; the two agree only because full keys are < 2^48. Do not
-//     mix phases across arms.
+// SIDECAR CONTRACT. Every clause loadLabels checks is FATAL: an incomplete or corrupt set
+// otherwise produces a wrong-but-well-formed dump at exit 0. Every '?' label substitution — an
+// endpoint with no sidecar entry — is counted and printed in the summary; a real dump has zero.
+// SAME-LANGUAGE ONLY: the full key is written with signed Long.toString here and as an unbounded
+// integer on the other arm; the two agree only because full keys are < 2^48. Do not mix phases
+// across arms.
 
 import noi.netex.model.EntityInVersionStructure;
 import noi.netex.model.EntityStructure;
@@ -186,7 +181,6 @@ public class Graph {
             System.err.println("[Graph] FATAL: " + f.getMessage());
             failed = true;
         } finally {
-            // Never leave the spill directory — about the size of the dump — behind on failure.
             out.cleanup();
         }
         if (failed) System.exit(2);
@@ -360,15 +354,8 @@ public class Graph {
         return n.equals("DataManagedObjectStructure") ? "DataManagedObject" : n;
     }
 
-    /// Dump-label id: `null` renders as the reference arm's `None`, not as Java string
-    /// concatenation's `null`.
-    ///
-    /// It cannot fire on this arm — the insert path refuses an object with no id, and it is the
-    /// only path that creates a class-map row under a fresh key. The reference arm has no such
-    /// refusal and stores the literal four bytes `None`, so rendering `null` here would invent an
-    /// A/B difference against a value the other side has persisted.
-    ///
-    /// The version half needs no helper: both tools fold a null version to `"-"` explicitly.
+    /// Dump-label id: `null` renders as the reference arm's `None`, the literal four bytes that
+    /// arm persists, rather than as Java string concatenation's `null`.
     static String labelId(EntityStructure e) {
         String id = e.getId();
         return id != null ? id : "None";
@@ -447,7 +434,7 @@ public class Graph {
         }
 
         @Override long finish() throws IOException {
-            if (n == 0 && emptyMarker) o.write('\n'); // graphdump_py: "\n".join([]) + "\n"
+            if (n == 0 && emptyMarker) o.write('\n'); // an empty dump is a single newline
             o.close();
             return n;
         }
@@ -497,7 +484,7 @@ public class Graph {
             if (chunks.isEmpty()) { // fits in memory
                 buf.sort((a, c) -> Arrays.compareUnsigned(a, c));
                 try (OutputStream o = new BufferedOutputStream(Files.newOutputStream(out), 1 << 20)) {
-                    if (buf.isEmpty()) o.write('\n'); // match graphdump_py's empty-dump output
+                    if (buf.isEmpty()) o.write('\n'); // the same empty-dump marker
                     writeAll(o, buf);
                 }
                 return n;

@@ -1,31 +1,11 @@
 package toolkit.codec;
 
-// Regression test. A serializer that re-emits every object in FIELD order silently repairs a
-// source feed whose children are out of the XSD sequence; the fragment format inherits the
-// source's order instead, so the repair has to be explicit.
+// Regression test for toolkit.codec.FragmentOrder, the child-element order normalisation applied at
+// emission time. No other gate in the suite sees element order.
 //
-// WHAT IT GATES. Two Java-only schema violations, invisible to every other gate — the export A/B
-// declares element order a normalisation, the round-trip harness absorbs it, graph dumps carry only
-// Class|id|version, and OTP's reader accepts out-of-order children:
-//
-//   1. `z-links.xml`'s TimetableFrame emitted `journeyInterchanges` before `trainNumbers`.
-//      TimetableFrameGroup's xsd:sequence puts TimetableJourneyInFrameGroup (trainNumbers) before
-//      InterchangeInFrameGroup (journeyInterchanges), so this arm was the invalid one. z-links has
-//      since been split — interchanges ride with their journeys in a group file, trainNumbers are
-//      shared — so the same sequence is now asserted on both frames that replaced it.
-//
-//   2. VehicleTypes in `shared-01-resource.xml` carried FuelType before EuroClass, an order that
-//      comes STRAIGHT FROM THE SOURCE FEED, because the fragment format stores the object's
-//      captured XML and the exporter copies those bytes. toolkit.codec.FragmentOrder is the missing
-//      normalisation: it reorders a fragment's top-level children into the class's declared JAXB
-//      emission order — which IS the XSD sequence — at emission time, and returns the fragment
-//      untouched otherwise.
-//
-// The unit methods below pin FragmentOrder's contract from both sides: it must repair a real
-// misordering, and it must be a byte-level no-op on everything else — including the cases where it
-// cannot rank what it sees (comment/CDATA, unknown child element), where "leave it alone" is the
-// only safe answer. The two store-taking methods pin the end-to-end statement the XSD gate makes:
-// the STORED fragment is still in source order and the EXPORTED one is in schema order.
+// The unit methods pin normalise() on a real misordering and as a byte-level no-op everywhere else,
+// including the fragments it cannot rank. The two store-taking methods pin the end-to-end
+// statement: the stored fragment is in source order and the exported one is in schema order.
 
 import noi.netex.model.ServiceJourney;
 import noi.netex.model.VehicleType;
@@ -67,12 +47,10 @@ public class TestFragmentOrder {
 
     // ------------------------------------------------------------------ the rank table
 
-    /// The ranks are read off the generated model's own JAXB annotations, so this asserts the ONE
-    /// property the whole fix rests on: the model's declared emission order is the XSD sequence.
-    /// TransportTypeGroup is Name, ShortName, Description, PrivateCode, TransportTypePropertiesGroup
-    /// (EuroClass ... MaximumRange), TransportMode, VehicleTypeTotalCapacityGroup — then
-    /// VehicleTypeGroup (capacities, LowFloor, ...) — after EntityInVersionGroup (ValidBetween) and
-    /// DataManagedObjectGroup (keyList).
+    /// The XSD groups behind the asserted sequence. TransportTypeGroup is Name, ShortName,
+    /// Description, PrivateCode, TransportTypePropertiesGroup (EuroClass ... MaximumRange),
+    /// TransportMode, VehicleTypeTotalCapacityGroup — then VehicleTypeGroup (capacities, LowFloor,
+    /// ...) — after EntityInVersionGroup (ValidBetween) and DataManagedObjectGroup (keyList).
     @Test
     void testRanksFollowTheDeclaredXsdSequence() {
         Map<String, Integer> r = FragmentOrder.ranks(VehicleType.class);
@@ -110,9 +88,6 @@ public class TestFragmentOrder {
                 "EuroClass now precedes FuelType: " + out);
     }
 
-    /// The strongest statement available: the repaired fragment is the source fragment with the two
-    /// children SWAPPED and nothing else — same attributes, same quoting, same tabs and newlines,
-    /// same nested content. A re-marshal would have changed all four.
     @Test
     void testNothingButTheChildOrderChanges() {
         String expected = MISORDERED_VEHICLE_TYPE
@@ -122,8 +97,6 @@ public class TestFragmentOrder {
                 "only the two children move");
     }
 
-    /// The common case, and the one the export's throughput depends on: an in-order fragment is
-    /// returned as the SAME ARRAY — no scan result is copied, nothing is allocated.
     @Test
     void testAnOrderedFragmentIsReturnedUnchangedAndUncopied() {
         byte[] in = utf8("<VehicleType id=\"v\"><EuroClass>EURO 6</EuroClass>"
@@ -132,7 +105,6 @@ public class TestFragmentOrder {
                 "an already-ordered fragment is the identical array");
     }
 
-    /// Equal-rank siblings (repeated elements, xsd:choice members) must keep their source order.
     @Test
     void testEqualRankSiblingsKeepSourceOrder() {
         byte[] in = utf8("<VehicleType id=\"v\">"
@@ -145,8 +117,6 @@ public class TestFragmentOrder {
                 "the three ValidBetweens move as a stable block, ahead of FuelType");
     }
 
-    /// A comment or CDATA section is content the byte scanner does not model, so it declines rather
-    /// than guesses. Declining is always safe.
     @Test
     void testAFragmentCarryingACommentOrCdataIsLeftVerbatim() {
         byte[] comment = utf8("<VehicleType id=\"v\"><!--note--><FuelType>diesel</FuelType>"
@@ -159,9 +129,6 @@ public class TestFragmentOrder {
                 "a CDATA section makes the fragment untouchable");
     }
 
-    /// A child the class does not declare — a substitution-group member reached through
-    /// @XmlElementRef, a foreign-namespace element such as gml:LineString — cannot be ranked, so the
-    /// whole fragment is declined. Partial knowledge must never produce a partial permutation.
     @Test
     void testAnUnrankableChildDeclinesTheWholeFragment() {
         byte[] in = utf8("<VehicleType id=\"v\"><FuelType>diesel</FuelType>"
@@ -170,7 +137,6 @@ public class TestFragmentOrder {
                 "an unknown child leaves the whole fragment verbatim");
     }
 
-    /// Self-closing children are spans like any other and must move correctly.
     @Test
     void testSelfClosingChildrenMove() {
         byte[] in = utf8("<VehicleType id=\"v\"><FuelType>diesel</FuelType><ValidBetween id=\"a\"/></VehicleType>");
@@ -178,7 +144,6 @@ public class TestFragmentOrder {
                 str(FragmentOrder.normalise(VehicleType.class, in)), "a self-closing child moves");
     }
 
-    /// A '>' inside an attribute value must not be read as the end of a tag.
     @Test
     void testAGreaterThanInsideAnAttributeValueDoesNotEndTheTag() {
         byte[] in = utf8("<VehicleType id=\"v\"><FuelType>diesel</FuelType>"
@@ -188,7 +153,7 @@ public class TestFragmentOrder {
                 str(FragmentOrder.normalise(VehicleType.class, in)), "attribute values are opaque");
     }
 
-    /// Fragments with fewer than two children have no order to fix and must never be copied.
+    /// Degenerate: fewer than two children, so there is no order to fix.
     @Test
     void testDegenerateFragmentsAreUntouched() {
         for (String s : List.of("<VehicleType id=\"v\"/>",
@@ -199,8 +164,8 @@ public class TestFragmentOrder {
         }
     }
 
-    /// A journey's passingTimes are ONE child (a container), so the biggest fragments in the export
-    /// present the scanner with a handful of top-level children, not thousands.
+    /// A journey's passingTimes are one child (a container), so even the biggest fragments in the
+    /// export present the scanner with a handful of top-level children.
     @Test
     void testAJourneyFragmentIsRankedAndUnchanged() {
         byte[] in = utf8("<ServiceJourney id=\"sj\" version=\"1\"><Name>25</Name>"
@@ -213,10 +178,9 @@ public class TestFragmentOrder {
                 "an in-order ServiceJourney is untouched: " + str(in));
     }
 
-    /// The rank table is derived from the model's annotations; the JAXB MARSHALLER is the reference
-    /// implementation of the same annotations, and is the path every mutated object already takes
-    /// ([FragmentCodec#encode]). So the two must agree on the permutation — if they ever diverge,
-    /// one of them is emitting an order the schema did not declare.
+    /// The JAXB marshaller implements the same annotations the rank table is derived from, and is
+    /// the path every mutated object takes ([FragmentCodec#encode]); the two must agree on the
+    /// permutation.
     @Test
     void testTheRewriteAgreesWithTheJaxbMarshaller() {
         FragmentCodec codec = new FragmentCodec();
@@ -259,7 +223,7 @@ public class TestFragmentOrder {
         </ResourceFrame>
         """;
 
-    /// Every entry of a split export, parsed (parsing IS the well-formedness assertion).
+    /// Every entry of a split export, parsed (parsing is the well-formedness assertion).
     private static Map<String, Document> export(TestStore ts, String frames, String... args)
             throws Exception {
         Path source = ts.buildDbFile(frames, "source.lmdb");
@@ -294,9 +258,6 @@ public class TestFragmentOrder {
         return names;
     }
 
-    /// The whole point, end to end: the source order survives INTO the database (the fragment format
-    /// is still a verbatim capture — that is what makes the round trip lossless) and is repaired ON
-    /// THE WAY OUT. Both halves are asserted, because fixing the first would be the wrong fix.
     @Test
     void testTheExportRepairsWhatTheStoreKeptVerbatim(TestStore ts) throws Exception {
         ts.loadNetex(MISORDERED_RESOURCE_FRAME);
@@ -318,12 +279,8 @@ public class TestFragmentOrder {
     }
 
     // A cross-border ServiceFrame/TimetableFrame pair: IT train 25 and CH train 25 sharing stops
-    // 85_300 / 85_400 on 2026-01-05. Only the SHAPE matters here -- this test reads the order the
+    // 85_300 / 85_400 on 2026-01-05. Only the shape matters here -- this test reads the order the
     // exporter emits children in, not what they mean.
-    //
-    // Duplicated rather than shared with ../noi-pipeline's copy, nothing here being able to reach
-    // across a repository. The two are free to drift: this one only has to stay valid enough to
-    // export.
     private static final String NETEX = """
 <ServiceFrame id="sf" version="1">
   <journeyPatterns>
@@ -370,17 +327,14 @@ public class TestFragmentOrder {
   </vehicleJourneys>
 </TimetableFrame>
 """;
-    /// TimetableFrameGroup's xsd:sequence, asserted where each container now lands.
-    ///
-    /// The original bug was z-links.xml emitting InterchangeInFrameGroup (journeyInterchanges)
-    /// before TimetableJourneyInFrameGroup (trainNumbers) — the cvc-complex-type.2.4.a the XSD
-    /// probe found. z-links no longer exists, and its two halves have since separated again: the
-    /// export writes THREE TimetableFrames, one per file level, each carrying one container.
-    /// trainNumbers are globally shared (every group's journeys reference them); a shard's
-    /// interchanges sit in its gSS-shared.xml, which OTP indexes for the whole group and maps at
-    /// the group pop; the journeys are in the numbered files, whose index is dropped one file at a
-    /// time. Nothing can violate the sequence while no two of those containers share a frame — so
-    /// what this pins is exactly that: which container is in which frame, and alone.
+    /// TimetableFrameGroup's xsd:sequence puts TimetableJourneyInFrameGroup (trainNumbers) before
+    /// InterchangeInFrameGroup (journeyInterchanges). The export writes three TimetableFrames, one
+    /// per file level, each carrying one container: trainNumbers are globally shared (every group's
+    /// journeys reference them); a shard's interchanges sit in its gSS-shared.xml, which OTP
+    /// indexes for the whole group and maps at the group pop; the journeys are in the numbered
+    /// files, whose index is dropped one file at a time. Nothing can violate the sequence while no
+    /// two of those containers share a frame, which is what this pins: which container is in which
+    /// frame, alone.
     @Test
     void testTimetableFrameContainersFollowTheXsdSequence(TestStore ts) throws Exception {
         String frames = NETEX + """
@@ -404,9 +358,8 @@ public class TestFragmentOrder {
                 childNames(shared, "TimetableFrame"),
                 "the shared entry carries the trainNumbers and nothing else");
 
-        // The interchange rides in its shard's SHARED GROUP file now. Found by content rather than
-        // by name: which shard that is depends on the partition, and this test is about element
-        // ORDER, not placement.
+        // Found by content rather than by name: which shard the interchange rides in depends on the
+        // partition, and this test is about element order, not placement.
         String sharedGroup = null;
         String numbered = null;
         for (Map.Entry<String, Document> e : entries.entrySet()) {

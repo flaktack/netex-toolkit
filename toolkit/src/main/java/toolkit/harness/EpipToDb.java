@@ -1,14 +1,13 @@
 package toolkit.harness;
 
 // Raw-clone the source database into the target, then run the EPIP transformation on the target
-// in place. inPlace is the composition form the pipelines' fused drivers reuse, so the
-// split and fused paths produce identical output by construction.
+// in place. inPlace is the composition form the pipelines' fused drivers reuse.
 //
 // Phases, one runInPlace (= one transaction) each:
 //   A.  de-embed the ServiceCalendar children — every id-carrying registrable entity embedded in
 //       a ServiceCalendar is re-inserted as a first-class row; the calendar keeps its copy.
-//   B.  the five EPIP generators IN ORDER: calendar, interchange, lines, locations, journeys.
-//       Calendar and interchange must see the PRE-transform corpus — the interchange resolves
+//   B.  the five EPIP generators in order: calendar, interchange, lines, locations, journeys.
+//       Calendar and interchange must see the pre-transform corpus — the interchange resolves
 //       JourneyMeeting points against the journeys' original patterns, and the calendar regroups
 //       only the feeds' own calendar objects, never the journey transform's generated DayTypes.
 //   C.  repair interchange points against the patterns consumers will see, then one streaming
@@ -18,27 +17,12 @@ package toolkit.harness;
 //       cleared, on both shapes the corpus carries. EPIP's Level_KeyRef requires an emitted
 //       LevelRef to resolve in the same document; LevelRef is minOccurs="0", so absence is
 //       conformant.
+//   E.  resolve() + resolveEmbeddings(), once, over the finished store; inPlace then checks that
+//       the unresolved count did not grow across its own run.
 //
-// REPAIRED QUAYS ARE A PRECONDITION, not something this does. A phase A2 here used to backfill a
-// quay-only PassengerStopAssignment's StopPlaceRef, and generator #1 used to strip the
-// coordinate-less placeholder quays and clear the assignment quay refs the strip left dangling.
-// Both were input repairs rather than profile conversion, and both are noi-pipeline's per-feed
-// `sanitize-stop-assignments` step now (transformers.feedfix.StopAssignments), run on each feed db
-// before it reaches this stage. EpipLocations reads assignments expecting them repaired, and C2 is
-// a conformance pass over the sites the strip leaves behind.
-//
-//   E.  resolve() + resolveEmbeddings(), ONCE, over the finished store.
-//
-// Phase E is new, and it replaces the opposite rule: every runInPlace used to pass resolve=false, on
-// the reasoning that "the export does not require the re-inserted rows' forward edges to be re-wired".
-// That is true of the EXPORT and false of everything else downstream. The conversion gives every
-// TimetabledPassingTime a PointInJourneyPatternRef naming a StopPointInJourneyPattern EMBEDDED in its
-// pattern; an embedded child owns no row, so the id index cannot answer it and each one became an
-// unresolved row. At ~20 per journey the national store reached XbDbToDb with 83,894,176 of them and
-// that stage could not afford resolveEmbeddings at all. resolve() alone cannot clear them — it probes
-// the id index — so the pass has to be resolveEmbeddings, and it belongs here, where the store is
-// complete and the heap is the one this stage already asked for. inPlace then checks that the count
-// did not grow across its own run.
+// Repaired quays are a precondition, not something this stage does: the assignments arrive already
+// sanitized per feed, EpipLocations reads them expecting that, and C2 is a conformance pass over
+// the sites left behind.
 //
 // A non-empty target is refused, and --format must equal the source's sniffed format: the clone
 // is a raw byte copy, so a cross-format clone would corrupt the target.
@@ -116,18 +100,18 @@ public final class EpipToDb {
         // Phase C — interchange repair + the ensemble, ONE write transaction.
         InPlace.runInPlace((db, txn) -> repairAndEnsemble(db, txn, generatorDefaults),
                 database, "epip-repair-ensemble", /*resolve=*/false);
-        // Phase C2 — clear every LevelRef whose target is not a Level its own Site defines. LAST of
-        // the unconditional phases, because it is a conformance repair over the FINAL site
+        // Phase C2 — clear every LevelRef whose target is not a Level its own Site defines. Last of
+        // the unconditional phases, because it is a conformance repair over the final site
         // population: every stage that can drop a quay or a <levels> container has already run. It
-        // carries its own G1-G6 guard; see EpipSanitize.stripOrphanLevelRefs.
+        // carries its own G1-G6 guard.
         InPlace.runInPlace((db, txn) -> EpipSanitize.stripOrphanLevelRefs(db, txn),
                 database, "epip-strip-levelrefs", /*resolve=*/false);
-        // Phase D — OPT-IN, DEFAULT OFF. Rewrite the illegal after-midnight xs:time encoding
+        // Phase D — opt-in, default off. Rewrite the illegal after-midnight xs:time encoding
         // (24:20:00) into the only one NeTEx defines (00:20:00 + <*DayOffset>1</>). Applying it
-        // CHANGES the encoding the feed used, so it runs only under
+        // changes the encoding the feed used, so it runs only under
         // -Dtoolkit.epip.dayOffsetRewrite=on; with the flag unset this transaction is never opened
-        // and the store is byte-identical. LAST, because it is a data repair over the final journey
-        // population. See toolkit.transform.feedfix.DayOffsetRewrite.
+        // and the store is byte-identical. Last, because it is a data repair over the final journey
+        // population.
         if (DayOffsetRewrite.ENABLED) {
             Log.info("[epip] %s=on -- running the day-offset rewrite (re-encodes the feed's "
                     + "after-midnight times; default is off)", DayOffsetRewrite.PROPERTY);
@@ -135,33 +119,28 @@ public final class EpipToDb {
                     database, "epip-day-offset-rewrite", /*resolve=*/false);
         }
         // Phase E — wire what this stage's own generators left dangling, so the store handed on is
-        // coherent. No fix function: the pair is the phase, and it runs outside a transaction of its
-        // own making (resolveEmbeddings opens and commits one, so it cannot run inside another).
+        // coherent. No fix function: the pair is the phase, and it runs outside a transaction of
+        // its own making (resolveEmbeddings opens and commits one, so it cannot run inside
+        // another).
         //
-        // This is the phase the header used to say did not exist, and the reasoning it replaces was
-        // "the export does not require the re-inserted rows' forward edges to be re-wired". True,
-        // and beside the point: the conversion gives every TimetabledPassingTime a
-        // PointInJourneyPatternRef naming a StopPointInJourneyPattern EMBEDDED in its pattern, which
-        // the id index cannot answer, so ~20 unresolved rows per journey were being handed to every
-        // later stage. XbDbToDb inherited 83,894,176 of them and could not afford the pass at all.
-        // resolve() cannot clear them either — it probes the id index, and an embedded child has no
-        // row there — so this has to be resolveEmbeddings, and it has to be here, where the store is
-        // complete and the heap is the one the EPIP stage already asked for.
+        // resolveEmbeddings and not resolve() alone: the conversion gives every
+        // TimetabledPassingTime a PointInJourneyPatternRef naming a StopPointInJourneyPattern
+        // embedded in its pattern, and an embedded child has no row in the id index, which is what
+        // resolve() probes — so it leaves ~20 unresolved rows per journey for every later stage.
         InPlace.resolveOnly(database, "epip-resolve");
 
         long unresolvedAfter = countUnresolved(database);
         Log.info("[epip] unresolved rows %,d -> %,d over the whole transform", unresolvedBefore,
                 unresolvedAfter);
-        // The claim this stage now makes, checked rather than asserted. It is deliberately "did not
-        // GROW" and not "is zero": a corpus references ids outside its own export, and those rows
-        // arrive with the feeds and are nobody's defect to fix here.
+        // Checked as "did not grow" rather than "is zero": a corpus references ids outside its own
+        // export, and those rows arrive with the feeds.
         Strictness.require(Strictness.UNRESOLVED_REFS, "unresolvedRefs",
                 Math.max(0, unresolvedAfter - unresolvedBefore), "epip",
                 "unresolved references were ADDED by the EPIP transform and not wired by phase E");
     }
 
-    /// Live unresolved rows, streamed. `scanUnresolved` is the O(1)-heap reader — one block
-    /// resident — so this costs a pass over `_edge_blocks` and no allocation proportional to it.
+    /// Live unresolved rows, streamed: `scanUnresolved` is the O(1)-heap reader, one block
+    /// resident, over `_edge_blocks`.
     private static long countUnresolved(Path database) throws Exception {
         long n = 0;
         try (Store db = Stores.open(database, true); Txn txn = db.roTxn()) {
@@ -208,10 +187,10 @@ public final class EpipToDb {
         db.insertAnyObjects(txn, EpipInterchange.epipServiceJourneyInterchange(db, txn, gd));
         db.insertAnyObjects(txn, EpipLines.epipLineGenerator(db, txn, gd));
         db.insertAnyObjects(txn, EpipLocations.inferLocationsFromQuayOrStopplaceAndApply(db, txn, gd));
-        // The journeys generator carries the stage. With -Dtoolkit.epip.parallelJourneys=N its JAXB
-        // MARSHAL moves onto N threads and each object arrives here as a WithFragment carrying
-        // exactly the bytes insertOne would have produced inline. Default OFF: marshalAhead is the
-        // identity, and this is the serial arm. Only the journeys generator is wrapped.
+        // With -Dtoolkit.epip.parallelJourneys=N the journeys generator's JAXB marshal moves onto N
+        // threads and each object arrives here as a WithFragment carrying exactly the bytes
+        // insertOne would have produced inline. Default off: marshalAhead is the identity, and this
+        // is the serial arm. Only the journeys generator is wrapped.
         db.insertAnyObjects(txn, toolkit.harness.GenParallel.marshalAhead(
                 EpipJourneys.epipServiceJourneyGenerator(db, txn, gd), "journeys"));
     }
@@ -224,14 +203,13 @@ public final class EpipToDb {
         runEnsemble(db, txn, gd);
     }
 
-    /// ONE streaming pass over the target for every per-object touch-up —
-    /// reprojection to WGS84 for every geo-carrying class present in the db, direction inference
-    /// on ServiceJourneyPatterns, and the profile backfills. Each operation's query phase (index
-    /// building) runs before the pass starts; every class is scanned once and a changed object
-    /// written once. The synthesized Directions are chained after the ensemble output into one
-    /// insert queue; two sequential insertAnyObjects on the same txn produce the identical
-    /// insert sequence and honor the drain-after contract (Direction.InferDirections: the values
-    /// view must only be iterated once the pass is exhausted).
+    /// One streaming pass over the target for every per-object touch-up — reprojection to WGS84 for
+    /// every geo-carrying class present in the db, direction inference on ServiceJourneyPatterns,
+    /// and the profile backfills. Each operation's query phase (index building) runs before the
+    /// pass starts; every class is scanned once and a changed object written once. The synthesized
+    /// Directions are chained after the ensemble output into one insert queue, which honors
+    /// Direction.InferDirections' drain-after contract: the values view must only be iterated once
+    /// the pass is exhausted.
     public static void runEnsemble(Store db, Txn txn, GeneratorDefaults gd) {
         Map<Class<?>, List<Ensemble.Operation>> ops = new LinkedHashMap<>();
         Ensemble.Operation reprojection = obj -> Projection.reprojectionChanged(obj, Projection.WGS84_URN);
@@ -240,7 +218,7 @@ public final class EpipToDb {
                 ops.computeIfAbsent(geoClazz, k -> new ArrayList<>()).add(reprojection);
             }
         }
-        // AHEAD of the reprojection on the same class: a link that does take a real transform must
+        // Ahead of the reprojection on the same class: a link that does take a real transform must
         // be in the authority's own axis convention before Projection swaps it symmetrically.
         ops.computeIfAbsent(ServiceLink.class, k -> new ArrayList<>())
                 .add(0, AxisOrder.axisOrderOp(db, txn));
@@ -252,7 +230,7 @@ public final class EpipToDb {
         ops.computeIfAbsent(StopPlace.class, k -> new ArrayList<>()).add(Backfills::quayNameOp);
 
         db.insertAnyObjects(txn, Ensemble.applyOperations(db, txn, ops));
-        // Drained strictly AFTER the pass above: populated lazily during it (see the Javadoc).
+        // Drained strictly after the pass above: populated lazily during it.
         db.insertAnyObjects(txn, directions.inferred().values().iterator());
         // Projection is an Ensemble.Operation body and owns no pass, so this is the only place that
         // knows the reprojection is finished.

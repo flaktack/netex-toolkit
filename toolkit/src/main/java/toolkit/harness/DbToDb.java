@@ -11,13 +11,13 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-/// Every db-to-db driver is the same sandwich around one 4-arg apply function — open source
-/// readonly + target read-write, run the apply inside one read / one write transaction, commit,
-/// then the MANDATORY `resolve()` + `resolveEmbeddings()` pair (a transform that re-inserts objects
-/// lands every forward reference in the unresolved map; resolve wires them back), plus the shared
-/// CLI (positional source target, `--log-file`).
+/// The TRANSFORM sandwich, around one 4-arg apply function: open source read-only + target
+/// read-write, run the apply inside one read / one write transaction, commit, then the mandatory
+/// `resolve()` + `resolveEmbeddings()` pair (a transform that re-inserts objects lands every forward
+/// reference in the unresolved map; resolve wires them back), plus the shared CLI (positional source
+/// target, `--log-file`).
 ///
-/// Extra option `--format v2` selects the TARGET store format, defaulting to the source's. Kept
+/// Extra option `--format v2` selects the target store format, defaulting to the source's. Kept
 /// because scripts pass it and [toolkit.harness.Args] refuses an unknown option.
 ///
 /// Script usage (uncompiled, JEP 458):
@@ -62,9 +62,8 @@ public final class DbToDb {
         }
     }
 
-    /// Apply inside one ro + one rw txn, commit, then resolve() +
-    /// resolveEmbeddings() (mandatory invariant). For a v2 target both are in-memory operations
-    /// persisted at their commit.
+    /// Apply inside one ro + one rw txn, commit, then the mandatory resolve() + resolveEmbeddings()
+    /// pair. For a v2 target both are in-memory operations persisted at their commit.
     public static void runDbToDb(ApplyFn applyFn, Path source, Path target, String tag, String targetFormat)
             throws Exception {
         long t0 = System.nanoTime();
@@ -79,11 +78,10 @@ public final class DbToDb {
             dst.resolve();
             dst.resolveEmbeddings();
             try (Txn dtx = dst.roTxn()) {
-                // Stops at the FIRST row: "did it write anything" is an existence question.
-                //
-                // Deliberately NOT the insert tally below, which is cheaper and wrong: cloneFrom
-                // writes straight to the class dbi and never reaches insertOne, so a pure-clone
-                // transform has a zero tally and a full target.
+                // Stops at the first row: "did it write anything" is an existence question, and the
+                // insert tally cannot answer it — cloneFrom writes straight to the class dbi and
+                // never reaches insertOne, so a pure-clone transform has a zero tally and a full
+                // target.
                 boolean any = false;
                 for (Class<?> c : dst.dbNames(dtx)) {
                     if (dst.scanObjects(dtx, c).iterator().hasNext()) { any = true; break; }
@@ -99,10 +97,9 @@ public final class DbToDb {
         Harness.finish(tag);
     }
 
-    /// What the transform put in the target, split into what it BUILT and what it COPIED.
-    ///
-    /// Counted apart: `cloneFrom` copies a whole source verbatim without reaching `insertOne`, so
-    /// one total would let a large copy hide a transform whose own output was three objects.
+    /// What the transform put in the target, split into what it built and what it copied. Counted
+    /// apart because `cloneFrom` copies a whole source verbatim without reaching `insertOne`, so one
+    /// total would let a large copy hide a transform whose own output was three objects.
     private static void reportWritten(String tag, Store dst) {
         Harness.reportCloned(tag, dst);
         Harness.reportInserted(tag, dst, "wrote",

@@ -21,42 +21,21 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/// Layer **B**: the bound bean, rendered as `path = value` — **declared-but-null fields
-/// included**.
+/// Layer B: the bound bean, rendered as `path = value`, declared-but-null fields included.
 ///
-/// ## Why the nulls
-///
-/// The defect shape this exists for is a byte-perfect fragment that binds to a null field:
+/// A byte-perfect fragment can bind to a null field, with no error and no ValidationEvent:
 ///
 /// ```
 /// F:  <TransportMode>bus </TransportMode>        (byte-perfect from source)
 /// B:  TransportMode  = null                      (no error, no ValidationEvent)
 /// ```
 ///
-/// Every fragment instrument is blind to it, and a renderer that skips nulls renders the absence as
-/// nothing at all. So every declared field of every class in the inheritance chain is emitted,
-/// populated or not; `--b-nonnull` turns that off and is off by default.
-///
-/// ## How the path is built
-///
-/// Paths use the XML name from the field's JAXB annotation, not the Java field name, so a B path
-/// and an F path are the same string and join without a translation table. The Java field name and
-/// declared type print alongside. Attributes print as `@id` and `@XmlValue` as `text()`, matching
-/// [XmlDoc#flatten].
-///
-/// The generated model is `@XmlAccessorType(XmlAccessType.FIELD)` throughout, so field reflection
-/// sees exactly what JAXB binds.
-///
-/// ## Null is a leaf
-///
-/// A null complex field cannot be walked into, so the recursion is bounded by what is populated;
-/// the depth cap guards against cyclic object graphs, not against breadth.
+/// So every declared field of every class in the inheritance chain is emitted, populated or not;
+/// `--b-nonnull` turns that off and is off by default. The Java field name and declared type print
+/// alongside the path.
 public final class BeanRender {
 
     /// Where a row's XML name came from.
-    ///
-    /// Tagging every row with the annotation that named it turns "0 unmatched" into "0 unmatched,
-    /// of which N went through a choice alternative or an `@XmlAnyElement` fallback".
     public enum Origin {
         /// `@XmlAttribute`.
         ATTR,
@@ -222,8 +201,7 @@ public final class BeanRender {
         if (ch != null) { path = retarget(path, ch.name()); origin = ch.origin(); }
         if (v instanceof org.w3c.dom.Node dom) {
             // @XmlAnyElement content is a DOM subtree, not bound to fields but round-tripped
-            // verbatim, so it renders as a reachable leaf: its descendants are unreachable by
-            // design, not dropped.
+            // verbatim, so it renders as one leaf row.
             int kids = 0;
             for (org.w3c.dom.Node n = dom.getFirstChild(); n != null; n = n.getNextSibling()) {
                 if (n.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE) kids++;
@@ -286,7 +264,6 @@ public final class BeanRender {
         return null;
     }
 
-    /// Kept for callers that only want the name.
     static String choiceName(Field f, Object v) {
         Choice c = choice(f, v);
         return c == null ? null : c.name();
@@ -419,11 +396,8 @@ public final class BeanRender {
 
     // ------------------------------------------------------------------ field order
 
-    /// One renderable field, resolved once per class instead of once per object.
-    ///
-    /// `nx bind` renders two beans per object over millions of objects, where per-row reflection
-    /// dominates. The resolution is a pure function of the class, so it is memoised in a
-    /// [ClassValue], which is also thread-safe without a lock — the sweep is multi-threaded.
+    /// One renderable field, resolved once per class instead of once per object. Memoised in a
+    /// [ClassValue], which is thread-safe without a lock — the sweep is multi-threaded.
     record Bind(Field f, String xmlName, String type, Origin origin) {}
 
     private static final ClassValue<List<Class<?>>> CHAIN = new ClassValue<>() {

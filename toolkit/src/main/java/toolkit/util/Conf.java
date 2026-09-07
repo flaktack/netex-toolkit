@@ -20,10 +20,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /// Every configuration knob in this repository, declared once.
 ///
-/// One pinned table in the compiled library that `toolkit/`, `scripts/` and `tools/` all answer to,
-/// held from both ends by `toolkit/src/test/java/toolkit/util/TestConf.java` — every entry needs a
-/// call site, and no undeclared property read may survive outside this class. `../noi-pipeline`
-/// runs the same no-undeclared-read scan over its own tree as `tests/TestConfReads.java`.
+/// Held from both ends by `toolkit/src/test/java/toolkit/util/TestConf.java`: every entry needs a
+/// call site, and no undeclared property read may survive outside this class.
 ///
 /// ## Where a value comes from
 ///
@@ -36,8 +34,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /// 5. The config file.
 /// 6. The declared default.
 ///
-/// `-D` outranks the file deliberately: the pom, the gate scripts and the pipeline Makefile all
-/// pin `-D` command lines.
+/// `-D` outranks the file: the pom and the gate scripts both pin `-D` command lines.
 ///
 /// ## The config file
 ///
@@ -57,12 +54,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /// ## What booleans accept
 ///
 /// `true|false|on|off|yes|no|1|0`, case-insensitive, plus a bare `-Dtoolkit.foo` for true.
-/// Anything else is an error — `-Dtoolkit.refPatch=flase` would otherwise read as ON.
-///
-/// ## Reads stay constant-foldable
-///
-/// A call site is still `private static final boolean X = Conf.on(Conf.X);`. The table adds a
-/// declaration, not an indirection at read time, so a disabled guard still folds away.
+/// Anything else is an error.
 public final class Conf {
 
     private Conf() {}
@@ -166,8 +158,8 @@ public final class Conf {
 
     // ---------------------------------------------------------------- store: reference repair
 
-    /// `refPatch=false` reverts `resolve()` to the whole-blob JAXB re-marshal — the
-    /// measurement/neutering knob; the two paths must produce the same graph dump.
+    /// `refPatch=false` reverts `resolve()` to the whole-blob JAXB re-marshal; the two paths must
+    /// produce the same graph dump.
     public static final Flag REF_PATCH = bool("refPatch", true,
             "resolve() patches reference attributes in place instead of re-marshalling the blob",
             cap("no-remarshal-resolve", true));
@@ -175,115 +167,96 @@ public final class Conf {
     /// `inventNameOfRefClass=false` stops `resolve()` from ADDING a `nameOfRefClass` attribute to
     /// references whose source never carried one.
     ///
-    /// The capability is gated on FALSE: the attribute is added exactly when this flag is ON, so
-    /// `no-invent-nameofrefclass` holds on the opt-in arm and a default run does not have it.
+    /// The capability is gated on false: the attribute is added exactly when the flag is on, so
+    /// `no-invent-nameofrefclass` holds only on the opt-in arm.
     public static final Flag INVENT_NAME_OF_REF_CLASS = bool("inventNameOfRefClass", true,
             "resolve() may ADD a nameOfRefClass attribute the source fragment never carried",
             cap("no-invent-nameofrefclass", false));
 
-    /// Per-reference patch tracing. Volume: one line per reference.
     public static final Flag REF_PATCH_DEBUG = bool("refPatch.debug", false,
             "trace every reference the patcher considers");
 
     // ---------------------------------------------------------------- store: indexes and sweeps
 
-    /// Insert-side: write embedding-index rows. Off skips them AND stalls the completion marker.
+    /// Off also stalls the completion marker.
     public static final Flag EMB_INDEX = bool("embIndex", true,
             "inserts write embedding-index rows");
 
-    /// Read-side: trust a complete embedding index instead of taking the corpus scan.
+    /// Off takes the corpus scan instead.
     public static final Flag EMB_INDEX_TRUST = bool("embIndexTrust", true,
             "resolveEmbeddings() trusts a complete embedding index");
 
-    /// Resolve-tier memo, keyed by intern id. Declines to allocate below 2 rows per distinct key.
+    /// Declines to allocate below 2 rows per distinct key.
     public static final Flag RESOLVE_TIER_MEMO = bool("resolve.tierMemo", true,
             "memoise resolve tiers by intern id");
 
-    /// Cross-check every memo hit against a direct probe. Measurement only; slow.
+    /// Measurement only; slow.
     public static final Flag RESOLVE_TIER_MEMO_VERIFY = bool("resolve.tierMemo.verify", false,
             "verify every tier-memo hit against a direct probe");
 
-    /// Force every tier lookup to miss — the memo's null control arm.
     public static final Flag RESOLVE_TIER_NULL = bool("resolve.tierNull", false,
             "force every resolve-tier lookup to miss");
 
-    /// The post-resolve blob repair sweep. Sound for pure-insert loaders; not after a skipping clone.
+    /// Sound for pure-insert loaders; not after a skipping clone.
     public static final Flag RESOLVE_BLOB_SWEEP = bool("resolve.blobSweep", true,
             "run the post-resolve blob repair sweep");
 
-    /// `blobSweep.scan=false` reverts the sweep to unmarshalling every referrer.
     public static final Flag BLOB_SWEEP_SCAN = bool("blobSweep.scan", true,
             "the sweep decides by decode-free scan instead of unmarshalling every referrer");
 
-    /// Cross-check the decode-free scan against the unmarshal it replaces.
     public static final Flag BLOB_SWEEP_VERIFY = bool("blobSweep.verify", false,
             "verify the decode-free sweep scan against a full unmarshal");
 
-    /// Per-object sweep tracing.
     public static final Flag BLOB_SWEEP_DEBUG = bool("blobSweep.debug", false,
             "trace every object the blob sweep considers");
 
-    /// How many reference-fallback lines to log before falling silent; the total is still counted.
     public static final Flag STORE_REF_FALLBACK_LOG_CAP = integer("store.refFallbackLogCap", 100,
             "cap on logged reference-fallback lines (the counter is uncapped)");
 
-    /// Map-size growth increment in MiB; 0 uses the store's own sizing.
     public static final Flag STORE_GROW_CHUNK = integer("store.growChunk", 0,
             "LMDB map-size growth increment in MiB (0 = the store's own sizing)");
 
-    /// v2 edge-block size in pairs. The suite runs 128 so blocks are crossed at fixture scale.
+    /// The suite runs 128, so blocks are crossed at fixture scale.
     public static final Flag V2_BLOCK_PAIRS = integer("v2.blockPairs", 65_536,
             "v2 edge-block size, in pairs");
 
     // ---------------------------------------------------------------- load
 
-    /// Zip members per write transaction.
     public static final Flag LOAD_ZIP_TXN_BATCH = integer("load.zipTxnBatch", 1,
             "zip members per write transaction");
 
-    /// Parse workers for a zip load; 0 is the serial arm and the default.
     public static final Flag LOAD_ZIP_WORKERS = integer("load.zipWorkers", 0,
             "zip-load parse workers (0 = serial)");
 
-    /// Bounded hand-off queue between the parse workers and the single writer.
     public static final Flag LOAD_ZIP_QUEUE = integer("load.zipQueue", 2048,
             "zip-load parse/write hand-off queue capacity");
 
-    /// Per-leg insert timing: parse, walk, encode, lmdb. The Amdahl instrument.
     public static final Flag LOAD_PROFILE = bool("load.profile", false,
             "time each insert leg (parse / walk / encode / lmdb)");
 
-    /// How often the load profile reports, in objects.
     public static final Flag LOAD_PROFILE_EVERY = longFlag("load.profileEvery", 250_000L,
             "objects between load-profile reports");
 
-    /// Distinct ValidationEvent sites retained before the tally stops recording new ones.
     public static final Flag BIND_SITE_CAP = integer("bind.siteCap", 512,
             "distinct JAXB ValidationEvent sites retained");
 
     // ---------------------------------------------------------------- codec
 
-    /// `jaxbPin=false` restores the unpinned JAXB `Coordinator` (A/B measurement only;
-    /// it changes no output byte either way).
+    /// `jaxbPin=false` restores the unpinned JAXB `Coordinator`; no output byte differs either way.
     public static final Flag JAXB_PIN = bool("jaxbPin", true,
             "pin a per-thread JAXB Coordinator sentinel");
 
     // ---------------------------------------------------------------- provenance
 
-    /// `prov=off` disables all stamping and merging, so a byte-identity A/B can run with the
-    /// production paths exactly as they were before provenance landed. Checks still read what exists.
+    /// `prov=off` disables all stamping and merging; checks still read what exists.
     public static final Flag PROV = bool("prov", true,
             "stamp and merge the provenance sidecar");
 
-    /// Lineage entries kept in the sidecar before the oldest are elided.
     public static final Flag PROV_MAX_WRITERS = integer("prov.maxWriters", 200,
             "lineage entries kept in the provenance sidecar");
 
     // ---------------------------------------------------------------- strictness
-    //
-    // The concerns themselves and their defaults live in Strictness; only the declarations are here.
 
-    /// Master switch: makes every concern below fatal.
     public static final Flag STRICT = bool("strict", false,
             "make every strictness concern fatal");
 
@@ -310,7 +283,6 @@ public final class Conf {
 
     // ---------------------------------------------------------------- harness
 
-    /// Worker count per generator stage; &le; 0 is the serial arm and the control.
     public static final Flag EPIP_PARALLEL_JOURNEYS = integer("epip.parallelJourneys", 0,
             "generator workers per stage (0 = serial)");
 
@@ -331,18 +303,15 @@ public final class Conf {
     public static final Flag EPIP_ID_INDEX_JOURNEYS_VERIFY = bool("epip.idIndexJourneys.verify", false,
             "cross-check id-index journey resolution against the scan");
 
-    /// The EPIP day-offset rewrite. **Default false** — it changes the encoding a feed used, so
-    /// enabling it is a decision, not a bug fix.
     public static final Flag EPIP_DAY_OFFSET_REWRITE = bool("epip.dayOffsetRewrite", false,
             "rewrite past-midnight passing times into an explicit day offset");
 
-    /// Where a rewrite run dumps every rewritten value; unset = no dump.
     public static final Flag EPIP_DAY_OFFSET_REWRITE_DUMP = path("epip.dayOffsetRewrite.dump", null,
             "file the day-offset rewrite dumps every rewritten value into");
 
     // ---------------------------------------------------------------- scripts: crossborder
 
-    /// The Pass-2 pre-filter: roughly halves peak live heap. Not a capability; no byte differs.
+    /// Not a capability: no stored byte differs.
     public static final Flag XB_PASS2_FILTER = bool("xb.pass2Filter", true,
             "pre-filter Pass-2 candidates on the counterpart's country");
 
@@ -368,29 +337,23 @@ public final class Conf {
     //
     // These three predate the prefix; their old spellings stay honoured as legacy aliases.
 
-    /// Sort-chunk size for the graph dump, in MiB.
     public static final Flag GRAPHDUMP_CHUNK_MB = longFlag("graphdump.chunkMB", 512L,
             "graph-dump external-sort chunk size, in MiB",
             legacy("graphdump.chunkMB"));
 
-    /// Scratch directory for the graph dump's external sort; unset = beside the output.
     public static final Flag GRAPHDUMP_TMPDIR = path("graphdump.tmpdir", null,
             "graph-dump external-sort scratch directory (unset = beside the output)",
             legacy("graphdump.tmpdir"));
 
-    /// Below this row count StoreNames refuses rather than reporting identity over nothing.
     public static final Flag DIFF_MIN_ROWS = longFlag("diff.minRows", 1L,
             "minimum rows StoreNames requires before it will report a comparison",
             env("SNC_MIN_ROWS"));
 
     // ---------------------------------------------------------------- bootstrap
 
-    /// The config file itself. Declared so [#checkUnknown()] knows it; not file-settable.
     public static final Flag CONF = bootstrapPath("conf",
             "path to the config file (default: ./toolkit.conf if present)");
 
-    /// How the suite's tree scans locate the repository. Passed by the pom, because surefire's
-    /// working directory is the module and three of the scanned roots are its siblings.
     public static final Flag REPO_DIR = bootstrapPath("repo.dir",
             "the repository root, for the source-tree scans in the test suite");
 
@@ -427,7 +390,7 @@ public final class Conf {
     /// The file's contents, already validated against the table. Empty when there is no file.
     private static final Map<String, String> FILE_VALUES;
 
-    /// The file that was read, or null. Reported so a transcript names its own configuration.
+    /// The file that was read, or null.
     private static final Path FILE_PATH;
 
     static {
@@ -438,14 +401,12 @@ public final class Conf {
         if (named != null && !named.isBlank()) {
             p = Path.of(named.trim());
             if (!Files.isRegularFile(p)) {
-                // A named file that is not there is a typo; defaulting past it runs the pipeline
-                // under a configuration nobody chose.
                 throw new IllegalStateException(
                         "-D" + CONF.property() + "=" + named + " names no readable file");
             }
         } else {
             p = Path.of(DEFAULT_FILE);
-            if (!Files.isRegularFile(p)) p = null;      // the ordinary no-config case, silent
+            if (!Files.isRegularFile(p)) p = null;
         }
         FILE_PATH = p;
         FILE_VALUES = p == null ? Map.of() : Collections.unmodifiableMap(readFile(p));
@@ -461,8 +422,8 @@ public final class Conf {
         Map<String, String> out = new LinkedHashMap<>();
         List<String> bad = new ArrayList<>();
         for (String key : props.stringPropertyNames()) {
-            // Tolerate a fully-qualified key, since that is what someone copying a -D flag out of
-            // the Makefile will write. It means the same knob.
+            // A fully-qualified key is tolerated: `toolkit.refPatch` and `refPatch` name the same
+            // knob.
             String name = key.startsWith(PREFIX) ? key.substring(PREFIX.length()) : key;
             Flag f = BY_NAME.get(name);
             if (f == null) {
@@ -477,15 +438,15 @@ public final class Conf {
             throw new IllegalStateException(p + ": no such knob: " + String.join(", ", bad)
                     + ". Every knob is declared in toolkit.util.Conf.");
         }
-        // Parse everything now, not at first read: a malformed value should fail at the top of the
-        // run, not an hour in when some rare branch finally asks.
+        // Parse everything now, not at first read: a malformed value fails at the top of the run,
+        // not an hour in when some rare branch finally asks.
         for (Map.Entry<String, String> e : out.entrySet()) {
             parse(BY_NAME.get(e.getKey()), e.getValue(), p.toString());
         }
         return out;
     }
 
-    /// `" (did you mean x?)"`, or empty. Cheap edit distance over a table of ~50.
+    /// `" (did you mean x?)"`, or empty.
     private static String suggestion(String name) {
         String best = null;
         int bestD = Integer.MAX_VALUE;
@@ -496,7 +457,6 @@ public final class Conf {
                 best = candidate;
             }
         }
-        // A third of the name may differ before the guess stops being a guess.
         return best != null && bestD <= Math.max(2, name.length() / 3)
                 ? " (did you mean " + best + "?)" : "";
     }
@@ -576,8 +536,6 @@ public final class Conf {
         }
     }
 
-    /// The union of every spelling the replaced idioms accepted, and nothing else. Empty is true so
-    /// that a bare `-Dtoolkit.xb.count` means what it looks like it means.
     private static Boolean parseBool(String t) {
         if (t.isEmpty()) return Boolean.TRUE;
         return switch (t.toLowerCase(Locale.ROOT)) {
@@ -626,10 +584,8 @@ public final class Conf {
 
     // ================================================================ capabilities
 
-    /// Provenance capabilities the running configuration does NOT have, because the flag gating each
-    /// one does not hold. `toolkit.prov.Capabilities.current()` subtracts this. The gate lives on
-    /// the flag, so the only thing crossing between `toolkit.prov` and `toolkit.util` is a set of
-    /// names.
+    /// Provenance capabilities the running configuration does not have, because the flag gating
+    /// each one does not hold. `toolkit.prov.Capabilities.current()` subtracts this.
     public static Set<String> withheldCaps() {
         Set<String> out = new TreeSet<>();
         for (Flag f : ALL) {
@@ -645,7 +601,6 @@ public final class Conf {
     private static final AtomicBoolean CHECKED = new AtomicBoolean();
 
     /// Log the effective configuration once per JVM: the file, and every knob off its default.
-    /// Once, not per driver — same reasoning and same guard as [Strictness#report()].
     public static void report() {
         if (!REPORTED.compareAndSet(false, true)) return;
         List<String> set = new ArrayList<>();
@@ -660,10 +615,9 @@ public final class Conf {
                 set.isEmpty() ? "all defaults" : String.join(" ", set));
     }
 
-    /// Refuse or warn about every `-Dtoolkit.*` the table does not declare.
-    ///
-    /// The half the config file cannot cover: the JVM's property table is not ours, and it accepts
-    /// `-Dtoolkit.refPach=false` silently. Warn by default; refuse under `-Dtoolkit.strict=true`.
+    /// Refuse or warn about every `-Dtoolkit.*` the table does not declare: the JVM's property
+    /// table is not ours, and it accepts `-Dtoolkit.refPach=false` silently. Warn by default;
+    /// refuse under `-Dtoolkit.strict=true`.
     public static void checkUnknown() {
         // Once per JVM, like report(): a chained build runs several harnesses in one process.
         if (!CHECKED.compareAndSet(false, true)) return;
@@ -687,9 +641,9 @@ public final class Conf {
 
     /// Set `f` for the rest of this JVM, above every other source. For tests.
     ///
-    /// **It does not make a `static final` call site re-readable.** Those are resolved at class-init
-    /// and fold away. This is for flags read on every call (`GenParallel.workers()`) and for setting
-    /// a value before the class that reads it has initialised (`toolkit.test.Runner`).
+    /// It does not make a `static final` call site re-readable: those are resolved at class-init.
+    /// This is for flags read on every call (`GenParallel.workers()`) and for setting a value
+    /// before the class that reads it has initialised (`toolkit.test.Runner`).
     public static void override(Flag f, Object v) {
         String s = String.valueOf(v);
         parse(f, s, "override");                       // fail here, not at the read
@@ -703,7 +657,7 @@ public final class Conf {
 
     // ================================================================ declaration factories
 
-    /// A declaration modifier. A record, not an `Object[]`: the latter is a varargs trap.
+    /// A declaration modifier.
     private record Opt(String kind, String value, Boolean when) {}
 
     private static Flag bool(String name, boolean dflt, String doc, Opt... opts) {

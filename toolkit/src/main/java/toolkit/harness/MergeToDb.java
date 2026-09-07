@@ -11,24 +11,14 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-/// The MERGE sandwich — N stores into one fresh store — beside [FeedToDb] (load),
-/// [DbToDb] (transform) and [InPlace] (fix).
+/// The MERGE sandwich: N stores into one fresh store.
 ///
-/// Raw-clone each source into the target with a cumulative key offset so per-source local keys
-/// never collide, skipping rows whose `(id, version, class)` already arrived from an earlier source,
-/// re-inserting whatever referenced those skipped rows, then running the mandatory `resolve()` +
-/// `resolveEmbeddings()` pair: cross-source references are unresolved in every per-source store and
-/// can only be wired once every source is present.
-///
-/// The re-insert step is not a tidying pass and the resolve pair does not subsume it — see
-/// [#rewireOntoKeptCopies]. Dropping a duplicate row also drops every edge INTO it, without leaving
-/// an unresolved row for `resolve()` to find, so a merge that skipped anything used to hand back a
-/// store whose objects were right and whose reference graph was quietly short.
-///
-/// "Combine several stores" is generic; what to do about the COLLISIONS is policy. This takes the
-/// answer that needs no knowledge of the feeds — first source wins, the shadowed copy is dropped.
-/// The other answer, qualifying colliding ids with a per-source tag so both survive, needs a tag per
-/// source and lives in `../noi-pipeline`'s `transformers.common.ItMerge`.
+/// Raw-clone each source into the target with a cumulative key offset so per-source local keys never
+/// collide, skipping rows whose `(id, version, class)` already arrived from an earlier source (first
+/// source wins, the shadowed copy is dropped), re-inserting whatever referenced those skipped rows
+/// ([#rewireOntoKeptCopies]), then running the mandatory `resolve()` + `resolveEmbeddings()` pair:
+/// cross-source references are unresolved in every per-source store and can only be wired once every
+/// source is present.
 ///
 /// Script usage (uncompiled, JEP 458):
 ///
@@ -42,8 +32,8 @@ public final class MergeToDb {
     private MergeToDb() {}
 
     /// The drivers' shared CLI: N sources, one target, format sniffing, and two refusals that both
-    /// happen BEFORE anything is written — a non-empty target would silently collide local keys,
-    /// and `cloneFrom` is a raw byte copy so mixed-format sources would corrupt the target.
+    /// happen before anything is written — a non-empty target would silently collide local keys, and
+    /// `cloneFrom` is a raw byte copy so mixed-format sources would corrupt the target.
     public static void driverMain(String tag, String[] args) throws Exception {
         Args a = Args.parse(args,
                 "<driver> <src1> [<src2> ...] <target> [--format v2] [--log-file F]",
@@ -55,7 +45,6 @@ public final class MergeToDb {
         String sourceFmt = null;
         for (String s : positional.subList(0, positional.size() - 1)) {
             Path p = Path.of(s);
-            // Distinct messages for the two conditions.
             if (!java.nio.file.Files.exists(p)) {
                 Log.error("%s does not exist.", p);
                 System.exit(1);
@@ -90,16 +79,12 @@ public final class MergeToDb {
         }
     }
 
-    /// Re-insert everything that referenced a key this clone SKIPPED, so its references land on the
-    /// copy that was kept.
-    ///
-    /// WITHOUT THIS A MERGE SILENTLY LOSES EDGES, and neither pass below can recover them.
-    /// [ObjectWriter#cloneFrom] copies edge rows rather than re-deriving them, so an edge whose
-    /// target is skipped is simply not copied — and, unlike an ordinary miss, it leaves **no
-    /// unresolved row behind**. That is the hazard [toolkit.store.ReferenceResolver] states under
-    /// "NOT SOUND AFTER A SKIPPING CLONE", and it defeats `resolve()`, which works only from
-    /// unresolved rows. Measured on three EPIP-converted stores sharing a broadcast StopPlace
-    /// population: 19,733 of 2,505,319 edges missing, with `resolve()` recovering none of them.
+    /// Re-insert everything that referenced a key this clone skipped, so its references land on the
+    /// copy that was kept. Without it a merge silently loses edges, and neither pass below can
+    /// recover them: [ObjectWriter#cloneFrom] copies edge rows rather than re-deriving them, so an
+    /// edge whose target is skipped is simply not copied and, unlike an ordinary miss, leaves no
+    /// unresolved row behind — the hazard [toolkit.store.ReferenceResolver] states under "NOT SOUND
+    /// AFTER A SKIPPING CLONE". `resolve()` works only from unresolved rows.
     ///
     /// Re-inserting the referrer is enough: `insertOne` clears the stored copy's reference rows and
     /// re-extracts them from the bean against a target that now holds the kept copy. It is
@@ -110,7 +95,7 @@ public final class MergeToDb {
         if (skipped == null || skipped.isEmpty()) return 0;
         LongOpenHashSet referrers = new LongOpenHashSet();
         for (long[] edge : sdb.iterEdges(rtx)) {
-            // The referrer must NOT itself be skipped: re-inserting a dropped row would resurrect
+            // The referrer must not itself be skipped: re-inserting a dropped row would resurrect
             // the very object the clone excluded, and a skipped row referencing another skipped row
             // is ordinary (a merged-away StopPlace naming its neighbour).
             if (skipped.contains(edge[1]) && !skipped.contains(edge[0])) referrers.add(edge[0]);
@@ -143,13 +128,13 @@ public final class MergeToDb {
             for (Path srcPath : sources) {
                 try (Store sdb = Stores.open(srcPath, true); Txn rtx = sdb.roTxn()) {
                     allSwept &= sdb.blobRepairMarkerPresent(rtx);
-                    // Declared out here because the rewire below needs it AFTER this transaction
+                    // Declared out here because the rewire below needs it after this transaction
                     // commits: it re-inserts into a second one.
                     LongOpenHashSet dups = null;
                     try (Txn wtx = tdb.rwTxn()) {
                         if (offset != 0) {
                             // Duplicate (id, version) across sources. A raw-cloned duplicate row
-                            // would surface TWICE in every map-iterating consumer.
+                            // would surface twice in every map-iterating consumer.
                             dups = CloneSupport.duplicateIdFullKeys(sdb, rtx, tdb, wtx);
                             if (!dups.isEmpty()) {
                                 Log.warn("[%s] %d duplicate object ids in %s already cloned from an "
@@ -174,10 +159,10 @@ public final class MergeToDb {
             }
             cloneSecs = Log.secs(t0);
 
-            // Marker propagation: with EVERY source already blob-repaired the target's blobs are
+            // Marker propagation: with every source already blob-repaired the target's blobs are
             // internally consistent, so it inherits the marker before resolve() and the sweep is
             // skipped; cross-source rows are repaired at bind time anyway. Inheriting from a
-            // PARTIALLY swept set is the unsound direction — hence the &=.
+            // partially swept set is the unsound direction — hence the &=.
             if (allSwept) {
                 Log.info("[%s] all sources blob-repaired -- target inherits the marker; "
                         + "resolve() skips the full sweep", tag);
@@ -194,8 +179,8 @@ public final class MergeToDb {
             tdb.resolveEmbeddings();
             embSecs = Log.secs(t2);
 
-            // The post-conditions, as every other sandwich has them. A merge that produced nothing
-            // means every source was empty or every row collided — never a right answer.
+            // A merge that produced nothing means every source was empty or every row collided —
+            // never a right answer.
             try (Txn rtx = tdb.roTxn()) {
                 boolean any = false;
                 for (Class<?> c : tdb.dbNames(rtx)) {

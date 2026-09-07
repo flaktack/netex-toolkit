@@ -1,8 +1,5 @@
 package toolkit.transform.epip;
 
-// The rw-apply style: Gen.apply runs the repair generator through insertAnyObjects on ONE rw txn,
-// then Gen.byId re-reads the interchanges for the field asserts.
-//
 // Interchange point repair: a From/ToPointRef that is not on the referenced journey's pattern is
 // rewritten to the pattern's stop at the SAME StopPlace; a cross-border interchange whose point
 // sits off-pattern because the two feeds code the border station differently is re-anchored at a

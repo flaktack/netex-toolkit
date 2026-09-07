@@ -1,24 +1,20 @@
 package toolkit.transform.epip;
 
-// The EPIP service-calendar transform. Two order-critical jobs:
+// The EPIP service-calendar transform. It sorts the DayTypeAssignments by (dayTypeRef.ref,
+// dayTypeRef.version) and then groups them on dayTypeRef equality.
 //
-// 1. sort-then-group: grouping only merges ADJACENT equal keys, so the assignment list is sorted
-//    by (dayTypeRef.ref, dayTypeRef.version) FIRST and then grouped on dayTypeRef equality — a
-//    stable sort, and group boundaries at runs of equal refs. Without the sort, non-adjacent
-//    assignments of one DayType would split into several groups, re-yielding the DayType and
-//    emitting several UicOperatingPeriods sharing one id.
+// The DayTypeAssignment period field is a 4-way union: the binding splits it into
+// getOperatingPeriodRef() (a JAXBElement — both the OperatingPeriodRef and UicOperatingPeriodRef
+// elements substitute into it, and the element NAME distinguishes them), getOperatingDayRef(), and
+// getDate() (the bare-date arm).
 //
-// 2. the 4-way union field: the binding splits it into getOperatingPeriodRef() (a JAXBElement —
-//    both the OperatingPeriodRef and UicOperatingPeriodRef elements substitute into it, and the
-//    element NAME distinguishes them), getOperatingDayRef(), and getDate() (the bare-date arm).
-//
-// getDate() is an xs:date and getFromDate()/getToDate()/getCalendarDate() are xs:dateTime, and
-// all four flow into ONE LinkedHashSet whose membership decides the ValidDayBits string. That is
-// why netex-model binds both schema types to a single carrier (noi.netex.time.XmlDateTime), and
-// why that carrier makes hashCode() throw: a Set of carriers would compare by identity and
-// silently produce a different bit string. Every read normalises with toLocalDateTime() at the
-// point of use, so from `bareDates` onwards every value here is a LocalDateTime. The two WRITES
-// go the other way through XmlDateTime.from(), which canonicalises.
+// getDate() is an xs:date and getFromDate()/getToDate()/getCalendarDate() are xs:dateTime, and all
+// four flow into ONE LinkedHashSet whose membership decides the ValidDayBits string. That is why
+// netex-model binds both schema types to a single carrier (noi.netex.time.XmlDateTime), and why that
+// carrier makes hashCode() throw: a Set of carriers would compare by identity and silently produce a
+// different bit string. Every read normalises with toLocalDateTime() at the point of use, so from
+// `bareDates` onwards every value here is a LocalDateTime. The two WRITES go the other way through
+// XmlDateTime.from(), which canonicalises.
 
 import noi.netex.model.DayType;
 import noi.netex.model.DayTypeAssignment;
@@ -80,7 +76,7 @@ public final class EpipCalendar {
         }
 
         // Index the calendar-embedded objects first, then the db class scan; on a duplicate id the
-        // LAST one wins, which is LinkedHashMap.put's rule.
+        // LAST one wins.
         Map<String, DayType> dayTypes = new LinkedHashMap<>();
         for (ServiceCalendar sc : serviceCalendars) {
             if (sc.getDayTypes() != null) {
@@ -94,9 +90,9 @@ public final class EpipCalendar {
             dayTypes.put(dt.getId(), dt);
         }
 
-        // The uic/plain operating-period indexes read the SAME compound calendar list twice,
-        // split by concrete type: UicOperatingPeriod and OperatingPeriod are sibling classes, so
-        // an instanceof check is what separates them.
+        // The uic/plain operating-period indexes read the SAME compound calendar list twice, split
+        // by concrete type: UicOperatingPeriod and OperatingPeriod are sibling classes, so an
+        // instanceof check is what separates them.
         Map<String, UicOperatingPeriod> uicOperatingPeriods = new LinkedHashMap<>();
         for (ServiceCalendar sc : serviceCalendars) {
             if (sc.getOperatingPeriods() != null) {
@@ -153,8 +149,10 @@ public final class EpipCalendar {
             dayTypeAssignments.add((DayTypeAssignment) o);
         }
 
-        // Grouping only merges ADJACENT equal keys: sort by the grouping key first (List.sort is
-        // stable).
+        // Grouping below merges ADJACENT equal keys only, so the list must be sorted by the grouping
+        // key first (List.sort is stable). Unsorted, non-adjacent assignments of one DayType split
+        // into several groups, re-yielding the DayType and emitting several UicOperatingPeriods
+        // sharing one id.
         dayTypeAssignments.sort(Comparator
                 .comparing((DayTypeAssignment d) -> nz(d.getDayTypeRef().getValue().getRef()))
                 .thenComparing(d -> nz(d.getDayTypeRef().getValue().getVersion())));
@@ -190,8 +188,6 @@ public final class EpipCalendar {
                 String rid = unionRefId(dta);
                 if (rid != null && !uicOperatingPeriods.containsKey(rid)
                         && !operatingPeriods.containsKey(rid) && !operatingDays.containsKey(rid)) {
-                    // A period ref whose target is in none of the loaded indexes is dropped by the
-                    // id-based matching below.
                     logOnce("dangling-operating-period-ref",
                             "DayTypeAssignment " + dta.getId() + ": operating period " + rid
                                     + " not loaded; assignment ignored (further occurrences suppressed)");
@@ -199,9 +195,9 @@ public final class EpipCalendar {
             }
 
             // A ref counts as a UIC operating period when its target is one of the loaded
-            // UicOperatingPeriods. Matching by target id — rather than the ref's element type or
-            // its nameOfRefClass — also covers a feed whose <OperatingPeriodRef> carries a
-            // NameOfClass that is not "UicOperatingPeriod".
+            // UicOperatingPeriods. The match is on target id rather than on the ref's element type
+            // or nameOfRefClass, because feeds do write an <OperatingPeriodRef> whose NameOfClass is
+            // not "UicOperatingPeriod".
             List<UicOperatingPeriod> myUicOperatingPeriods = new ArrayList<>();
             for (DayTypeAssignment dta : t) {
                 String rid = unionRefId(dta);
@@ -210,9 +206,8 @@ public final class EpipCalendar {
                 }
             }
 
-            // OperatingPeriodRef and UicOperatingPeriodRef are SIBLING elements over one structure;
-            // the binding funnels both into getOperatingPeriodRef(), so the JAXBElement's element
-            // name takes over the discrimination.
+            // The JAXBElement's element name is what discriminates OperatingPeriodRef from its
+            // sibling UicOperatingPeriodRef.
             List<OperatingPeriod> myOperatingPeriods = new ArrayList<>();
             for (DayTypeAssignment dta : t) {
                 JAXBElement<OperatingPeriodRefStructure> el = dta.getOperatingPeriodRef();
@@ -226,9 +221,7 @@ public final class EpipCalendar {
                 }
             }
 
-            // The BARE-DATE arm of the 4-way union. getDate() is an xs:date, getFromDate() an
-            // xs:dateTime, and both arrive in the SAME LinkedHashSet below — which is why
-            // netex-model binds the two schema types to one carrier.
+            // The BARE-DATE arm of the 4-way union.
             List<LocalDateTime> bareDates = new ArrayList<>();
             for (DayTypeAssignment dta : t) {
                 if (dta.getDate() != null && (dta.isIsAvailable() == null || dta.isIsAvailable())) {
@@ -249,8 +242,7 @@ public final class EpipCalendar {
                             myDayType.getProperties().getPropertyOfDay().get(0).getDaysOfWeek());
 
                     for (OperatingPeriod op : myOperatingPeriods) {
-                        // NORMALISATION BOUNDARY: everything from here down is LocalDateTime, so
-                        // the min/max comparisons, the rrule walk and the Set membership behave.
+                        // Normalisation boundary: everything from here down is LocalDateTime.
                         LocalDateTime opFrom = op.getFromDate().toLocalDateTime();
                         LocalDateTime opTo = op.getToDate().toLocalDateTime();
                         if (myFrom == null || myFrom.isAfter(opFrom)) {
@@ -288,7 +280,6 @@ public final class EpipCalendar {
                 }
 
                 if (!myOperationalDates.isEmpty()) {
-                    // Every date on this path is already a LocalDateTime.
                     List<LocalDateTime> validDays = new ArrayList<>(myOperationalDates);
                     Collections.sort(validDays);
                     if (myFrom == null) myFrom = validDays.get(0);
@@ -306,24 +297,22 @@ public final class EpipCalendar {
                             dayTypeRef.getRef().replace(":DayType:", ":UicOperatingPeriod:"));
                     uicOperatingPeriod.setVersion(dayTypeRef.getVersion());
                     uicOperatingPeriod.setValidDayBits(validDayBits.toString());
-                    // SYNTHESIS SITE, not a copy, and the distinction is a byte diff. myFrom and
-                    // myTo are computed values, so the carrier is built with from(), which retains
-                    // NO lexical and re-emits canonically. Copying a parsed carrier through instead
-                    // would re-emit whatever the SOURCE feed wrote.
+                    // Synthesis site. myFrom and myTo are computed values, so the carrier is built
+                    // with from(), which retains NO lexical and re-emits canonically.
                     uicOperatingPeriod.setFromDate(XmlDateTime.from(myFrom));
                     uicOperatingPeriod.setToDate(XmlDateTime.from(myTo));
 
                     // id rewrite :DayType: -> :DayTypeAssignment:.
                     DayTypeAssignment resDta = NetexUtils.project(myDayType, DayTypeAssignment.class);
-                    // project() copies JAXB's DEFAULTED getters into real fields, so the
-                    // synthesized assignment HOLDS modification=NEW status=ACTIVE
-                    // publication=PUBLIC — three attributes that must never reach the wire. The
-                    // omission is enforced at marshal time instead (toolkit/codec/SchemaDefaults).
+                    // project() copies JAXB's DEFAULTED getters into real fields, so the synthesized
+                    // assignment HOLDS modification=NEW status=ACTIVE publication=PUBLIC — three
+                    // attributes that must never reach the wire. The omission is enforced at marshal
+                    // time instead, in toolkit/codec/SchemaDefaults.java.
                     resDta.setOrder(BigInteger.ONE);
                     resDta.setIsAvailable(Boolean.TRUE);
                     resDta.setDayTypeRef(t.get(0).getDayTypeRef());   // the groupby key object
                     // A ref to the UicOperatingPeriod: an OperatingPeriodRef element with
-                    // nameOfRefClass="UicOperatingPeriod" (see NetexUtils.getRef).
+                    // nameOfRefClass="UicOperatingPeriod".
                     resDta.setOperatingPeriodRef(FACTORY.createOperatingPeriodRef(
                             NetexUtils.getRef(uicOperatingPeriod, OperatingPeriodRefStructure.class)));
 

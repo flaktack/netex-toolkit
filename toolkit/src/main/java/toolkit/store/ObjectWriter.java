@@ -3,13 +3,8 @@ package toolkit.store;
 import java.util.Iterator;
 import java.util.function.LongPredicate;
 
-/// **Role: everything that mutates a store.** Object insert (with its reference/id-index
-/// maintenance), the duplicate-merge policy, the local-key sequence, and the raw structural clone.
-///
-/// Deliberately NOT here: [Store#copyMap] looks like a write but needs `this` to be an
-/// [ObjectReader], since it re-inserts THIS store's objects into a target, so it belongs to no
-/// single role. [StoreResolve] mutates the reference index rather than the object maps and opens
-/// its own write txn — a maintenance pass, not a data path.
+/// Role: everything that mutates a store. Object insert (with its reference/id-index maintenance),
+/// the duplicate-merge policy, the local-key sequence, and the raw structural clone.
 public interface ObjectWriter {
 
     /// Insert a stream of objects of any class, with outward / unresolved reference extraction (the
@@ -30,26 +25,26 @@ public interface ObjectWriter {
     /// or `null` to signal the incoming copy stands unchanged (plain last-wins replace, exactly as
     /// if no policy were registered).
     ///
-    /// Declared here rather than on [Store] because it is this role's vocabulary; member types are
-    /// inherited through subinterfaces, so the `Store.MergeFn` spelling still resolves.
+    /// Member types are inherited through subinterfaces, so the `Store.MergeFn` spelling also
+    /// resolves.
     @FunctionalInterface
     interface MergeFn {
         Object merge(Object existing, Object incoming);
     }
 
     /// Class-scoped duplicate-merge policy: while a policy is registered for `clazz`,
-    /// inserting an object whose (id, version, class) already exists DECODES the stored blob,
+    /// inserting an object whose (id, version, class) already exists decodes the stored blob,
     /// calls `fn.merge(existing, incoming)` and stores the result, instead of the default
-    /// last-wins replacement. Reference/embedding extraction still runs against the INCOMING copy
+    /// last-wins replacement. Reference/embedding extraction still runs against the incoming copy
     /// only (the parallel workers extract per copy).
     ///
-    /// SESSION STATE, not persisted: policies live on this open Store handle only and are gone
+    /// Session state, not persisted: policies live on this open Store handle only and are gone
     /// on reopen; `fn == null` clears the class's policy. Register for the exact concrete
     /// model class (no subtype dispatch).
     ///
-    /// FIDELITY CAVEAT: a non-null merge result is RE-MARSHALLED — the row's source-verbatim
-    /// captured fragment is lost for that row, because the merge re-serialises. A null
-    /// result keeps the plain-replace path, verbatim fragment included.
+    /// Fidelity caveat: a non-null merge result is re-marshalled — the row's source-verbatim
+    /// captured fragment is lost for that row. A null result keeps the plain-replace path,
+    /// verbatim fragment included.
     void setMergePolicy(Class<?> clazz, MergeFn fn);
 
     /// The current local-key sequence value, advanced by `advance` afterwards.
@@ -58,9 +53,7 @@ public interface ObjectWriter {
     /// Raw structural copy of `source` into this (empty) store — class maps,
     /// id index, reference indexes — with `skipFullKeys` filtering (the db-to-db "delete")
     /// and `keyOffset` shifting of local keys (multi-source merges). Same-format sources
-    /// only. Returns the largest local key written (offset applied).
-    ///
-    /// The source is a whole [Store], not a narrower role: the copy runs BELOW the object level,
-    /// reading raw maps and the format marker.
+    /// only. Returns the largest local key written (offset applied). The copy runs below the object
+    /// level, reading raw maps and the format marker.
     long cloneFrom(Store source, Txn sourceTxn, Txn targetTxn, LongPredicate skipFullKeys, long keyOffset);
 }

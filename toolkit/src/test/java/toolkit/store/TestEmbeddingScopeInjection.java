@@ -1,26 +1,13 @@
 package toolkit.store;
 
-// The embedding-index scope is INJECTED (Stores.NETEX_EMBEDDING_SCOPE is a default, not a law), and
-// a store's stored bytes depend on it. TestEmbeddingScope pins WHAT the profile's set is; this file
-// pins what the STORE does with a set that is not the profile's, which is where an injectable scope
-// can go wrong in a way no compile catches.
+// The embedding-index scope is injected: Stores.NETEX_EMBEDDING_SCOPE is a default rather than a
+// law, and a store's stored bytes depend on it. TestEmbeddingScope pins what the profile's set is;
+// this file pins what the store does with a set that is not the profile's.
 //
-// THE HAZARD. The index has a completion marker whose VALUE is the scope's tag, and
-// resolveEmbeddings trusts the index only when that tag is the one the running store asks under.
-// That covers the read direction. The write direction is the hole: inserts feed the index through
-// THIS store's scope and touch no marker, so opening a scope-A store read-WRITE under scope B
-// leaves rows that are A for the old objects and B for the new ones under a marker still claiming
-// A, and a later scope-A reader would trust an index missing containers. So the store drops the
-// marker when it is opened for writing under a scope that did not build it.
-//
-// NEUTER PROOF:
-//   * testIndexRowsFollowTheInjectedScope     — make inEmbeddingScope ignore embScope and read the
-//     profile list; the narrowed store indexes the Quay anyway and the scope is decoration.
-//   * testMarkerRecordsTheInjectedScope       — write embeddingScopeTag() from a static default;
-//     both stores claim the same scope and every later comparison compares nothing.
-//   * testWritableOpenUnderAnotherScopeRetractsTheMarker — delete the retractForeignScopeMarker
-//     call; the store keeps a marker for rows it no longer has, which is the silent-wrong-index
-//     state, and this test is the only thing that observes it.
+// The index has a completion marker whose value is the scope's tag, and resolveEmbeddings trusts
+// the index only when that tag is the one the running store asks under. Inserts feed the index
+// through the opening store's scope and touch no marker, so the store drops the marker when it is
+// opened for writing under a scope that did not build it.
 
 import noi.netex.model.ObjectFactory;
 import noi.netex.model.Quay;
@@ -55,10 +42,9 @@ public class TestEmbeddingScopeInjection {
         return new AbstractLmdbStore.EmbeddingScope(names);
     }
 
-    /// The injected scope reaches the INSERT path, which is the only place index rows are made. Same
-    /// fixture, same loader, two scopes: the row exists under the profile's and does not exist under
-    /// one that drops Quay. Row COUNTS rather than contents, the assertion being that the store
-    /// asked the scope at all.
+    /// The injected scope reaches the insert path, which is the only place index rows are made.
+    /// Same fixture, same loader, two scopes: the row exists under the profile's and does not exist
+    /// under one that drops Quay.
     @Test
     void testIndexRowsFollowTheInjectedScope(TestStore ts) throws Exception {
         Path wide = writeStopPlace(ts.tempPath("wide.lmdb"), Stores.NETEX_EMBEDDING_SCOPE);
@@ -70,9 +56,8 @@ public class TestEmbeddingScopeInjection {
                         + "the insert path consults and injection is cosmetic");
     }
 
-    /// The marker records the scope the store was opened with, not a compiled-in one. Two stores,
-    /// two scopes, two tags — and the profile store's tag is the profile's, so today's stores are
-    /// unchanged by the scope having become injectable.
+    /// The marker records the scope the store was opened with rather than a compiled-in one: two
+    /// stores, two scopes, two tags.
     @Test
     void testMarkerRecordsTheInjectedScope(TestStore ts) throws Exception {
         Path wide = writeStopPlace(ts.tempPath("marker-wide.lmdb"), Stores.NETEX_EMBEDDING_SCOPE);
@@ -86,10 +71,10 @@ public class TestEmbeddingScopeInjection {
                         + "cannot tell an index apart from one built for another question");
     }
 
-    /// The write-direction hole, closed: a store opened READ-WRITE under a scope that did not build
-    /// its index loses the completeness marker before any insert can run. Without this the store
-    /// would go on claiming scope A while accumulating scope-B rows, and the next scope-A reader
-    /// would take the index-driven path over an index missing containers.
+    /// A store opened read-write under a scope that did not build its index loses the completeness
+    /// marker before any insert can run. Otherwise it would go on claiming scope A while
+    /// accumulating scope-B rows, and the next scope-A reader would take the index-driven path over
+    /// an index missing containers.
     @Test
     void testWritableOpenUnderAnotherScopeRetractsTheMarker(TestStore ts) throws Exception {
         Path db = writeStopPlace(ts.tempPath("retract.lmdb"), Stores.NETEX_EMBEDDING_SCOPE);
@@ -100,18 +85,16 @@ public class TestEmbeddingScopeInjection {
         Check.isNull(marker(db),
                 "a writable open under a foreign scope must drop the marker: from here on the rows "
                         + "are a mixture and no scope can honestly claim them");
-        // And it does not come back by reopening under the ORIGINAL scope: the rows really are a
-        // mixture now, and only a rebuild can restore a claim. resolveEmbeddings' corpus-scan
-        // fallback is what makes that safe rather than lossy.
+        // Reopening under the original scope does not bring it back: the rows are a mixture now,
+        // and only a rebuild can restore a claim.
         try (Store s = Stores.open(db, false, Stores.V2, Stores.NETEX_EMBEDDING_SCOPE)) {
             Check.that(s.formatId().equals(Stores.V2), "…the store still opens normally");
         }
         Check.isNull(marker(db), "…and the retraction is permanent until the index is rebuilt");
     }
 
-    /// The retraction is a WRITE, so a readonly open must not perform it — a reporting tool that
-    /// opens a national store under the wrong scope would otherwise mutate it, and readonly stores
-    /// cannot write at all (the rw txn would throw before it got that far).
+    /// The retraction is a write, so a readonly open does not perform it: a reporting tool that
+    /// opens a national store under the wrong scope must not mutate it.
     @Test
     void testReadonlyOpenUnderAnotherScopeChangesNothing(TestStore ts) throws Exception {
         Path db = writeStopPlace(ts.tempPath("readonly.lmdb"), Stores.NETEX_EMBEDDING_SCOPE);
@@ -122,8 +105,6 @@ public class TestEmbeddingScopeInjection {
                 "a reader that disagrees with the marker falls back to the corpus scan; it does "
                         + "not get to rewrite the store it is reading");
     }
-
-    // ---------------------------------------------------------------- fixture + raw readers
 
     /// One StopPlace embedding one id-carrying Quay, in a fresh store under `scope`.
     private static Path writeStopPlace(Path path, AbstractLmdbStore.EmbeddingScope scope) {
@@ -143,7 +124,7 @@ public class TestEmbeddingScopeInjection {
         return path;
     }
 
-    /// `_meta/emb_idx_done` of a CLOSED store, read without the store's own code.
+    /// `_meta/emb_idx_done` of a closed store, read without the store's own code.
     private static String marker(Path db) {
         try (Env<byte[]> env = readEnv(db)) {
             Dbi<byte[]> meta = env.openDbi("_meta".getBytes(StandardCharsets.UTF_8));
@@ -154,7 +135,7 @@ public class TestEmbeddingScopeInjection {
         }
     }
 
-    /// How many rows `_embedding_idx` holds. DUPSORT, so iterate rather than stat.
+    /// How many rows `_embedding_idx` holds. It is DUPSORT, so iterate rather than stat.
     private static int embIdxRows(Path db) {
         try (Env<byte[]> env = readEnv(db)) {
             Dbi<byte[]> idx = env.openDbi("_embedding_idx".getBytes(StandardCharsets.UTF_8),

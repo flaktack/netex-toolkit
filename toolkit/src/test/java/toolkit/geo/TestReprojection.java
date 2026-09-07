@@ -2,18 +2,13 @@ package toolkit.geo;
 
 // Reprojection, over UTM 32N easting/northing 680000/5140000 — roughly Bolzano.
 //
-// [Projection#reprojectionChanged] is the operation; the driver-side wrappers around it hold no
-// logic of their own, so:
-//   * testReprojectionConvertsLocationToWgs84 drives reprojectionChanged directly;
-//   * testReprojectionUpdateConvertsStoredLocationsToWgs84 replays the store-wide update loop
-//     (dbNames ∩ the geo classes, re-inserting only the CHANGED objects) over the public Store
-//     API, then reloads by (id, version). It takes TestStore, so TestStoreExtension hands it a
-//     fresh store per method.
+// [Projection#reprojectionChanged] is the operation and the driver-side wrappers around it hold no
+// logic of their own, so these drive it directly and replay the store-wide update loop (dbNames ∩
+// the geo classes, re-inserting only the CHANGED objects) over the public Store API.
 //
-// Expected coordinates are computed at runtime via Projection.resolveTransform — the same
-// transform the operation is built on — to a delta of 1e-5, so this asserts the plumbing rather
-// than the projection library's arithmetic. The absolute numbers are pinned separately by the
-// ensemble's reference pairs.
+// Expected coordinates are computed at runtime via Projection.resolveTransform — the same transform
+// the operation is built on — to a delta of 1e-5, so this asserts the plumbing rather than the
+// projection library's arithmetic.
 
 import noi.netex.gml.DirectPositionType;
 import noi.netex.model.LocationStructure;
@@ -80,12 +75,10 @@ public class TestReprojection {
     }
 
     /// GeoClasses.all() is the reprojection pass's whole subject: it is intersected with dbNames
-    /// and everything outside it is never opened. A "non-empty, contains one class I know about"
-    /// assertion cannot fail for a set that grew to every model class — which is the failure that
-    /// costs a national run a full decode of the timetable — nor for one that shrank to a handful,
-    /// which loses geometry silently. So the NEGATIVES and the size are asserted too, from the
-    /// retired toolkit.smoke.Smoke: the set is derived from Zone/Point geometry membership, so a
-    /// journey and an operator must be outside it while a stop place and a route point are in.
+    /// and everything outside it is never opened. The set is derived from Zone/Point geometry
+    /// membership, so a journey and an operator must be outside it while a stop place and a route
+    /// point are in; the NEGATIVES and the size are asserted because a set that grew to every
+    /// model class, or shrank to a handful, would still satisfy a "non-empty" check.
     @Test
     void testGetAllGeoElementsIsNotEmpty() {
         Set<Class<?>> geoClasses = GeoClasses.all();
@@ -124,9 +117,8 @@ public class TestReprojection {
         }
     }
 
-    /// The reprojection update, over the public Store API:
-    /// every class present in the db ∩ get_all_geo_elements, re-emitting ONLY the objects a
-    /// projection actually modified.
+    /// The reprojection update, over the public Store API: every class present in the db ∩
+    /// GeoClasses.all(), re-emitting ONLY the objects a projection actually modified.
     private static Iterator<Object> reprojectionUpdate(Store db, Txn txn, String crsTo) {
         List<Class<?>> classes = new ArrayList<>(db.dbNames(txn));
         classes.retainAll(GeoClasses.all());

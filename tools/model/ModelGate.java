@@ -64,8 +64,8 @@ import java.util.stream.Collectors;
 /// bytes in every table, `ns` included — that one is about the XML namespace, not the Java package.
 ///
 /// ```
-/// ../bin/java.sh -cp "toolkit/target/netex-toolkit.jar:toolkit/target/deps/*" \
-///     scratch/modelgate/ModelGate.java <cmd> [--pkg=...] [--gmlpkg=...] [--out=...]
+/// java -cp "toolkit/target/netex-toolkit.jar:toolkit/target/deps/*" \
+///     tools/model/ModelGate.java <cmd> [--pkg=...] [--gmlpkg=...] [--out=...]
 /// ```
 public final class ModelGate {
 
@@ -607,13 +607,7 @@ public final class ModelGate {
     // The F row's third cell is `declaredType`, a TYPE-NAME STRING, so a sweep over changed cells
     // sees a field only when the NAME of its type moved. An enumeration that keeps its name and
     // changes its TOKEN SET is invisible to it, and that is a wire change: a dropped lexical binds
-    // null, silently.
-    //
-    // A new row kind rather than a new column on F: the census is a frozen baseline diffed on
-    // (kind, class, field) with column 3 read kind-aware, so widening F would move every F row's
-    // byte layout. A new kind is additive — the rows sort into one contiguous block.
-    //
-    // Keyed on the enumeration's TYPE NAME, the one thing that did not change.
+    // null, silently. The E rows are keyed on the enumeration's TYPE NAME.
     //
     // What it cannot see:
     //   - WHICH FIELDS USE THE ENUM. That is the F rows' job; the join is not made here.
@@ -936,7 +930,6 @@ public final class ModelGate {
             }
             checked++;
         }
-        // GeoClasses
         Class<?> gc = tryLoad("toolkit.model.GeoClasses");
         if (gc != null) {
             @SuppressWarnings("unchecked")

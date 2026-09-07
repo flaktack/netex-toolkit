@@ -3,11 +3,9 @@
 //
 // The worked example for the FIX sandwich, and what makes a fix different from a transform.
 // InPlace hands the fix ONE read-write transaction and it both reads and writes through it: the
-// lazy iterator below walks the ServiceJourney map while insertAnyObjects writes back into THAT
-// SAME dbi, at THE SAME keys, with a LARGER value (the journey has gained a <trainNumbers>
-// element), so LMDB relocates the page rather than patching it. The idiom rests on that read
-// cursor still visiting every row exactly once — a skip would leave a store that opens, exports
-// and validates and is missing part of the fix. TestInPlaceCursorStability pins it.
+// lazy iterator below walks the ServiceJourney map while insertAnyObjects writes back into that
+// same dbi, at the same keys, with a larger value (the journey has gained a <trainNumbers>
+// element), so LMDB relocates the page rather than patching it.
 //
 // The TrainNumbers this mints go into a different class map, so they are never under the cursor.
 //

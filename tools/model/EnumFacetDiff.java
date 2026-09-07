@@ -42,9 +42,6 @@ import java.util.TreeMap;
 ///    "repair candidate" and stops.
 /// - ADDED — a pure widening. It cannot lose a bind and needs nothing.
 ///
-/// The first two fail to bind identically and nothing downstream can tell them apart, so the split
-/// is made here, at the schema.
-///
 /// ## How RESPELLED is decided, and what that cannot know
 ///
 /// A type whose lost and gained token sets are both non-empty is a CANDIDATE. Each lost token is
@@ -62,8 +59,6 @@ import java.util.TreeMap;
 /// The verdict looks semantic and is not: these are LEXICAL relations. A genuine rename to a
 /// distant word reads as REMOVED + ADDED, and a coincidental near-match between an unrelated
 /// removal and an unrelated addition reads as RESPELLED. The concept-identity claim is a human's.
-/// Conservative by design — a false REMOVED costs a needless decision, a false RESPELLED would
-/// license a repair that changes meaning.
 ///
 /// ## Two modes, two subjects
 ///
@@ -161,9 +156,8 @@ public final class EnumFacetDiff {
         List<String> gained = new ArrayList<>(sb); gained.removeAll(sa);
         // Counts are DISTINCT counts: a schema tree can declare the same xs:enumeration facet twice
         // and the next version tidy it up, at which point a raw facet count reads as a LOSS while
-        // the token set is identical. The duplicate gets its own verdict rather than being
-        // swallowed. The census arm cannot see this — Java enum constants are unique, so XJC has
-        // already deduplicated.
+        // the token set is identical. The census arm cannot see this — Java enum constants are
+        // unique, so XJC has already deduplicated.
         List<String> da = dups(a), dbl = dups(b);
         String note = (da.isEmpty() ? "" : " dupA:" + String.join(",", da))
                 + (dbl.isEmpty() ? "" : " dupB:" + String.join(",", dbl));
@@ -400,8 +394,6 @@ public final class EnumFacetDiff {
 
     // ------------------------------------------------------------------ self-test
 
-    /// The classifier is the only part with a judgement in it: three positives, three negatives,
-    /// and one that must NOT collapse into a respelling.
     static void selfTest() {
         int bad = 0;
         bad += expect("case", classify("T", List.of("a", "qrcode"), List.of("a", "qrCode")),
@@ -414,19 +406,14 @@ public final class EnumFacetDiff {
                 Verdict.REMOVED);
         bad += expect("pure widening", classify("T", List.of("a"), List.of("a", "b")),
                 Verdict.ADDED);
-        // A distant rename must NOT be waved through as a respelling: that would license a repair
-        // changing the meaning of a value.
         bad += expect("distant rename", classify("T", List.of("foldingSeat"), List.of("tipUpSeat")),
                 Verdict.MIXED);
-        // A real removal standing next to an unrelated addition must not be paired away either.
         bad += expect("removal beside addition",
                 classify("T", List.of("customerAccount", "x"), List.of("wholeNewThing", "x")),
                 Verdict.MIXED);
         bad += expect("identical", classify("T", List.of("a", "b"), List.of("a", "b")), null);
         bad += expect("reorder only", classify("T", List.of("a", "b"), List.of("b", "a")),
                 Verdict.REORDERED);
-        // A duplicate facet must not read as a loss: real schema trees declare the same facet
-        // twice, and a raw count then reads as a narrowing.
         bad += expect("duplicate facet dropped",
                 classify("T", List.of("a", "b", "b"), List.of("a", "b")), Verdict.DEDUPED);
         if (bad != 0) {

@@ -1,48 +1,28 @@
 package toolkit.transform.feedfix;
 
-// Rewrites the ILLEGAL after-midnight xs:time encoding
-// (`24:20:00`, `25:10:00`, `30:05:00`, and the legal-but-day-losing `24:00:00`) into the ONLY
-// encoding NeTEx actually defines: an hour in 0..23 plus the sibling `*DayOffset` element.
+// Rewrites the illegal after-midnight xs:time encoding (`24:20:00`, `25:10:00`, `30:05:00`, and
+// the legal-but-day-losing `24:00:00`) into the only encoding NeTEx defines: an hour in 0..23 plus
+// the sibling `*DayOffset` element.
 //
 //   <DepartureTime>24:20:00</DepartureTime>
 //     ->  <DepartureTime>00:20:00</DepartureTime><DepartureDayOffset>1</DepartureDayOffset>
 //
-// WHY:
+// NeTEx defines no time type of its own — every declaration is `xsd:time` with no restriction — so
+// the W3C lexical space governs verbatim and hour 24+ is not a NeTEx encoding at all.
 //
-//   * NeTEx defines no time type of its own — every declaration is `xsd:time` with no
-//     restriction — so the W3C lexical space governs verbatim and hour 24+ is not a NeTEx
-//     encoding at all. The intended form is the sibling `*DayOffset`.
-//   * A consumer does NOT tolerate the illegal form: its adapter parses under a strict resolver
-//     and throws, the JAXB RI downgrades that to a recoverable event, no handler is installed, so
-//     the field is silently null with NO LOG. A passing time with both times null then trips a
-//     completeness rule whose action is "the journey will be skipped".
-//   * ANY BYTE-PRESERVING PIPELINE DROPS THE SAME JOURNEYS, so no before/after comparison of
-//     stored bytes can see this.
-//   * The VALID form is read correctly: a consumer adds 86400 per day offset.
+// A consumer does not tolerate the illegal form: its adapter parses under a strict resolver and
+// throws, the JAXB RI downgrades that to a recoverable event, no handler is installed, so the field
+// is silently null with no log. A passing time with both times null then trips a completeness rule
+// whose action is "the journey will be skipped". The valid form is read correctly: a consumer adds
+// 86400 per day offset.
 //
-// Default OFF: applying this CHANGES the encoding the feed used. The chain hook runs only under
-// -Dtoolkit.epip.dayOffsetRewrite=on; unset, the chain does not even open the extra transaction
-// and the output is byte-identical. Running THIS FILE as a driver is itself the opt-in.
+// Default off: applying this changes the encoding the feed used. The chain hook runs only under
+// -Dtoolkit.epip.dayOffsetRewrite=on; unset, the chain does not open the extra transaction and the
+// output is byte-identical.
 //
-// PLACEMENT is transform-time, never load-time:
-//   * at load time the stored fragment would stop being source bytes, so the round-trip harness
-//     would report a loss;
-//   * and it would land UPSTREAM of coupling, moving the hour-24 scoring the coupling depends on.
-//
-// IT COMPOSES WITH the monotonicity repair, which is a DIFFERENT concept: its guard requires the
-// departure offset to be at least the arrival's, and a rewritten value fails that conjunct, so
-// there is no double count.
-//
-// THE FIVE SILENT FAILURES this is written against, and the answer to each:
-//   1. losing the day        -> the PER-VALUE INVARIANT below, asserted on every rewrite;
-//   2. multi-day             -> floorDiv(hour, 24), never `hour == 24 ? 1 : 0`;
-//   3. a pre-existing offset -> newOffset = oldOffset + d, ACCUMULATE; and a NON-ZERO
-//                               pre-existing offset THROWS, because the corpus has none and a
-//                               violation means that precondition died;
-//   4. `24:00:00` + explicit `DayOffset=0`  -> see the decision note on `rewriteTime`;
-//   5. the carriers' payload -> the rewrite is LEXICAL SURGERY on the hour field only, so the
-//                               fraction and the timezone offset travel verbatim
-//                               (`24:20:00+01:00` -> `00:20:00+01:00`, `.000` kept as `.000`).
+// It runs at transform time, never load time: at load time the stored fragment would stop being
+// source bytes, so the round-trip harness would report a loss, and it would land upstream of
+// coupling, moving the hour-24 scoring the coupling depends on.
 
 import noi.netex.calls.Calls;
 import noi.netex.model.ArrivalStructure;
@@ -82,8 +62,6 @@ public final class DayOffsetRewrite {
 
     private DayOffsetRewrite() {}
 
-    // ------------------------------------------------------------------ the counters
-
     /// What a pass did — the numbers the gate reads.
     public static final class Stats {
         public long objectsScanned;
@@ -91,7 +69,7 @@ public final class DayOffsetRewrite {
         public long valuesRewritten;
         public long valuesExactlyMidnight;    // hour == 24, minute == second == nano == 0
         public long valuesPastBoundary;       // everything later — what OTP silently drops
-        public long valuesWithZeroOffsetPresent;   // an EXPLICIT `0` companion, overwritten
+        public long valuesWithZeroOffsetPresent;   // an explicit `0` companion, overwritten
         public int  maxDayOffsetWritten;
 
         @Override
@@ -215,13 +193,13 @@ public final class DayOffsetRewrite {
 
     /// The whole transform, for one (time, companion offset) pair.
     ///
-    /// DECISION — `24:00:00` paired with an EXPLICIT `DayOffset=0`. That pair is
-    /// self-contradictory: the producer means midnight at the END of day 0, while the schema-valid
-    /// reading of `00:00:00` with offset 0 is the FIRST instant of day 0, twenty-four hours
-    /// earlier. This pass treats it uniformly, exactly like every later hour — the TIME wins and
-    /// the offset accumulates. Overwritten explicit zeros are counted separately.
+    /// `24:00:00` paired with an explicit `DayOffset=0` is self-contradictory: the producer means
+    /// midnight at the end of day 0, while the schema-valid reading of `00:00:00` with offset 0 is
+    /// the first instant of day 0, twenty-four hours earlier. This pass treats it like every later
+    /// hour — the time wins and the offset accumulates. Overwritten explicit zeros are counted
+    /// separately.
     ///
-    /// A NON-ZERO pre-existing offset THROWS. The two encodings are disjoint by feed — no element
+    /// A non-zero pre-existing offset throws. The two encodings are disjoint by feed — no element
     /// carries both a past-boundary hour and a non-zero offset — and the transform must fail loudly
     /// rather than accumulate silently into an unmeasured population.
     private static boolean rewritePair(String journeyId, String ownerId, String field,
@@ -233,7 +211,7 @@ public final class DayOffsetRewrite {
         XmlTime old = getTime.get();
         if (old == null || old.isUnparsed() || old.getHour() < 24) return false;
 
-        int days = Math.floorDiv(old.getHour(), 24);          // NEVER `hour == 24 ? 1 : 0`
+        int days = Math.floorDiv(old.getHour(), 24);          // multi-day, not `hour == 24 ? 1 : 0`
         XmlTime now = rewriteTime(old);
         BigInteger oldOffset = getOffset.get();
 
@@ -245,7 +223,7 @@ public final class DayOffsetRewrite {
                     + "accumulating here would move an unmeasured population. Re-measure first.");
         }
         BigInteger newOffset = (oldOffset == null ? BigInteger.ZERO : oldOffset)
-                .add(BigInteger.valueOf(days));               // ACCUMULATE, never assign
+                .add(BigInteger.valueOf(days));               // accumulate, never assign
 
         checkInvariant(journeyId, ownerId, field, old, oldOffset, now, newOffset);
 
@@ -260,12 +238,12 @@ public final class DayOffsetRewrite {
         return true;
     }
 
-    /// Hour reduction by **lexical surgery**: everything after the first `':'` — minute, second,
-    /// the fraction and the timezone offset — is copied through verbatim, and the result is
-    /// re-parsed so the new carrier RETAINS it as its lexical form and re-marshals byte-exactly.
+    /// Hour reduction by lexical surgery: everything after the first `':'` — minute, second, the
+    /// fraction and the timezone offset — is copied through verbatim, and the result is re-parsed so
+    /// the new carrier retains it as its lexical form and re-marshals byte-exactly.
     ///
-    /// `XmlTime.of(h, m, s)` is deliberately not used: it drops both the nano and the zone offset,
-    /// turning `24:20:00+01:00` into `00:20:00` and `24:00:00.000` into `00:00:00`.
+    /// Not `XmlTime.of(h, m, s)`: it drops both the nano and the zone offset, turning
+    /// `24:20:00+01:00` into `00:20:00` and `24:00:00.000` into `00:00:00`.
     public static XmlTime rewriteTime(XmlTime old) {
         String lexical = old.toXmlFormat();                   // retained source form, or canonical
         int colon = lexical.indexOf(':');
@@ -279,15 +257,14 @@ public final class DayOffsetRewrite {
         return out;
     }
 
-    /// THE CHECK that separates "converted correctly" from "converted and lost the day", which no
-    /// before/after A/B can see. Asserted on EVERY rewritten value:
+    /// The per-value invariant, asserted on every rewritten value:
     ///
     /// 1. total seconds are conserved: {@code oldOffset*86400 + rawHour*3600 + m*60 + s ==
     ///       newOffset*86400 + newTime.toSecondOfDay()}. Under the zero-offset precondition this
     ///    reduces to the literal form the design names,
     ///    `rawHour*3600 + m*60 + s == newOffset*86400 + newTime.toSecondOfDay()`;
     /// 1. the new hour is a legal one, 0..23, and the value is now legal `xs:time`;
-    /// 1. minute, second, fraction and timezone offset are UNMOVED;
+    /// 1. minute, second, fraction and timezone offset are unmoved;
     /// 4. the recovered instant is at least a full day, it being an after-midnight value by
     ///    construction.
     public static void checkInvariant(String journeyId, String ownerId, String field,
@@ -315,8 +292,8 @@ public final class DayOffsetRewrite {
 
     // ------------------------------------------------------------------ the dump (the gate feed)
 
-    /// Optional TSV of every rewritten value, so the gate can compare the recovered time against
-    /// the SOURCE LEXICAL. Columns:
+    /// Optional TSV of every rewritten value, so the gate can compare the recovered time against the
+    /// source lexical. Columns:
     /// `journey  owner  field  srcLexical  srcOffset  newLexical  newOffset  seconds`.
     public static final class Sink implements AutoCloseable {
         private final Writer out;

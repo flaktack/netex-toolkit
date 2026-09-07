@@ -1,40 +1,10 @@
 package toolkit.store;
 
-// WHAT IS PINNED. Store.lookupById is the class-free address lookup: every _id_idx row at the
-// `id NUL` prefix (or `id NUL version NUL`), in key order. It is a `default` method whose default
-// IS a filtered iterIdIndex, so its contract is IDENTITY with that filter — same rows, same order,
-// same encoded bytes, same full_keys — and an override may only change the cost. That is the same
-// rule the SPI writes for scanEdges/scanUnresolved, and it is the reason the abstract
-// count did not move.
-//
-// WHY IT EXISTS. lookupFullKey(txn, id, version, clazz) calls classIdx(clazz) before it looks at
-// anything, so it NPEs on a null class — an address given without a class could not be resolved
-// through this SPI at all, and a whole-index pass is millions of rows on a real store for one
-// lookup.
-//
-// THREE THINGS HERE ARE NEGATIVE CONTROLS RATHER THAN ASSERTIONS.
-//   * "X:10" is in the fixture next to "X:1". A prefix scan on the TEXT "X:1" matches it; a prefix
-//     scan on `X:1 NUL` does not. Without that row every assertion below would pass against a
-//     naive string prefix.
-//   * The store carries rows OUTSIDE the prefix, and the identity test asserts that the whole-index
-//     pass saw strictly more rows than the prefix returned — otherwise "the two agree" would be a
-//     statement about two empty lists.
-//   * The same id is stored under two DIFFERENT classes, which is what makes
-//     testTheClassArgumentDoesNotFilterTheVersionNullArm sharp: both calls come back with the same
-//     row, so one of them returned an object of a class it did not name.
-//
-// NEUTER PROOF (each test names the edit that must break it):
-//   * testEveryRowAtThePrefixComesBack        — make AbstractLmdbStore.lookupById return after the
-//     first row (i.e. re-implement it as lookupFullKey); the row count drops from 3 to 1.
-//   * testTheIdPrefixIsNulTerminated          — build the prefix with `id` instead of
-//     encodePrefix(id, null, null, false); "X:10" then joins "X:1"'s answer.
-//   * testOverrideIsIdenticalToTheDefault     — make the override include the class trailer
-//     (encodePrefix(..., true)) or start the cursor at the first key rather than MDB_SET_RANGE; the
-//     rows or their order stop matching the interface default's.
-//   * testVersionNarrowsThePrefix             — ignore the version argument in the override.
-//   * testLookupFullKeyStillRequiresItsClass  — "fix" lookupFullKey to accept a null class.
-//     Deliberately not done: widening an ABSTRACT method's contract is a break the compiler cannot
-//     report to a third-party implementor, which is the argument for adding a default instead.
+// Store.lookupById is the class-free address lookup: every _id_idx row at the `id NUL` prefix (or
+// `id NUL version NUL`), in key order. It is a `default` method whose default is a filtered
+// iterIdIndex, so its contract is identity with that filter — same rows, same order, same encoded
+// bytes, same full_keys — and an override may only change the cost. The SPI writes the same rule
+// for scanEdges and scanUnresolved.
 
 import noi.netex.model.Line;
 import noi.netex.model.Operator;
@@ -50,13 +20,9 @@ import java.util.List;
 
 public class TestLookupById {
 
-    // ---------------------------------------------------------------- the fixture
-
-    /// Five rows, of which three share the id "X:1" across two versions AND two classes, one is the
-    /// text-prefix decoy "X:10", and one is an unrelated id so the index is not exhausted by the
-    /// prefix. Duplicate ids are legal by design — NeTEx's primary key is (id, version) — so this is
-    /// a supported shape and
-    /// not a corrupted store.
+    /// Five rows, of which three share the id "X:1" across two versions and two classes, one is the
+    /// text-prefix decoy "X:10", and one is an unrelated id so the prefix never exhausts the index.
+    /// Duplicate ids are a supported shape: NeTEx's primary key is (id, version).
     private static void fill(TestStore ts) {
         try (Txn txn = ts.store.rwTxn()) {
             ts.store.insertAnyObjects(txn, List.of(
@@ -87,8 +53,6 @@ public class TestLookupById {
         return q;
     }
 
-    // ---------------------------------------------------------------- the tests
-
     /// Every version and every class of the id, and nothing else.
     @Test
     void testEveryRowAtThePrefixComesBack(TestStore ts) {
@@ -104,8 +68,7 @@ public class TestLookupById {
         }
     }
 
-    /// The prefix is `id NUL`, not the id's text. Without this the answer to "X:1" would carry
-    /// "X:10" and an operator asking about one object would be shown another.
+    /// The prefix is the encoded `id NUL`, so the text prefix "X:1" does not reach "X:10".
     @Test
     void testTheIdPrefixIsNulTerminated(TestStore ts) {
         fill(ts);
@@ -142,10 +105,10 @@ public class TestLookupById {
         }
     }
 
-    /// **The contract.** `AbstractLmdbStore`'s prefix-cursor override against the interface
-    /// default's whole-index filter, row for row, byte for byte, in order. The default is reproduced
-    /// here rather than invoked so that the comparison is against the SPECIFICATION and survives an
-    /// implementor who overrides it — which every shipped store does.
+    /// `AbstractLmdbStore`'s prefix-cursor override against the interface default's whole-index
+    /// filter, row for row, byte for byte, in order. The default is reproduced here rather than
+    /// invoked, so the comparison is against the specification and survives an implementor who
+    /// overrides it.
     @Test
     void testOverrideIsIdenticalToTheDefault(TestStore ts) {
         fill(ts);
@@ -165,16 +128,15 @@ public class TestLookupById {
                             "encoded key[" + i + "] for " + q[0] + "@" + q[1] + " is byte-identical");
                 }
             }
-            // Not vacuous: the index holds rows the widest query never returns.
             Check.equals(5L, whole, "the whole index is five rows");
             Check.that(whole > ts.store.lookupById(tx, "X:1", null).size(),
                     "the prefix answer is a strict subset, so agreement above is not two empty lists");
         }
     }
 
-    /// This did NOT widen [Store#lookupFullKey]. Relaxing an abstract method's contract breaks
-    /// every third-party implementation at RUNTIME, with no compiler diagnostic; adding a default
-    /// beside it costs an implementor nothing. So the old precondition stays, and stays pinned.
+    /// [Store#lookupFullKey] still requires a non-null class — it calls `classIdx(clazz)` before it
+    /// looks at anything. The precondition must not be widened: an abstract method's contract is
+    /// not something the compiler can report to a third-party implementor.
     @Test
     void testLookupFullKeyStillRequiresItsClass(TestStore ts) {
         fill(ts);
@@ -183,22 +145,18 @@ public class TestLookupById {
                 ts.store.lookupFullKey(tx, "X:1", null, null);
                 Check.that(false, "lookupFullKey(clazz = null) must still fail, not answer");
             } catch (NullPointerException expected) {
-                // the documented shape: classIdx(clazz) runs before anything else
             }
             try {
                 ts.store.lookupFullKey(tx, "X:1", "1", null);
                 Check.that(false, "…on the exact-key arm too");
             } catch (NullPointerException expected) {
-                // same call, same order
             }
         }
     }
 
-    /// On the `version == null` arm the class argument is a PRECONDITION, not a filter — the
+    /// On the `version == null` arm the class argument is a precondition rather than a filter: the
     /// class trailer is not part of the prefix. Two calls naming two different classes return the
-    /// same row, so one of them returned an object of a class it did not ask for. That has always
-    /// been the behaviour; it is pinned here because it is the
-    /// reason a class-free question needed a method of its own rather than a nullable argument.
+    /// same row, so one of them returns an object of a class it did not ask for.
     @Test
     void testTheClassArgumentDoesNotFilterTheVersionNullArm(TestStore ts) {
         fill(ts);
@@ -214,8 +172,6 @@ public class TestLookupById {
         }
     }
 
-    // ---------------------------------------------------------------- helpers
-
     /// [Store#lookupById]'s documented default, reproduced so it can be compared against.
     private static List<IdRow> interfaceDefault(Store store, Txn tx, String id, String version) {
         byte[] prefix = NulKeyCodec.encodePrefix(id, version, null, false);
@@ -230,7 +186,7 @@ public class TestLookupById {
         return out;
     }
 
-    /// `Class|id|version` per row, GraphDump's rendering, from the encoded key alone.
+    /// `Class|id|version` per row, from the encoded key alone.
     private static List<String> describe(Store store, List<IdRow> rows) {
         List<String> out = new ArrayList<>();
         for (IdRow r : rows) {

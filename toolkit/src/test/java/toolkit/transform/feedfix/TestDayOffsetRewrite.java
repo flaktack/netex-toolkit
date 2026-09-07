@@ -2,14 +2,10 @@ package toolkit.transform.feedfix;
 
 // Covers DayOffsetRewrite.
 //
-// The class under test converts the ILLEGAL after-midnight xs:time encoding into the only one
-// NeTEx defines. The thing that makes it dangerous is that the obvious gate cannot see the
-// obvious failure: a before/after A/B reports "+571 trips" for BOTH "converted correctly" and
-// "converted and lost the day", and no byte comparison against an unrewritten run can see it
-// either, because the feed never carries the valid form. So the tests here are
-// POSITIVE-SIGNAL — they assert what the new data IS, value by value — and the invariant that
-// separates the two outcomes is neuter-tested in
-// testInvariantCatchesTheDayLosingRewrite: the day-losing rewrite MUST throw.
+// The class under test converts the ILLEGAL after-midnight xs:time encoding into the only one NeTEx
+// defines. No byte comparison against an unrewritten run can see a day-losing rewrite, because the
+// feed never carries the valid form, so the tests assert what the new data IS, value by value, and
+// testInvariantCatchesTheDayLosingRewrite pins the invariant that separates the two outcomes.
 
 import noi.netex.calls.Calls;
 import noi.netex.model.ArrivalStructure;
@@ -38,11 +34,8 @@ public class TestDayOffsetRewrite {
 
     private static final ObjectFactory FACTORY = new ObjectFactory();
 
-    // ---------------------------------------------------------------- the flag
-
-    /// The default is OFF. Applying this transform CHANGES the encoding the feed used, so enabling
-    /// it is a decision the user has not taken. The suite runs with no `-D`, so this pins the
-    /// shipped default.
+    /// The default is OFF: applying this transform changes the encoding the feed used, so enabling
+    /// it is a decision the user has not taken.
     @Test
     void testTheFlagDefaultsToOff() {
         Check.equals("toolkit.epip.dayOffsetRewrite", DayOffsetRewrite.PROPERTY, "flag name");
@@ -51,8 +44,6 @@ public class TestDayOffsetRewrite {
         Check.that(!DayOffsetRewrite.ENABLED,
                 "the EPIP chain hook is OFF unless -Dtoolkit.epip.dayOffsetRewrite=on is passed");
     }
-
-    // ---------------------------------------------------------------- the carriers' payload
 
     /// The rewrite must not go through `LocalTime` or `XmlTime.of(h,m,s)`,
     /// both of which drop the fraction and the timezone offset. Lexical surgery keeps them.
@@ -72,19 +63,13 @@ public class TestDayOffsetRewrite {
                 "past the boundary");
         Check.equals("06:05:00", DayOffsetRewrite.rewriteTime(XmlTime.parse("30:05:00")).toXmlFormat(),
                 "the corpus maximum");
-        // And the result is a carrier that RE-MARSHALS as the rewritten lexical, not as some
-        // canonicalisation of it.
         XmlTime out = DayOffsetRewrite.rewriteTime(XmlTime.parse("24:20:00+01:00"));
         Check.equals("00:20:00+01:00", out.getLexical(), "the new carrier retains its lexical form");
         Check.that(out.isXsdValid(), "the rewrite is legal xs:time");
     }
 
-    // ---------------------------------------------------------------- the per-value invariant
-
-    /// NEUTER. The day-losing rewrite — `24:20:00 -> 00:20:00` with NO offset — is exactly
-    /// what a careless implementation produces, and it is invisible to every other gate here
-    /// (a leaf-level A/B sees a change either way, and a consumer recovers the same trips). The
-    /// invariant is the only check that separates them, so it must FAIL on it.
+    /// NEUTER. The day-losing rewrite — `24:20:00 -> 00:20:00` with NO offset — is invisible to
+    /// every other gate here, so the invariant must FAIL on it.
     @Test
     void testInvariantCatchesTheDayLosingRewrite() {
         XmlTime src = XmlTime.parse("24:20:00");
@@ -117,12 +102,9 @@ public class TestDayOffsetRewrite {
         Check.equals(2, stats.maxDayOffsetWritten, "the stats report the multi-day offset");
     }
 
-    // ---------------------------------------------------------------- the corpus precondition
-
-    /// `newOffset = oldOffset + d`, ACCUMULATE. A non-zero pre-existing offset means
-    /// the measured disjointness (no element carries both a past-boundary hour and a
-    /// `DayOffset`) has died, so the pass refuses rather than accumulating into a population
-    /// nobody has counted.
+    /// `newOffset = oldOffset + d`, ACCUMULATE. A non-zero pre-existing offset means the measured
+    /// disjointness (no element carries both a past-boundary hour and a `DayOffset`) has died, so
+    /// the pass refuses rather than accumulating into a population nobody has counted.
     @Test
     void testNonZeroPreExistingOffsetThrows() {
         TimetabledPassingTime t = new TimetabledPassingTime();
@@ -141,12 +123,10 @@ public class TestDayOffsetRewrite {
         Check.equals("24:20:00", t.getArrivalTime().toXmlFormat(), "and nothing is written");
     }
 
-    /// The DECIDED case. A real feed writes
-    /// `<ArrivalTime>24:00:00</ArrivalTime><ArrivalDayOffset>0</ArrivalDayOffset>`, a
-    /// self-contradictory pair (207 values). This pass lets the TIME win — the explicit zero is
-    /// the element's schema default, and OTP today folds that value to `00:00` 24 hours
-    /// wrong with no diagnostic — and REPORTS the overwrite in its own counter so the decision
-    /// stays visible in the numbers rather than hiding inside the total.
+    /// A real feed writes `<ArrivalTime>24:00:00</ArrivalTime>` beside
+    /// `<ArrivalDayOffset>0</ArrivalDayOffset>`, a self-contradictory pair (207 values). The TIME
+    /// wins: the explicit zero is the element's schema default, and OTP folds that value to
+    /// `00:00`, 24 hours wrong with no diagnostic. The overwrite gets its own counter.
     @Test
     void testExplicitZeroDayOffsetOnMidnightIsOverwrittenAndCounted() {
         TimetabledPassingTime t = new TimetabledPassingTime();
@@ -336,8 +316,6 @@ public class TestDayOffsetRewrite {
         Check.that(xml.indexOf("<ArrivalTime>") < xml.indexOf("<ArrivalDayOffset>"),
                 "in TimetabledPassingTimeGroup's declared order");
     }
-
-    // ---------------------------------------------------------------- helpers
 
     private static ServiceJourney journeyOf(TimetabledPassingTime... tpts) {
         ServiceJourney sj = new ServiceJourney();

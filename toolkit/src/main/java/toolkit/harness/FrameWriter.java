@@ -12,28 +12,21 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-/// The third companion of the export sandwich, beside [ZipWriter] (entries, byte and object
-/// totals) and [NetexEnvelope] (the per-entry preamble). What it owns is the step between them:
-/// turning STORED ROWS into EMITTED FRAGMENT BYTES.
+/// Turns stored rows into emitted fragment bytes, into a [ZipWriter].
 ///
 /// Stored values are `[4B LE origLen][LZ4 block]`, so emission is decompress + byte copy — no JAXB
 /// on the hot path. Every method here is that copy under a different way of choosing the rows:
 /// all of a class, the first of a class, a list of full_keys, or a container-element plan.
 ///
-/// WHAT IS MECHANISM AND WHAT IS PROFILE. Decompression is mechanism: it is the store's on-disk
-/// format, every reader does it, and no export can opt out of it. Anything done to the fragment
-/// AFTER that is profile, and this class does none of it — it calls [Fragments] and emits whatever
-/// comes back. The default is the stored bytes, verbatim.
-///
-/// Running every emitted fragment through [toolkit.codec.FragmentOrder#normalise] is one profile's
-/// requirement, not the harness's: an export whose consumer wants the stored bytes verbatim is a
-/// legitimate export. So it is a parameter, and the parameter defaults to off.
+/// Decompression is the store's on-disk format and no export can opt out of it. Anything done to the
+/// fragment after that is profile, and this class does none of it — it calls [Fragments] and emits
+/// whatever comes back, which by default is the stored bytes, verbatim.
 ///
 /// Not `AutoCloseable`: it owns neither the store, the transaction nor the zip. The four it is
 /// handed outlive it.
 public final class FrameWriter {
 
-    /// The PROFILE hook: a decompressed fragment on its way out, and what should actually be
+    /// The profile hook: a decompressed fragment on its way out, and what should actually be
     /// written. Called once per emitted object, never for a row that is skipped.
     ///
     /// The default is identity — stored bytes, verbatim. An EPIP-shaped export passes
@@ -67,12 +60,8 @@ public final class FrameWriter {
         this.hook = hook;
     }
 
-    // ------------------------------------------------------------ entries
-
-    /// An entry: the zip entry, then the envelope preamble every entry repeats.
-    ///
-    /// Paired with [#end], and paired here rather than at each call site: a driver that opened the
-    /// entry and forgot the preamble would emit a zip entry that is not a document.
+    /// An entry: the zip entry, then the envelope preamble every entry repeats. Paired with [#end];
+    /// an entry opened without the preamble is not a document.
     public void entry(String name) throws IOException {
         out.openEntry(name);
         env.open(out);
@@ -102,11 +91,9 @@ public final class FrameWriter {
         return c == null ? 0 : all(c);
     }
 
-    /// Only the FIRST row of the class in store scan (key) order — insertion order for the
-    /// toolkit's local keys; any further rows are dropped. Returns 0 or 1.
-    ///
-    /// For the frames that take exactly one of something as a direct child with no container
-    /// element.
+    /// Only the first row of the class in store scan (key) order — insertion order for the toolkit's
+    /// local keys; any further rows are dropped. Returns 0 or 1. For the frames that take exactly one
+    /// of something as a direct child with no container element.
     public long first(Class<?> clazz) throws IOException {
         Iterator<RawRow> it = db.iterRawObjects(tx, clazz).iterator();
         try {
@@ -124,8 +111,8 @@ public final class FrameWriter {
         return c == null ? 0 : first(c);
     }
 
-    /// The rows named by a full_key list, in the order given — the emission half of any driver
-    /// that decided its own order from the stored indexes rather than from a scan.
+    /// The rows named by a full_key list, in the order given — for a driver that decided its own
+    /// order from the stored indexes rather than from a scan.
     public void byFullKey(LongArrayList fullKeys, Class<?> clazz) throws IOException {
         for (long fk : fullKeys) {
             write(clazz, db.loadRawObject(tx, clazz, NulKeyCodec.u32le(NulKeyCodec.fullKeyLocal(fk))));
@@ -135,7 +122,7 @@ public final class FrameWriter {
     /// A container-element plan: `containerTag -> the class names that go in it`, in iteration
     /// order (pass a `LinkedHashMap` — the XSD sequence is an order, not a set).
     ///
-    /// A container tag is written ONLY when something lands in it. An empty `<lines/>` is not the
+    /// A container tag is written only when something lands in it. An empty `<lines/>` is not the
     /// same document as no `<lines>` at all, and for most NeTEx containers it is not even valid.
     public void containers(Map<String, List<String>> plan) throws IOException {
         for (Map.Entry<String, List<String>> e : plan.entrySet()) {
@@ -155,13 +142,8 @@ public final class FrameWriter {
         }
     }
 
-    // ------------------------------------------------------------ probes
-
-    /// Whether the class has any row — the decode-free existence probe a driver asks before
-    /// opening an entry it would otherwise have to un-write.
-    ///
-    /// `scanObjects` (local keys only) rather than `iterRawObjects`: the question is existence, and
-    /// this way the first row's blob is never even read.
+    /// Whether the class has any row — the decode-free existence probe a driver asks before opening
+    /// an entry it would otherwise have to un-write. No blob is read.
     public boolean hasRows(Class<?> clazz) {
         Iterator<byte[]> it = db.scanObjects(tx, clazz).iterator();
         try {
@@ -177,9 +159,7 @@ public final class FrameWriter {
         return c != null && hasRows(c);
     }
 
-    // ------------------------------------------------------------ internals
-
-    /// Decompress, hand to the profile, emit, count. The one path every method above ends in, so
+    /// Decompress, hand to the profile, emit, count — the one path every method above ends in, so
     /// the hook cannot be applied to some emitted fragments and not others.
     private void write(Class<?> clazz, byte[] blob) throws IOException {
         out.write(hook.of(clazz, codec.decompress(blob)));
@@ -193,7 +173,6 @@ public final class FrameWriter {
             try {
                 ac.close();
             } catch (Exception ignored) {
-                // a cursor that will not close has nothing left to tell the caller
             }
         }
     }

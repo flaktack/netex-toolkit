@@ -1,18 +1,12 @@
 package toolkit.harness;
 
-// The multi-feed clone chain must survive degenerate feed lists — an empty feed must not reset the cumulative
-// key offset (the next feed's local keys would collide with feed 1), and a duplicate
+// The multi-feed clone chain must survive degenerate feed lists: an empty feed must not reset the
+// cumulative key offset (the next feed's local keys would collide with feed 1), and a duplicate
 // (id, version) across feeds is kept ONCE, first feed wins.
 //
-// The blob-repair-sweep tests count sweep calls through the LOG rather than through a mock —
-// there is no mocking framework here, and the observable is better anyway. resolve() emits its
-// repair line ONLY inside the marker-gated branch that runs the sweep, so the line count in a
-// captured driver log is exactly "the sweep ran" / "it did not". The observable end state — marker on sources and
-// target, one blob per Line id — is asserted on top.
-//
-// The path-taking merge is exercised through MergeToDb.driverMain -- the whole of
-// scripts/MergeDbToDb.java -- with the sources built as closed db files via TestStore.buildDbFile
-// and the target a fresh path in the same temp dir.
+// The merge is exercised through MergeToDb.driverMain -- the whole of scripts/MergeDbToDb.java --
+// with the sources built as closed db files via TestStore.buildDbFile and the target a fresh path
+// in the same temp dir.
 
 import noi.netex.model.Line;
 import org.junit.jupiter.api.Test;
@@ -68,12 +62,11 @@ public class TestMergeDbToDb {
         }
     }
 
-    /// merge_db_to_db(feeds, target) through the CLI, one layer below the driver.
+    /// The merge through the CLI, one layer below the driver.
     ///
     /// `scripts/MergeDbToDb.java` is `MergeToDb.driverMain("merge-db", args)` and nothing else, so
-    /// this is that call verbatim — which it has to be, because a driver in the default package is
-    /// unimportable from here. What is lost is the two-line wrapper; what is kept is everything the
-    /// wrapper reaches, CLI parsing and argument order included.
+    /// this is that call verbatim — a driver in the default package is unimportable from here. What
+    /// is lost is the two-line wrapper; CLI parsing and argument order are not.
     private static void merge(Path target, Path... feeds) throws Exception {
         String[] args = new String[feeds.length + 1];
         for (int i = 0; i < feeds.length; i++) args[i] = feeds[i].toString();
@@ -81,10 +74,9 @@ public class TestMergeDbToDb {
         MergeToDb.driverMain("merge-db", args);
     }
 
-    /// merge() with the driver's log captured — the observable that stands in for mocking the
-    /// blob-repair sweep out: resolve() logs [#SWEEP_LINE] once
-    /// per sweep and ONLY from inside the marker-gated branch that runs it, so the count of that
-    /// line in the captured log is the sweep call count.
+    /// merge() with the driver's log captured, standing in for mocking the blob-repair sweep out:
+    /// resolve() logs [#SWEEP_LINE] once per sweep and ONLY from inside the marker-gated branch
+    /// that runs it, so the count of that line in the captured log is the sweep call count.
     private static final String SWEEP_LINE = "mis-typed blob repaired";
 
     private static int mergeCountingSweeps(Path target, Path... feeds) throws Exception {
@@ -119,9 +111,6 @@ public class TestMergeDbToDb {
                 new ArrayList<>(lineNames(merged).keySet()), "all six lines survive the empty feed");
     }
 
-    // The FUSED driver's version of the empty-feed offset case lives with that driver, in
-    // ../noi-pipeline's tests/TestFeedsToCoupled.
-
     @Test
     void testMergeDuplicateIdKeptOnceFirstFeedWins(TestStore db) throws Exception {
         Path f1 = db.buildDbFile(linesFrame("dup", "first", "a1", "A1"), "f1.lmdb");
@@ -134,12 +123,10 @@ public class TestMergeDbToDb {
 
     /// A reference from the LOSING source onto the duplicate must end up on the copy that was kept.
     ///
-    /// This is the case a merge used to get silently wrong. `cloneFrom` copies edge rows rather than
-    /// re-deriving them, so dropping the duplicate row also drops every edge INTO it — and unlike an
-    /// ordinary miss it leaves no unresolved row, so the `resolve()` that follows has nothing to find
-    /// and cannot repair it. The referrer kept its ref STRING either way, which is why the objects
-    /// looked right and only the reference graph was short. Measured on three EPIP-converted stores
-    /// before the repair existed: 19,733 of 2,505,319 edges missing.
+    /// `cloneFrom` copies edge rows rather than re-deriving them, so dropping a duplicate row also
+    /// drops every edge INTO it — and, unlike an ordinary miss, leaves no unresolved row for the
+    /// `resolve()` that follows to find. The referrer keeps its ref STRING either way, so the
+    /// objects look right and only the reference graph is short.
     @Test
     void testAReferenceOntoADroppedDuplicateSurvivesOnTheKeptCopy(TestStore db) throws Exception {
         // f2 declares the same StopPlace id as f1 AND an assignment pointing at it. f1's copy wins,
@@ -162,9 +149,9 @@ public class TestMergeDbToDb {
         }
     }
 
-    /// ...and the repair must not resurrect what the clone dropped. A skipped row referencing another
-    /// skipped row is ordinary, and re-inserting it as a "referrer" would undo the de-duplication —
-    /// caught this way on a real corpus, where it put 6,208 merged-away StopPlaces back.
+    /// ...and the repair must not resurrect what the clone dropped. A skipped row referencing
+    /// another skipped row is ordinary, and re-inserting it as a "referrer" would undo the
+    /// de-duplication.
     @Test
     void testTheRepairDoesNotResurrectADroppedDuplicate(TestStore db) throws Exception {
         Path f1 = db.buildDbFile(stopPlaceFrame("SP:dup") + stopPlaceFrame("SP:other"), "f1.lmdb");
@@ -192,12 +179,9 @@ public class TestMergeDbToDb {
                 + "</PassengerStopAssignment></stopAssignments></ServiceFrame>";
     }
 
-    // The claim: resolve() SKIPS the full blob-repair sweep when every source
-    // carries the marker (bind-time repair in pass-1 covers the only refs the merge touches --
-    // the cross-feed edges). Here the sweep is counted from the driver's log (see
-    // mergeCountingSweeps): zero "mis-typed blob repaired" lines means zero sweeps.
-    // Swept sources (buildDbFile -> load + resolve() stamps the marker) -> the merged db carries
-    // the marker, and correctness is unaffected (every line survives with one blob each).
+    // resolve() SKIPS the full blob-repair sweep when every source carries the marker: bind-time
+    // repair in pass-1 covers the only refs the merge touches, the cross-feed edges. buildDbFile
+    // stamps the marker (load + resolve()), so both sources carry it and so does the merged db.
     @Test
     void testMergeSkipsBlobRepairSweepWhenAllSourcesSwept(TestStore db) throws Exception {
         Path f1 = db.buildDbFile(FEED1, "f1.lmdb");
@@ -211,13 +195,9 @@ public class TestMergeDbToDb {
                 new ArrayList<>(lineNames(merged).keySet()), "every line survives with one blob each");
     }
 
-    // The un-swept second source is built for real rather than mocked, and the sweep is counted
-    // exactly one sweep. Here the second source is built WITHOUT resolve() so it genuinely lacks
-    // the marker, exercising the same no-propagation branch (the marker is NOT inherited when any
-    // source lacks it; resolve() then runs its one-shot sweep on the merged db). The sweep call
-    // count IS observable — resolve() logs "mis-typed blob repaired" only from inside that branch
-    // — so this asserts the sweep ran exactly once, and doubles as the negative
-    // control for the zero-sweep assertion in the test above.
+    // The marker is NOT inherited when any source lacks it: the second source is built WITHOUT
+    // resolve(), so resolve() runs its one-shot sweep on the merged db. Negative control for the
+    // zero-sweep assertion above.
     @Test
     void testMergeRunsSweepOnceWhenASourceIsUnswept(TestStore db) throws Exception {
         Path f1 = db.buildDbFile(FEED1, "f1.lmdb");

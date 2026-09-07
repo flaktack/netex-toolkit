@@ -1,24 +1,14 @@
 package toolkit.store;
 
-// WHAT DID THAT STAGE ACTUALLY DO?
-//
 // One tally, two harnesses. InPlace prints it as "changed N"; DbToDb prints it as "wrote N" beside
-// a separate "cloned N", because cloneFrom copies a whole source verbatim WITHOUT reaching
-// insertOne -- so a transform that clones two million rows and derives three would report
-// "written 2,000,003" if the two were summed, hiding the three.
+// a separate "cloned N", because cloneFrom copies a whole source verbatim without reaching
+// insertOne, and summing the two would let a clone of millions hide a derivation of three.
 //
-// An in-place fix re-emits mutated objects under their EXISTING (id, version), so the store's row
-// counts are identical whether it rewrote every object or none of them. That makes "did anything
-// happen?" unanswerable from the store, and it is why InPlace gets a per-class insert summary
-// instead of the emptyOutput post-condition FeedToDb and DbToDb carry: a fix that changes nothing
-// is a legitimate outcome, so refusing would make the idempotent case an error.
-//
-// What must NOT be ambiguous is the difference between "found no subject" and "silently did
-// nothing", and the two arms below are exactly that pair.
-//
-// NEUTER PROOF: delete the countInserted call in AbstractLmdbStore.insertOne and
-// testAFixThatRewritesReportsWhatItTouched still passes on row counts alone: it asserts the TALLY,
-// not the store size.
+// An in-place fix re-emits mutated objects under their existing (id, version), so the store's row
+// counts are identical whether it rewrote every object or none of them. That is why InPlace carries
+// a per-class insert summary rather than the emptyOutput post-condition FeedToDb and DbToDb use: a
+// fix that changes nothing is a legitimate outcome, so refusing would make the idempotent case an
+// error.
 
 import noi.netex.model.Line;
 import noi.netex.model.Operator;
@@ -58,14 +48,13 @@ public class TestWriteTally {
         Check.equals(2L, byClass.get("Line"), "two Lines: " + byClass);
         Check.equals(1L, byClass.get("Operator"), "one Operator: " + byClass);
 
-        // Highest first — on a real fix the interesting class is the one that moved most, and a
-        // summary sorted by class name buries it behind whatever starts with 'A'.
+        // Highest first: on a real fix the interesting class is the one that moved most.
         Check.equals("Line", byClass.keySet().iterator().next(),
                 "ordered by count, not by name: " + byClass);
     }
 
-    /// REWRITING THE SAME OBJECT IS A CHANGE, and the store size does not move. This is the case
-    /// that makes row counts useless as an answer, so it is the case the tally exists for.
+    /// Rewriting the same object is a change that does not move the store size, which is what makes
+    /// row counts useless as an answer.
     @Test
     void testRewritingInPlaceCountsThoughTheStoreDoesNotGrow(TestStore ts) {
         AbstractLmdbStore db = (AbstractLmdbStore) ts.store;
@@ -97,10 +86,9 @@ public class TestWriteTally {
         Check.that(db.insertedByClass().isEmpty(), "and no per-class rows: " + db.insertedByClass());
     }
 
-    /// cloneFrom writes straight to the class dbi and never
-    /// reaches insertOne, so it must be counted apart — and DbToDb's emptyOutput check must NOT be
-    /// switched to the insert tally, because a pure-clone transform has a zero insert tally and a
-    /// completely full target.
+    /// cloneFrom writes straight to the class dbi and never reaches insertOne, so it is counted
+    /// apart. DbToDb's emptyOutput check must not be switched to the insert tally: a pure-clone
+    /// transform has a zero insert tally and a completely full target.
     @Test
     void testCloningIsCountedApartFromInserting(TestStore ts) throws Exception {
         AbstractLmdbStore src = (AbstractLmdbStore) ts.store;

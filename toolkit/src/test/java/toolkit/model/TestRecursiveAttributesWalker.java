@@ -1,13 +1,9 @@
 package toolkit.model;
 
-// THE REFLECTION WALK, ASSERTED DIRECTLY.
-//
 // RecursiveAttributes.onlyReferences and embeddedEntities are the two extractions the insert path
 // runs over every object it stores: what they return IS the unresolved-row set and the embedding
-// index. The suite reaches them everywhere, but always through a store, where the observable is an
-// edge — and an edge is what the walk found AND what resolve() then managed to wire. When the two
-// are read together a walk that missed a reference and a resolve that could not place it look the
-// same. These assert the walk's own output.
+// index. These assert the walk's own output, not the store-level edge, which is what the walk found
+// AND what resolve() then managed to wire.
 //
 // The three properties that are not obvious from the shapes:
 //
@@ -18,9 +14,8 @@ package toolkit.model;
 //   * REFERENCES INSIDE REL-STRUCTURE LISTS COUNT. TrainNumberRef is not a field of ServiceJourney;
 //     it is an element of a list inside TrainNumberRefs_RelStructure, and the descend() path that
 //     reaches it (List, then JAXBElement) is separate from the plain-field one.
-//   * DEDUP IS BY (targetClassName, ref, version). Smoke asserted a count of 2 over a fixture with
-//     two DISTINCT references, which the dedup could not have affected either way; the fixture here
-//     carries the same reference twice so the count is evidence.
+//   * DEDUP IS BY (targetClassName, ref, version). The fixture carries the same reference twice, so
+//     the count is evidence.
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.model.EntityStructure;

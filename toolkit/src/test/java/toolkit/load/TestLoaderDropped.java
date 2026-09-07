@@ -1,35 +1,22 @@
 package toolkit.load;
 
-// WHAT THE LOADER THROWS AWAY, and which of it is a fact about feeds and which is a defect.
+// What the loader throws away, and which of it is a fact about feeds and which is a defect.
 //
 // Two counters ride in LoadStats: `unmapped` (an element the loader itself declared interesting,
 // whose subtree is skipped whole because the model package has no class for it) and `skippedNoId`
-// (a bound EntityStructure with a null id, which does not reach the store). Both were a per-STREAM
-// Log.warn, which on a thousand-member feed is not a report.
+// (a bound EntityStructure with a null id, which does not reach the store).
 //
-// THE MEASUREMENT THAT DECIDES `unmapped`. A minority of the names in interesting.txt have no class
-// in noi.netex.model, and every one is a NeTEx abstract substitution-group head -- Entity, Point,
-// Link, Place, Zone, Site, Equipment, PassingTime, Projection, GroupOfEntities ... XJC generates no
-// class for them because no instance document may contain them. So `unmapped > 0` means either a
-// schema-invalid element name in the feed or a skew between the bundled resource and the model jar,
-// and the loader cannot tell those apart. Counted, named and refusable (DROPPED_OUTPUT), not fatal.
-// testTheInterestingSetStillHasUnmappableNames pins the measurement.
+// A minority of the names in interesting.txt have no class in noi.netex.model, and every one is a
+// NeTEx abstract substitution-group head -- Entity, Point, Link, Place, Zone, Site, Equipment,
+// PassingTime, Projection, GroupOfEntities ... XJC generates no class for them because no instance
+// document may contain them. So `unmapped > 0` means either a schema-invalid element name in the
+// feed or a skew between the bundled resource and the model jar, and the loader cannot tell those
+// apart. Counted, named and refusable (DROPPED_OUTPUT), not fatal.
 //
-// THE MEASUREMENT THAT DECIDES THE OTHER HALF. `skippedNoId` used to be the else-branch of
-// `v instanceof EntityStructure && getId() != null`, i.e. it also counted "the bound object is not
-// an EntityStructure at all" -- a different failure with a different cause. Every interesting name
-// that HAS a model class binds to an EntityStructure subclass, so that arm is unreachable and is
-// now a throw: if it fires, the interesting set and the model have diverged and every instance of
-// that element is being dropped in silence. testEveryInterestingNameThatBindsCanCarryAnId is what
-// keeps that throw honest.
-//
-// NEUTER PROOF (each test names the edit that must break it):
-//   * testUnmappedElementsAreCountedAndNamed  -- drop unmappedNames from LoadStats, or go back to
-//     warning per stream; the aggregate loses the element name and the assertion fails.
-//   * testIdlessObjectVanishesAndIsCounted    -- restore the `objects++` on a null id (the object
-//     would then be stored under a null key) or stop counting the skip.
-//   * testReportDroppedNamesTheOptIn          -- remove the Strictness.require calls from
-//     NetexLoader.reportDropped; the transcript goes silent again.
+// Every interesting name that has a model class binds to an EntityStructure subclass, so the arm of
+// `advance()` that would count "the bound object is not an EntityStructure at all" is unreachable
+// and is a throw: if it fires, the interesting set and the model have diverged and every instance
+// of that element is being dropped in silence.
 
 import noi.netex.model.EntityStructure;
 import noi.netex.model.ScheduledStopPoint;
@@ -52,9 +39,9 @@ public class TestLoaderDropped {
     // ---------------------------------------------------------------- fixtures
 
     /// TestStore.SKELETON cannot be used for the id-less cases: its CompositeFrame carries
-    /// `id="cf"`, and CopyingCapture's arm 1 DENORMALISES an absent id down from the nearest
-    /// id-bearing ancestor, so no descendant can reach the loader with a null id. This skeleton
-    /// leaves the whole ancestor chain id-less, which is the only shape arm 1 declines to inject in.
+    /// `id="cf"`, and CopyingCapture's arm 1 denormalises an absent id down from the nearest
+    /// id-bearing ancestor, so no descendant can reach the loader with a null id. An id-less
+    /// ancestor chain is the only shape arm 1 declines to inject in.
     private static final String ID_LESS_SKELETON =
             "<PublicationDelivery xmlns=\"http://www.netex.org.uk/netex\" version=\"ntx:1.1\">"
             + "<PublicationTimestamp>2026-01-01T00:00:00</PublicationTimestamp>"
@@ -70,9 +57,7 @@ public class TestLoaderDropped {
 
     // ---------------------------------------------------------------- unmapped
 
-    /// `<Site>` is in the interesting set and has no model class: the subtree is skipped whole
-    /// and nothing anywhere held the name. The count alone would not be actionable — "Site" is what
-    /// says this is an abstract head rather than a resource/jar skew.
+    /// `<Site>` is in the interesting set and has no model class, so its subtree is skipped whole.
     @Test
     void testUnmappedElementsAreCountedAndNamed(TestStore ts) throws Exception {
         LoadStats s = load(ts, TestStore.SKELETON,
@@ -104,7 +89,7 @@ public class TestLoaderDropped {
 
     /// The measurement the `unmapped` verdict rests on. If this ever reads 0, every remaining
     /// unmapped element is a resource/jar skew rather than an abstract head, and the concern's
-    /// default deserves re-arguing.
+    /// tolerant default no longer holds.
     @Test
     void testTheInterestingSetStillHasUnmappableNames() throws Exception {
         List<String> missing = unmappableInterestingNames();
@@ -118,10 +103,10 @@ public class TestLoaderDropped {
         }
     }
 
-    /// What makes the new throw in `advance()` unreachable rather than merely unlikely. Every
-    /// interesting name that binds at all binds to something that can carry an id; the known
-    /// counter-example shape, RouteView (a DerivedViewStructure with no getId(), plentiful in
-    /// the 317 source feeds), is deliberately not in the set.
+    /// What keeps the throw in `advance()` unreachable. Every interesting name that binds at all
+    /// binds to something that can carry an id; the counter-example shape, RouteView (a
+    /// DerivedViewStructure with no getId(), plentiful in the 317 source feeds), is kept out of the
+    /// set on purpose.
     @Test
     void testEveryInterestingNameThatBindsCanCarryAnId() throws Exception {
         List<String> offenders = new ArrayList<>();
@@ -175,10 +160,9 @@ public class TestLoaderDropped {
 
     // ---------------------------------------------------------------- the report
 
-    /// The post-condition itself: one line per concern, on the run's transcript, naming the count,
-    /// the element names and the flag that turns the tolerance off. DROPPED_OUTPUT is tolerated by
-    /// default (see its javadoc — refusing would stop the chain rather than surface anything), so
-    /// what has to be pinned is that it SAYS SOMETHING and does not throw.
+    /// The post-condition: one line per concern on the run's transcript, naming the count, the
+    /// element names and the flag that turns the tolerance off. DROPPED_OUTPUT is tolerated by
+    /// default, so the report must say something and must not throw.
     @Test
     void testReportDroppedNamesTheOptIn(TestStore ts) throws Exception {
         Path log = ts.tempPath("dropped.log");

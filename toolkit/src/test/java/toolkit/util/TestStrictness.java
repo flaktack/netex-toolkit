@@ -3,15 +3,11 @@ package toolkit.util;
 // The strictness policy: a degradation is either refused or counted, and which one it is must be
 // a decision the run records rather than an accident of who wrote the catch block.
 //
-// WHY THESE TESTS EXIST. Every case below was previously a counter and a warning, and the run
-// exited 0. toolkit.util.Strictness makes it a property, and a policy nobody has watched refuse
-// anything is not a policy.
-//
-// WHY THE POLICY METHODS TAKE `fatal` AS A PARAMETER. The flags are `static final`, read at
-// class-init, so a disabled arm folds away and the store's flag discipline is preserved. That
-// also means a test in this JVM cannot flip one: surefire hosts the whole suite in ONE JVM and
-// System.setProperty after class-init changes nothing. Passing the decision in keeps the policy
-// itself fully testable, and the wiring is then covered end-to-end by the default-on arms below.
+// The policy methods take `fatal` as a parameter because the flags are `static final`, read at
+// class-init, so a disabled arm folds away and the store's flag discipline is preserved. That also
+// means a test in this JVM cannot flip one: surefire hosts the whole suite in one JVM and
+// System.setProperty after class-init changes nothing. The wiring is covered end to end by the
+// default-on arms below.
 
 import org.junit.jupiter.api.Test;
 import toolkit.test.Check;
@@ -81,18 +77,17 @@ public class TestStrictness {
 
     // ---------------------------------------------------------------- the wiring, end to end
 
-    /// A zip with no loadable member inserted nothing, logged "loaded 0 objects", and exited 0 —
-    /// the driver did not check the count, so an empty store was resolved and published.
-    /// EMPTY_OUTPUT is fatal by default, so the harness must now refuse.
+    /// EMPTY_OUTPUT is fatal by default, so a load that inserts nothing is refused by the harness
+    /// rather than resolved and published.
     @Test
     void testEmptyLoadIsRefusedByDefault(TestStore db) throws Exception {
         Check.that(Strictness.EMPTY_OUTPUT,
                 "emptyOutput must default to FATAL — there is no feed for which zero is right");
 
-        // A member that PARSES FINE and yields nothing: a well-formed PublicationDelivery whose
+        // A member that parses fine and yields nothing: a well-formed PublicationDelivery whose
         // frames are empty. A zip with no loadable member is refused a layer earlier by ZipLoad
-        // ("no loadable XML members"), which is the same invariant and not this post-condition —
-        // so the fixture has to get past the loader and still insert zero.
+        // ("no loadable XML members"), so the fixture has to get past the loader and still insert
+        // zero.
         Path zip = db.tempPath("loads-but-empty.zip");
         try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(zip))) {
             zos.putNextEntry(new ZipEntry("feed.xml"));
@@ -118,10 +113,7 @@ public class TestStrictness {
     }
 
     /// The tail of FeedToDb.driverMain — BindEvents.report, the bindEvents check, and
-    /// Strictness.report — runs only on a load that SUCCEEDS. testEmptyLoadIsRefusedByDefault
-    /// throws inside the try, so the rethrow skips the whole tail, and it was the suite's only
-    /// driverMain call: every line after the catch block was uncovered. A load that works is the
-    /// only thing that reaches them.
+    /// Strictness.report — runs only on a load that succeeds, so only a working load reaches it.
     @Test
     void testSuccessfulLoadReachesTheReportTail(TestStore db) throws Exception {
         Path zip = db.tempPath("loads-fine.zip");
@@ -150,10 +142,10 @@ public class TestStrictness {
         }
     }
 
-    /// The load report is the other half of tolerating something: where Strictness carries on, the
-    /// STORE must still say what it swallowed, or a downstream stage cannot tell a clean build from
-    /// one that absorbed a thousand bind losses. Absence of the file means "no report", never
-    /// "nothing happened" — the same rule the provenance sidecar uses for absent lineage.
+    /// Where Strictness carries on, the store still records what it swallowed, or a downstream
+    /// stage cannot tell a clean build from one that absorbed a thousand bind losses. Absence of
+    /// the file means "no report", never "nothing happened" — the same rule the provenance sidecar
+    /// uses for absent lineage.
     @Test
     void testLoadReportRecordsWhatWasTolerated(TestStore db) throws Exception {
         Path out = db.tempPath("reported.lmdb");
@@ -190,11 +182,9 @@ public class TestStrictness {
                 + "the storage design exists to prevent — and it was a bare catch(Exception).");
     }
 
-    /// bindEvents and unresolvedRefs default to TOLERATED, and that is deliberate, not an
-    /// oversight. Pinning it here so a later "tighten everything" pass has to argue with the
-    /// measurement rather than silently flip it: a ValidationEventHandler returning false was
-    /// measured to throw on fragments the loader accepts today, and cross-border work reads feeds
-    /// that genuinely reference objects published by another feed.
+    /// bindEvents and unresolvedRefs default to tolerated, and the measurement behind that stands:
+    /// a ValidationEventHandler returning false throws on fragments the loader accepts today, and
+    /// cross-border work reads feeds that genuinely reference objects published by another feed.
     @Test
     void testMeasuredExceptionsStayTolerantByDefault(TestStore db) {
         Check.that(!Strictness.BIND_EVENTS,

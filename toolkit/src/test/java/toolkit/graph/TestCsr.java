@@ -1,23 +1,14 @@
 package toolkit.graph;
 
-// THE GRAPH READER NOTHING ELSE IN THE SUITE TOUCHED.
-//
-// Csr is what `nx db` walks references with and what Store.csr(txn) hands out. The rest of the
-// suite exercises edges only through iterEdges/scanEdges, which is the FLAT pair sequence, never
-// the adjacency built from it.
+// Csr is what `nx db` walks references with and what Store.csr(txn) hands out.
 //
 // The two things a CSR build can get wrong and still look plausible:
 //
 //   * DEDUP. Csr.build collapses exact duplicate pairs, because the edge map is DUPSORT and a pair
 //     stored twice is one row. A build that kept both would leave `e` and every out()/in() list
-//     silently multi-valued, which no count-based assertion downstream would notice.
-//   * THE INVERSE. fwdKeys is a copy of the co-sorted dst array, so the forward direction is
-//     nearly free and nearly impossible to get wrong; invKeys is a separate counting sort by
-//     target, and that is the half that carries the risk. in() is asserted against brute force at
-//     every node, not just at the one node a hand-picked example would reach.
-//
-// Csr.build is DESTRUCTIVE on its input arrays (it sorts and compacts in place), so every case
-// below hands it a fresh copy — the brute-force ground truth is computed from the originals first.
+//     silently multi-valued.
+//   * THE INVERSE. fwdKeys is a copy of the co-sorted dst array; invKeys is a separate counting
+//     sort by target, so in() is asserted against brute force at every node, not just at one.
 
 import noi.netex.model.Line;
 import noi.netex.model.Route;
@@ -62,9 +53,8 @@ public class TestCsr {
         Check.equals(3, csr.nodes.length, "the node table is the distinct endpoints, deduped");
     }
 
-    /// Input order must not matter — build co-sorts. The same edges shuffled by a fixed permutation
-    /// have to produce the same adjacency, which is what lets a caller pass the store's blocks in
-    /// whatever order the reader hands them over.
+    /// Input order must not matter — build co-sorts, which is what lets a caller pass the store's
+    /// blocks in whatever order the reader hands them over.
     @Test
     void testBuildAcceptsEdgesInAnyOrder() {
         long[][] shuffled = {{1, 2}, {2, 3}, {1, 2}, {1, 3}, {3, 1}};
@@ -86,9 +76,8 @@ public class TestCsr {
         Check.equals(0, csr.in(99).length, "in() of an absent key is empty");
     }
 
-    /// Store.csr(txn) over a real store: the adjacency must be exactly the store's own edge pairs.
-    /// Built from iterEdges rather than from a hand-written expectation, so this stays true of any
-    /// fixture; the concrete SJP -> Route -> Line assertions below keep it from being vacuous.
+    /// Store.csr(txn) over a real store: the adjacency must be exactly the store's own edge pairs,
+    /// built from iterEdges rather than from a hand-written expectation.
     @Test
     void testStoreCsrIsTheStoresEdgeSet(TestStore db) throws Exception {
         db.loadNetex("""
@@ -135,8 +124,6 @@ public class TestCsr {
             Check.equals(0, csr.in(sjp).length, "nothing references the journey pattern");
         }
     }
-
-    // ---------------------------------------------------------------- helpers
 
     /// A fresh pair of arrays every time: build sorts and compacts them in place.
     private static Csr build(long[][] pairs) {

@@ -1,14 +1,10 @@
 package toolkit.store;
 
-// Store.fetchAllReferencesByClass must surface the DIRECT reference of the seed class
-// (ServiceJourneyPattern -> Route) AND the TRANSITIVE one (Route -> Line), but not the seed
-// object itself. skipExisting stays false — sjp1 stays out because it is never a collected TARGET
-// of any edge, not because of the skip filter; the fixpoint additionally never expands INTO
-// in-set classes.
-//
-// The Line/Route/SJP fixture is built bean-for-bean; referenced objects are
-// inserted FIRST so the references resolve at insert time.
-// The test takes TestStore, so Runner drives it against BOTH store formats.
+// Store.fetchAllReferencesByClass surfaces the direct reference of the seed class
+// (ServiceJourneyPattern -> Route) and the transitive one (Route -> Line), but not the seed object
+// itself: sjp1 is never a collected target of any edge, and the fixpoint never expands into in-set
+// classes. The Line/Route/SJP fixture is built bean-for-bean, referenced objects inserted first so
+// the references resolve at insert time.
 
 import noi.netex.model.EntityStructure;
 import noi.netex.model.Line;
@@ -32,7 +28,7 @@ public class TestFetchAllReferencesByClass {
 
     @Test
     void testFetchAllReferencesByClassYieldsReferencedObjects(TestStore db) throws Exception {
-        // make_line_route_sjp: the small outward-reference chain SJP -> Route -> Line.
+        // The small outward-reference chain SJP -> Route -> Line.
         ObjectFactory factory = new ObjectFactory();
         Line line = new Line();
         line.setId("l1");
@@ -54,7 +50,6 @@ public class TestFetchAllReferencesByClass {
         sjp.setRouteRef(routeRef);
 
         try (Txn txnWrite = db.store.rwTxn()) {
-            // Referenced objects first, so references resolve at insert time.
             db.store.insertAnyObjects(txnWrite, List.<Object>of(line, route, sjp));
             txnWrite.commit();
         }
@@ -68,7 +63,6 @@ public class TestFetchAllReferencesByClass {
                 fetchedIds.add(List.of(obj.getClass(), ((EntityStructure) obj).getId()));
             }
 
-            // The direct reference (Route) and its transitive reference (Line) must both surface.
             Check.that(fetchedIds.contains(List.of(Route.class, "r1")),
                     "direct reference Route r1 surfaces, got " + fetchedIds);
             Check.that(fetchedIds.contains(List.of(Line.class, "l1")),
@@ -78,14 +72,10 @@ public class TestFetchAllReferencesByClass {
         }
     }
 
-    /// `skipExisting` used to be decided from the DECODED bean's class, so every collected target
-    /// was unmarshalled and then possibly thrown away. It is now decided from the row's class
-    /// INDEX, which is what `loadObjectByFullKey` would have unmarshalled with anyway.
-    ///
-    /// This pins the behaviour that makes that legal: with `Route` in the seed set, Route
-    /// IS a collected target (SJP references it) and must still be filtered out, while its own
-    /// transitive reference Line must still surface. If the key-based filter over- or under-shot,
-    /// one of these two assertions fails.
+    /// `skipExisting` is decided from the row's class index rather than from the decoded bean —
+    /// the same index `loadObjectByFullKey` would have unmarshalled with. With `Route` in the seed
+    /// set, Route is a collected target (SJP references it) and is still filtered out, while its
+    /// own transitive reference Line still surfaces.
     @Test
     void testSkipExistingFiltersTheSameObjectsFromTheKey(TestStore db) throws Exception {
         seed(db);
@@ -105,10 +95,8 @@ public class TestFetchAllReferencesByClass {
         }
     }
 
-    /// The refusal that keeps the key-based filter honest: JAXB honours an `xsi:type` on the
-    /// fragment root and can then return a class other than the declared one, which is exactly what
-    /// the old bean-side `Set.contains` would have judged differently. Any `*:type`
-    /// attribute in the root start tag therefore forces the decode.
+    /// JAXB honours an `xsi:type` on the fragment root and can then return a class other than the
+    /// declared one, so any `*:type` attribute in the root start tag forces the decode.
     @Test
     void testRootTypeAttributeForcesTheDecode() {
         String ns = "http://www.netex.org.uk/netex";
@@ -132,12 +120,9 @@ public class TestFetchAllReferencesByClass {
         }
     }
 
-    /// THE ORDER, WHICH THE ASSERTIONS ABOVE THROW AWAY. Both drains collect into a HashSet, so a
-    /// build that emitted the fixpoint's discoveries before the seed's would satisfy every one of
-    /// them. The SPI records this method's emission as deterministic and TestScanEdges pins
-    /// the determinism of the block scan underneath it; between the two sits the fixpoint, which is
-    /// where the order is actually decided. Seed-discovered targets come out before the ones a later
-    /// round found: Route, then Line. Ported from the retired toolkit.smoke.Smoke.
+    /// The emission order, which the set-based assertions above discard. The SPI records this
+    /// method's emission as deterministic; the order itself is decided by the fixpoint, and
+    /// seed-discovered targets come out before the ones a later round found: Route, then Line.
     @Test
     void testSeedDiscoveriesAreEmittedBeforeFixpointOnes(TestStore db) throws Exception {
         seed(db);
@@ -151,10 +136,9 @@ public class TestFetchAllReferencesByClass {
         }
     }
 
-    /// The two ends of the walk that the SJP seed cannot distinguish. From a LEAF class there is
-    /// nothing to collect at all — an implementation that seeded the output with the sources
-    /// themselves would return one object here instead of none — and from an interior class only
-    /// its own targets surface, never the class it was seeded with.
+    /// The two ends of the walk that the SJP seed cannot distinguish: from a leaf class there is
+    /// nothing to collect at all, and from an interior class only its own targets surface, never
+    /// the class it was seeded with.
     @Test
     void testALeafSeedYieldsNothingAndASourceIsNeverItsOwnResult(TestStore db)
             throws Exception {

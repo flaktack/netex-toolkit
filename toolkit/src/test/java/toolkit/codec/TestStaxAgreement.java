@@ -1,22 +1,12 @@
 package toolkit.codec;
 
-// The toolkit ships TWO StAX implementations: Aalto on the decode path, Woodstox on the patch
-// path. See toolkit/codec/Stax.java for why each is chosen.
+// Agreement between the toolkit's two StAX implementations: Aalto on the decode path, Woodstox on
+// the patch path.
 //
-// WHAT THIS FILE PINS:
-//   1. the decode path uses ONE reader everywhere — FragmentCodec, FragmentPeek and
-//      RefPatcher.scan. A byte-read of a stored fragment is comparable with an unmarshalled bean
-//      field BECAUSE the same parser produced both, and a change that gives one of the three its
-//      own factory breaks that argument with nothing else noticing.
-//   2. the two parsers AGREE on the fragments the toolkit actually stores — asserted by decoding
-//      under both and comparing the re-marshalled bytes.
-//   3. the enum collapse fires under BOTH. This is the one place a parser swap could do real
-//      damage quietly: EnumWhitespace inspects the first and last character of a SINGLE text
-//      event, and a parser that split "bus " into "bus" + " " would leave TransportMode null with
-//      no error. Woodstox does chunk long text; enum lexicals are NMTOKENs, so it cannot bite.
-//      This asserts that rather than trusting it.
-//   4. both parsers REFUSE the same things (malformed input, an internal DTD subset with
-//      SUPPORT_DTD=false), because "absent" and "unreadable" must not become the same answer.
+// Four things are pinned: one decode reader across FragmentCodec, FragmentPeek and
+// RefPatcher.scan; the same bean out of either parser, on the fragment shapes the toolkit stores;
+// the enum collapse firing under both; and the same inputs (malformed, an internal DTD subset with
+// SUPPORT_DTD=false) refused by both.
 
 import jakarta.xml.bind.JAXBElement;
 import jakarta.xml.bind.Marshaller;
@@ -90,9 +80,8 @@ public class TestStaxAgreement {
         return f.get(owner).getClass();
     }
 
-    /// (1) One reader for every consumer of a stored fragment. Reflection is the right instrument
-    /// here precisely because these fields are private: the invariant is about the objects the
-    /// three classes hold, not about anything they expose.
+    /// (1) One reader for every consumer of a stored fragment. The invariant is about the factory
+    /// objects the three classes hold, which is why it is read reflectively off private fields.
     @Test
     void testTheDecodePathUsesOneStaxImplementation() throws Exception {
         Class<?> chosen = Stax.decodeFactory().getClass();
@@ -107,8 +96,7 @@ public class TestStaxAgreement {
                 "RefPatcher.scan reads with the SAME factory FragmentCodec.decode uses");
     }
 
-    /// ... and the offset-reporting one is still Woodstox, because `RefPatcher.patch` cannot
-    /// be written without `LocationInfo`. This half was never a choice.
+    /// ... and the offset-reporting one is still Woodstox: `RefPatcher.patch` needs `LocationInfo`.
     @Test
     void testThePatchPathStillHasItsOffsetReader() throws Exception {
         Check.equals(com.ctc.wstx.stax.WstxInputFactory.class,
@@ -127,9 +115,8 @@ public class TestStaxAgreement {
                 "the offset reader still lands the splice on the right start tag");
     }
 
-    /// (2) The two parsers produce the same bean. Compared by re-marshal, which covers every bound
-    /// field at every depth — the property the byte-identity gate needs is that nothing downstream
-    /// that PERSISTS a decoded object can tell the two apart.
+    /// (2) The two parsers produce the same bean, compared by re-marshal, which covers every bound
+    /// field at every depth.
     @Test
     void testBothParsersDecodeToTheSameBean() throws Exception {
         JaxbPin.pin();
@@ -178,10 +165,9 @@ public class TestStaxAgreement {
         }
     }
 
-    /// (3) THE dangerous one. EnumWhitespace's pre-filter reads the first and last character of one
-    /// CHARACTERS event; a parser that chunks text differently changes what it sees. All four
-    /// padding positions must still collapse under either parser, or 460 Routes are quietly
-    /// back on the floor.
+    /// (3) EnumWhitespace's pre-filter reads the first and last character of one CHARACTERS event,
+    /// so a parser that chunks text differently changes what it sees. Every padding position must
+    /// still collapse under either parser.
     @Test
     void testEnumCollapseFiresUnderBothParsers() throws Exception {
         JaxbPin.pin();
@@ -203,9 +189,8 @@ public class TestStaxAgreement {
         }
     }
 
-    /// The chunking difference itself, recorded as a fact rather than assumed away: Woodstox splits
-    /// a long text node, Aalto does not. The assertion is the SAFE property — that the accumulated
-    /// text is identical either way — not the chunk size, which is a third-party implementation
+    /// Woodstox splits a long text node, Aalto does not. What is asserted is that the accumulated
+    /// text is identical either way, not the chunk size, which is a third-party implementation
     /// detail free to move.
     @Test
     void testTextIsWholeEvenWhenChunkedDifferently() throws Exception {

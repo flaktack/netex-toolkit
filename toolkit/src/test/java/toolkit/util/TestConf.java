@@ -1,17 +1,8 @@
 package toolkit.util;
 
-// The config table, held to the code from both ends.
-//
-// toolkit.util.Conf makes the knob set exist; a table nobody checks drifts from the code it
-// describes, so these scans check it.
-//
-// THE TWO DIRECTIONS ARE NOT THE SAME TEST. "every declared knob has a call site" catches a knob
-// removed from the code and left in the table -- documentation for something that does nothing.
-// "no undeclared property read survives" catches a knob added to the code and never declared.
-// Either alone leaves the other open.
-//
-// This is the discipline TestProvenance already holds the PROV-CAP markers to, on the same tree,
-// through the same Sources scan.
+// The toolkit.util.Conf knob table, held to the code from both ends by a Sources scan of the tree:
+// every declared knob has a call site, and no property read outside Conf names a knob. Either scan
+// alone leaves the other direction open.
 
 import org.junit.jupiter.api.Test;
 import toolkit.Sources;
@@ -41,15 +32,11 @@ public class TestConf {
 
     // ================================================================ the table, from both ends
 
-    /// Knobs whose only call sites are DOWNSTREAM, named rather than pattern-matched.
-    ///
-    /// The corridor coupling moved to `../noi-pipeline` and took its readers with it. The
-    /// declarations cannot follow: [Conf] REFUSES a name it does not declare, so deleting one of
-    /// these turns `-Dtoolkit.xb.pass2Filter=false`, which that repository's Makefile passes, from
-    /// a knob into a build failure.
-    ///
-    /// A LIST and not a prefix rule: `toolkit.xb.*` as a pattern would silently absorb a genuinely
-    /// dead knob added later. [#testDownstreamKnobsAreStillDeclared] keeps the list from rotting.
+    /// Knobs whose only call sites are downstream, named rather than pattern-matched. [Conf]
+    /// refuses a name it does not declare, so deleting one of these turns
+    /// `-Dtoolkit.xb.pass2Filter=false`, which the downstream build passes, from a knob into a
+    /// build failure. A list and not a `toolkit.xb.*` prefix rule, which would absorb a genuinely
+    /// dead knob added later; [#testDownstreamKnobsAreStillDeclared] keeps the list from rotting.
     private static final java.util.Set<String> READ_DOWNSTREAM = java.util.Set.of(
             "toolkit.xb.pass2Filter",
             "toolkit.xb.count",
@@ -77,11 +64,10 @@ public class TestConf {
         Check.equals(List.of(), orphans, "every declared knob is read by some call site");
     }
 
-    /// The exemption list cannot outlive what it exempts. A knob renamed or deleted from [Conf]
+    /// The exemption list cannot outlive what it exempts: a knob renamed or deleted from [Conf]
     /// leaves a name here that matches nothing, and the next orphan with that spelling would be
-    /// waved through.
-    ///
-    /// It does NOT check the downstream call site exists; this repository cannot see that tree.
+    /// waved through. It does not check that the downstream call site exists; this repository
+    /// cannot see that tree.
     @Test
     void testDownstreamKnobsAreStillDeclared() {
         TreeSet<String> declared = new TreeSet<>();
@@ -92,14 +78,13 @@ public class TestConf {
                 "every downstream-exempt name is still a declared knob");
     }
 
-    /// The reverse: no property read outside [Conf] may name a `toolkit.*` key, or any
-    /// key the table declares under a legacy spelling.
+    /// No property read outside [Conf] may name a `toolkit.*` key, or any key the table declares
+    /// under a legacy spelling.
     ///
-    /// The three JVM-provided facts are exempt and named here rather than pattern-matched:
-    /// `java.io.tmpdir`, `sun.java.command` and `jdk.launcher.sourcefile` are
-    /// things the JVM tells us, not knobs anybody sets to change this software's behaviour.
-    /// `toolkit.repo.dir` is exempt because it locates the tree this scan reads, and reading it
-    /// through [Conf] would make the scan depend on the table it is checking.
+    /// `java.io.tmpdir`, `sun.java.command` and `jdk.launcher.sourcefile` are exempt: they are
+    /// things the JVM tells us, not knobs anybody sets. `toolkit.repo.dir` is exempt because it
+    /// locates the tree this scan reads, and reading it through [Conf] would make the scan depend
+    /// on the table it is checking.
     @Test
     void testNoUndeclaredPropertyReadSurvives() throws Exception {
         TreeSet<String> bad = new TreeSet<>();
@@ -157,7 +142,7 @@ public class TestConf {
 
     // ================================================================ parsing
 
-    /// The union of every spelling the replaced idioms accepted, and nothing outside it.
+    /// Every accepted on/off spelling, and nothing outside the set.
     @Test
     void testBooleanSpellings() {
         for (String on : new String[] {"true", "TRUE", "on", "On", "yes", "1", ""}) {
@@ -171,8 +156,7 @@ public class TestConf {
         Conf.clearOverride(Conf.XB_COUNT);
     }
 
-    /// A malformed boolean REFUSES. Under `!"false".equals(...)` it read as ON and under
-    /// `Boolean.getBoolean` it read as OFF — the same typo meaning opposite things.
+    /// A malformed boolean refuses rather than reading as one side or the other.
     @Test
     void testMalformedBooleanIsRefused() {
         IllegalStateException e = null;
@@ -278,12 +262,10 @@ public class TestConf {
 
     // ================================================================ capability gating
 
-    /// `no-invent-nameofrefclass` is NOT claimed by a default run.
-    ///
-    /// The capability reads "RefPatcher never ADDS a nameOfRefClass attribute to a reference whose
-    /// source fragment did not carry one", and `RefPatcher.wanted` returns
-    /// `!invent && b[2] == null ? null : a[2]` — it adds the attribute exactly when
-    /// `-Dtoolkit.inventNameOfRefClass` is ON, which is the default.
+    /// `no-invent-nameofrefclass` is not claimed by a default run. The capability reads "RefPatcher
+    /// never adds a nameOfRefClass attribute to a reference whose source fragment did not carry
+    /// one", and `RefPatcher.wanted` adds the attribute exactly when
+    /// `-Dtoolkit.inventNameOfRefClass` is on, which is the default.
     @Test
     void testDefaultRunDoesNotClaimInventNameOfRefClass() {
         Check.that(Capabilities.declared().contains("no-invent-nameofrefclass"),
@@ -294,7 +276,7 @@ public class TestConf {
                 "and it must be withheld for the stated reason");
     }
 
-    /// The other direction: a capability granted by an ON flag is present, and absent when it is off.
+    /// A capability granted by an on flag is present, and absent when the flag is off.
     @Test
     void testRefPatchGatesNoRemarshalResolve() {
         Check.that(Capabilities.current().contains("no-remarshal-resolve"),
@@ -324,8 +306,7 @@ public class TestConf {
     // ================================================================ a probe in its own JVM
     //
     // The file is read once, in Conf's class initialiser, so the file cases cannot be exercised by
-    // setting a property inside this JVM. Each one launches a source-file probe instead, which is
-    // the only thing that can test the loading itself.
+    // setting a property inside this JVM. Each one launches a source-file probe instead.
 
     private static final String PROBE = """
             public class ConfProbe {
@@ -370,17 +351,14 @@ public class TestConf {
                 .start();
         String out = new String(p.getInputStream().readAllBytes());
         p.waitFor();
-        // Every refusal case below asserts the probe died; a probe that failed to
-        // COMPILE also died, and would satisfy all of them while testing nothing.
         Check.that(!out.contains("error: compilation failed"),
                 "the probe must compile -- otherwise every refusal case below is vacuous:\n" + out);
         return out;
     }
 
-    /// This JVM's classpath, absolutised. The probe runs with its working directory set to a temp
-    /// dir so that `./toolkit.conf` cannot be picked up by accident, and the suite is launched
-    /// with a RELATIVE `-cp`, so the two together would hand the child a classpath pointing at
-    /// nothing.
+    /// This JVM's classpath, absolutised. The probe runs from a temp working directory and the
+    /// suite is launched with a relative `-cp`, so the two together would hand the child a
+    /// classpath pointing at nothing.
     private static String classpath() {
         String[] entries = System.getProperty("java.class.path").split(java.io.File.pathSeparator);
         List<String> abs = new ArrayList<>();

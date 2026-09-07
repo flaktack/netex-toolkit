@@ -1,15 +1,10 @@
 package toolkit.transform.common;
 
-// TrainNumber synthesis, on both sandwiches.
-//
-// The transform is the worked example for DbToDb (scripts/TrenitaliaDbToDb) and for InPlace
-// (scripts/TrenitaliaInPlace), and the two paths are not the same operation: db-to-db copies every
-// other class and writes the journeys into a FRESH map, while in-place writes them back into the
-// map it is reading, under one transaction, at the same keys and with a longer value. The last two
-// methods assert the outcomes are identical anyway, which is the claim shipping both shapes makes.
-//
-// The driver is in the default package and unimportable, so the transform is passed to runDbToDb
-// directly. That is what the driver passes too — its `applyTrainNumbers` is these four lines.
+// TrainNumber synthesis, on both sandwiches: scripts/TrenitaliaDbToDb and TrenitaliaInPlace.
+// db-to-db copies every other class and writes the journeys into a FRESH map; in-place writes them
+// back into the map it is reading, under one transaction, at the same keys and with a longer value.
+// The drivers are in the default package and unimportable, so the transform is passed to runDbToDb
+// directly, which is what the driver passes too.
 
 import noi.netex.model.ServiceJourney;
 import noi.netex.model.TrainNumber;
@@ -90,9 +85,7 @@ public class TestTrainNumbers {
 
         TestStore target = db.runDbToDb(TestTrainNumbers::applyTrainNumbers);
 
-        // Two journeys share number 25 -> exactly one first-class TrainNumber...
         Check.equals(List.of("IT:TrainNumber:25"), trainNumberIds(target.store), "TrainNumber ids");
-        // ...and both journeys link to it.
         Check.equals(List.of("IT:TrainNumber:25|1", "IT:TrainNumber:25|1"), refs(target.store),
                 "journey trainNumber refs");
     }
@@ -128,13 +121,9 @@ public class TestTrainNumbers {
         Check.isNull(TrainNumbers.trainNumberForJourney(named), "word name");
     }
 
-    // ================================================================ the other sandwich
-
     /// scripts/TrenitaliaInPlace, on a store that already exists: the read cursor walks the
     /// ServiceJourney map while insertAnyObjects writes back into it, and the journey has GROWN by
     /// a `<trainNumbers>` element, so the write relocates the page rather than patching it.
-    /// TestInPlaceCursorStability is the 300-row proof that this visits every row exactly once;
-    /// this is the same idiom with the real transform on it.
     @Test
     void testTheInPlaceFixProducesTheSameResult(TestStore db) throws Exception {
         Path dir = db.buildDbFile(ONE_NUMBERED_JOURNEY, "inplace.lmdb");
@@ -149,8 +138,7 @@ public class TestTrainNumbers {
     }
 
     /// A second run must change nothing: a journey that already carries trainNumbers is skipped, so
-    /// no TrainNumber is minted twice and no journey collects a second ref. A fix that is not
-    /// idempotent is one that cannot be re-run over a store somebody else may already have fixed.
+    /// no TrainNumber is minted twice and no journey collects a second ref.
     @Test
     void testTheInPlaceFixIsIdempotent(TestStore db) throws Exception {
         Path dir = db.buildDbFile(ONE_NUMBERED_JOURNEY, "inplace.lmdb");
@@ -166,8 +154,6 @@ public class TestTrainNumbers {
                     "and the journey collects no second ref");
         }
     }
-
-    // ================================================================ readers
 
     private static List<String> trainNumberIds(Store store) throws Exception {
         List<String> ids = new ArrayList<>();

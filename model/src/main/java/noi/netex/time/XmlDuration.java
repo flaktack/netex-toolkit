@@ -9,19 +9,17 @@ import javax.xml.datatype.Duration;
 
 /// Carrier for `xs:duration`.
 ///
-/// It wraps [javax.xml.datatype.Duration], which parses the FULL `xs:duration` lexical space —
-/// `java.time.Duration.parse` rejects the year/month forms.
+/// It wraps [javax.xml.datatype.Duration], which parses the whole `xs:duration` lexical space.
+/// `java.time.Duration.parse` accepts only the `PnDTnHnMnS` form and throws on the
+/// `PnYnMnDTnHnMnS` forms the corpus contains.
 ///
-/// A SERIALIZATION CARRIER, not a value type: it retains the source lexical form so a re-marshal
-/// is byte-exact.
+/// A serialization carrier: it retains the source lexical form so a re-marshal is byte-exact.
 ///
-/// NORMALISE BEFORE COMPARING, and never put a carrier in a Set: `PT1H` and `PT60M` are the same
+/// Normalise before comparing, and never put a carrier in a Set: `PT1H` and `PT60M` are the same
 /// duration and different carriers. [#hashCode()] therefore throws; `equals` is left as identity.
 ///
-/// Input that cannot be parsed is **not** an error: the carrier retains the raw text, reports
-/// [#isUnparsed()] and returns `null` from [#toDuration()]. It is COUNTED in
-/// [UnparsedTally] — JAXB sees the adapter return an object and raises nothing, so that tally
-/// is the only place such a value is visible.
+/// Input that cannot be parsed is not an error: the carrier retains the raw text, reports
+/// [#isUnparsed()] and returns `null` from [#toDuration()]. It is counted in [UnparsedTally].
 public final class XmlDuration {
 
     private static final DatatypeFactory FACTORY = newFactory();
@@ -38,11 +36,11 @@ public final class XmlDuration {
 
     // ------------------------------------------------------------------ factories
 
-    /// Parses an `xs:duration` lexical form, retaining it verbatim (after whitespace
-    /// trimming) so a re-marshal is byte-exact.
+    /// Parses an `xs:duration` lexical form, retaining it verbatim (after whitespace trimming) so a
+    /// re-marshal is byte-exact.
     ///
-    /// @return `null` for `null` or blank input; an [unparsed][#isUnparsed()]
-    ///         carrier holding the raw text if the value cannot be parsed; never throws.
+    /// @return `null` for `null` or blank input; an [unparsed][#isUnparsed()] carrier holding the
+    ///         raw text if the value cannot be parsed; never throws.
     public static XmlDuration parse(String text) {
         if (text == null) {
             return null;
@@ -58,9 +56,9 @@ public final class XmlDuration {
         }
     }
 
-    /// The one place an unparsed carrier is built, which is why the count is taken here: the carrier
-    /// raises no `ValidationEvent` (the adapter returned an object, so JAXB saw a success), so
-    /// `toolkit.codec.BindEvents` cannot see this value at all.
+    /// The one place an unparsed carrier is built, which is why the count is taken here: the
+    /// carrier raises no `ValidationEvent` — the adapter returned an object, so JAXB saw a success
+    /// — so `toolkit.codec.BindEvents` cannot see this value at all.
     private static XmlDuration unparsed(String raw) {
         UnparsedTally.record(UnparsedTally.Kind.DURATION, raw);
         return new XmlDuration(null, raw, true);
@@ -70,8 +68,8 @@ public final class XmlDuration {
 
     /// Returns a duration of days, hours, minutes and fractional seconds, signed.
     ///
-    /// Years and months are **ignored**, there is no date to resolve them against. Use
-    /// [#getYears()] / [#getMonths()] if a caller needs to detect the case.
+    /// Years and months are ignored, there is no date to resolve them against. Use [#getYears()] /
+    /// [#getMonths()] if a caller needs to detect the case.
     ///
     /// @return `null` if this carrier is [unparsed][#isUnparsed()].
     public java.time.Duration toDuration() {

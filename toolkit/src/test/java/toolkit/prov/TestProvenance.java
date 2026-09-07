@@ -2,8 +2,6 @@ package toolkit.prov;
 
 // The store staleness gate.
 //
-// Two halves, and the second is the important one:
-//
 //   BEHAVIOUR   the sidecar is written on a rw open, `cloneFrom` takes the MINIMUM of the source
 //               and target capability sets, absence means UNKNOWN/refuse, and `check` fires on a
 //               PROPER SUBSET, not only on a missing file.
@@ -12,11 +10,9 @@ package toolkit.prov;
 //               code behind it fails, and a PROV-CAP marker naming an unknown capability fails, so
 //               a NEW FIX CANNOT LAND WITHOUT BEING CLASSIFIED.
 //
-// NEUTER PROOF: run with -Dtoolkit.prov=off and exactly the four tests that depend on the
-// production hooks fail — testFreshStoreIsStamped, testSidecarIsOutsideLmdb,
-// testCloneTakesTheMinimum, testCloneFromUnstampedSourceIsUnknown. The marker-discipline tests keep
+// Under -Dtoolkit.prov=off the production stamping hooks go away; the marker-discipline tests keep
 // passing, because the vector is a source-tree property and must be pinned whether or not stamping
-// is enabled; `attest` also keeps working, being an explicit operator command.
+// is enabled, and `attest` keeps working, being an explicit operator command.
 
 import org.junit.jupiter.api.Test;
 import toolkit.Sources;
@@ -214,11 +210,9 @@ public class TestProvenance {
 
     /// Capabilities whose fix site is DOWNSTREAM, named rather than pattern-matched.
     ///
-    /// Both are fixes the corridor pipeline performs, and both left with it for `../noi-pipeline`.
-    /// The DECLARATIONS stay here because this is the jar that writes the provenance sidecar:
-    /// delete them and the stamp silently stops making the claim.
-    ///
-    /// [#testDownstreamCapabilitiesAreStillDeclared] keeps this list from rotting.
+    /// Both are fixes the corridor pipeline performs, and both left with it. The DECLARATIONS stay
+    /// here because this is the jar that writes the provenance sidecar: delete them and the stamp
+    /// silently stops making the claim.
     private static final java.util.Set<String> FIXED_DOWNSTREAM =
             java.util.Set.of("hour24-semantics", "dedup-definition-days");
 
@@ -240,9 +234,8 @@ public class TestProvenance {
     }
 
     /// The exemption list cannot outlive what it exempts: a name here that no longer names a
-    /// declared capability would wave through the next orphan that shares its spelling.
-    ///
-    /// It does NOT check the downstream fix site exists — this repository cannot see that tree.
+    /// declared capability would wave through the next orphan that shares its spelling. It does NOT
+    /// check the downstream fix site exists — this repository cannot see that tree.
     @Test
     void testDownstreamCapabilitiesAreStillDeclared() {
         TreeSet<String> stale = new TreeSet<>(FIXED_DOWNSTREAM);

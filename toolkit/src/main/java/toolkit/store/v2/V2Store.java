@@ -31,13 +31,12 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.function.LongPredicate;
 
-/// The plan's Java-native v2 format:
+/// The Java-native v2 format:
 ///
 /// ```
 /// class maps    name = raw 2-byte LE class idx; plain; key = 4-byte LE local;
-///               value = FRAGMENT codec blob (LZ4 length-prefixed XML — A5 primary format)
-/// _id_idx       plain; NulKeyCodec key -> 8-byte LE full_key (carried over verbatim from the
-///               retired v1 layout)
+///               value = FRAGMENT codec blob (LZ4 length-prefixed XML)
+/// _id_idx       plain; NulKeyCodec key -> 8-byte LE full_key
 /// _meta         "format" -> "java-v2:1"; "seq" -> 8-byte LE sequence;
 ///               'c'+2-byte-LE-idx rows -> class name (the class table)
 /// _edge_blocks  chunked long[] blocks: key = [kind byte][4-byte LE block#];
@@ -50,38 +49,31 @@ import java.util.function.LongPredicate;
 ///               fit the long-pair block shape; targets are var-length NulKeyCodec keys)
 /// ```
 ///
-/// Blocks live INSIDE LMDB rather than in an edges.bin sidecar, so the stage artifact stays one
-/// directory and edge persistence commits in the same txn as the objects — no torn-sidecar crash
-/// states.
+/// Blocks live inside LMDB, so edge persistence commits in the same txn as the objects.
 ///
 /// Edges and unresolved rows live IN MEMORY while the store is open, slot-aligned with the on-disk
 /// blocks (slot i in block i / blockPairs). Mutation strategy:
 ///
 /// - **append-new**: inserts append slots at the tail; only the (partial) tail block and
 ///    genuinely new blocks are written at commit;
-/// - **tombstone**: deletes overwrite the slot's referrer with -1 in place and mark ONLY
-///    that slot's block dirty; a commit rewrites dirty blocks verbatim (tombstones included),
-///    so a delete costs one ~1 MiB block value, not the whole index;
+/// - **tombstone**: deletes overwrite the slot's referrer with -1 in place and mark only
+///    that slot's block dirty; a commit rewrites dirty blocks verbatim, tombstones included;
 /// - **compact**: when a kind's dead slots reach [#COMPACT_DEAD_FRACTION] of its slots at commit
 ///    time, that kind is rewritten from live slots (stale block keys deleted; for kind 1 the
 ///    interning table is rebuilt pruned and renumbered).
 ///
-/// Deletion is INDEXED, not scanned: a per-referrer slot index backs deleteUnresolved /
+/// Deletion is indexed rather than scanned: a per-referrer slot index backs deleteUnresolved /
 /// clearRefRows / purgeReferrerRows in O(out-degree), and gives DUPSORT pair-dedup semantics at
-/// insert time. Commit-time global sort+dedup is not an option: a global re-sort dirties every
-/// block. resolve() mutates in memory (id-index lookups stay in LMDB) and persists at commit;
+/// insert time. resolve() mutates in memory (id-index lookups stay in LMDB) and persists at commit;
 /// aborted write txns reload from disk. The CSR is built lazily from live slots and invalidated by
 /// any edge mutation.
 ///
-/// Compat: files written by the tombstone-free skeleton read unchanged (no tombstones, full
-/// blocks). Block sizes other than the expected chunking (foreign writer or a different
-/// blockPairs) are detected at load and force a full compaction on the next commit.
+/// Blocks chunked otherwise than expected (a foreign writer, a different blockPairs) are detected
+/// at load and force a full compaction on the next commit.
 public final class V2Store extends AbstractLmdbStore {
 
     public static final String FORMAT = "java-v2:1";
     /// The short format id this store answers to on the CLI, and what `Stores.V2` is defined as.
-    /// It lives with the format it names: the factory depends on the implementation, so the
-    /// implementation must not name the factory back.
     public static final String FORMAT_ID = "v2";
     private static final long DEFAULT_MAP_SIZE = 64L << 30;
     private static final int MAX_DBS = 4096;
@@ -97,14 +89,14 @@ public final class V2Store extends AbstractLmdbStore {
     /// The append-path growth policy for the four slot arrays.
     ///
     /// fastutil and `ArrayList` grow by `max(len + len/2, needed)`, so an appending array's slack
-    /// is up to 0.5x its own size. This caps the growth INCREMENT to `min(size/2, GROW_CHUNK)`, so
+    /// is up to 0.5x its own size. This caps the growth increment to `min(size/2, GROW_CHUNK)`, so
     /// slack stops scaling with the store.
     ///
-    /// The price is copy volume on a build-from-empty: above `2 * GROW_CHUNK` rows growth is
-    /// linear, so total elements copied goes from `~2 N` to `~N^2 / (2 * GROW_CHUNK)`. It does NOT
-    /// lower the transient peak of a reallocation.
+    /// It costs copy volume on a build-from-empty: above `2 * GROW_CHUNK` rows growth is linear, so
+    /// total elements copied goes from `~2 N` to `~N^2 / (2 * GROW_CHUNK)`. It does not lower the
+    /// transient peak of a reallocation.
     ///
-    /// DEFAULT 0 disables the rule, and the `static final` folds the whole mechanism away when it
+    /// Default 0 disables the rule, and the `static final` folds the whole mechanism away when it
     /// is off.
     public static final int GROW_CHUNK = Conf.intOf(Conf.STORE_GROW_CHUNK);
 
@@ -137,8 +129,7 @@ public final class V2Store extends AbstractLmdbStore {
     private boolean dirty;
     private Csr cachedCsr;
 
-    /// False until [#loadEdgeState()] has run. A READ-WRITE store loads in the constructor and
-    /// this is true from then on; a READ-ONLY store defers until something asks for edges.
+    /// False until [#loadEdgeState()] has run.
     private boolean edgeStateLoaded;
 
     /// @param embScope which classes `_embedding_idx` covers. Mandatory: the format knows how to
@@ -178,10 +169,8 @@ public final class V2Store extends AbstractLmdbStore {
 
     /// The embedding-index map of an existing readonly db; null when the db PREDATES it.
     ///
-    /// Decided from `getDbiNames()` — POSITIVE evidence — and not from a failed open. Null is a
-    /// supported state that degrades to the full corpus scan, so inferring it from an exception
-    /// would make a store that could not READ its index look like one built before the index
-    /// existed. Absence from the name list is the only thing meaning "predates".
+    /// Decided from `getDbiNames()`, not from a failed open: absence from the name list is the only
+    /// thing that means "predates", and null degrades to the full corpus scan.
     ///
     /// Note LMDB 0.9 does not validate `mdb_dbi_open` flags against an existing named db — it
     /// loads the stored `MDB_db` over them — so a DUPSORT mismatch never reaches here.
@@ -339,11 +328,8 @@ public final class V2Store extends AbstractLmdbStore {
         boolean misaligned = false;
         int i = 0;
         // The exact row count is known here — the blocks are in memory and every row is 16 B — so
-        // size the slot arrays once instead of letting fastutil grow into them at 1.5x.
-        //
-        // Sizing EXACTLY has a read-write edge: an array whose capacity equals its size reallocates
-        // to 1.5x on its very next add(), so a store that loads N rows and appends one jumps to
-        // 0.5 N of slack. GROW_CHUNK caps that first append's increment.
+        // size the slot arrays once instead of letting fastutil grow into them at 1.5x. An array
+        // sized exactly still reallocates to 1.5x on its very next add(); GROW_CHUNK caps that.
         long rows = 0;
         for (byte[] v : blocks.values()) rows += v.length / 16;
         if (rows > 0 && rows <= Integer.MAX_VALUE) {
@@ -735,20 +721,18 @@ public final class V2Store extends AbstractLmdbStore {
     //
     // scanEdges/scanUnresolved yield EXACTLY what iterEdges/iterUnresolved yield -- same pairs,
     // same order, same tombstone exclusions -- while holding ONE BLOCK at a time instead of the
-    // whole slot set. Store.scanEdges specifies that identity.
+    // whole slot set.
     //
-    // ORDER IS THE HAZARD. Blocks are keyed [kind][block# u32 LE] in a BYTE-ordered map, so cursor
-    // order stops being numeric order at block 256: [k,00,01,00,00] sorts before [k,01,00,00,00].
-    // Numeric order is recovered here by galloping binary search over the dense numbering (block b
-    // starts at slot b*blockPairs), VERIFIED against MDB_stat's entry count. Only when that
-    // verification fails does it enumerate the keys, and then it still emits in numeric order.
+    // Blocks are keyed [kind][block# u32 LE] in a byte-ordered map, so cursor order stops being
+    // numeric order at block 256: [k,00,01,00,00] sorts before [k,01,00,00,00]. Numeric order is
+    // recovered in blockOrder, which emits in numeric order in both of its arms.
 
     /// {@inheritDoc}
     ///
-    /// A READ-WRITE store delegates to [#iterEdges]: a correctness rule, not an optimisation. The
-    /// in-memory slot arrays are the authority there — they carry this transaction's appends and
-    /// tombstones, which are not on disk until `beforeCommit` — so streaming the blocks would
-    /// answer from the last commit and silently break the identity contract.
+    /// A READ-WRITE store must delegate to [#iterEdges]. The in-memory slot arrays are the
+    /// authority there — they carry this transaction's appends and tombstones, which are not on
+    /// disk until `beforeCommit` — so streaming the blocks would answer from the last commit and
+    /// break the identity contract.
     ///
     /// A read-only store always streams, even once [#ensureEdgeState] has run for some other
     /// reason.
@@ -942,7 +926,6 @@ public final class V2Store extends AbstractLmdbStore {
                     copied++;
                 }
             }
-            // Counted per class after the cursor closes: one add, not one per row.
             countCloned(idx, copied);
         }
         try (CursorIterable<byte[]> ci = src.idIdx.iterate(st.tx)) {

@@ -1,20 +1,9 @@
 // CLI over toolkit.harness.DbToZip: one zip entry per class map, each a self-contained
-// PublicationDelivery holding a single GeneralFrame of that class's stored fragments, VERBATIM.
+// PublicationDelivery holding a single GeneralFrame of that class's stored fragments, verbatim.
 //
-// The worked example for the EXPORT sandwich. DbToZip owns the CLI, the read-only open, the read
-// transaction, the atomic .tmp/rename, the throughput line and the common tail; FrameWriter owns
-// decompress-and-emit; NetexEnvelope owns the per-entry preamble; ZipWriter owns the entries and
-// the totals. What is left here — the twelve lines in the lambda — is the whole driver.
-//
-// Not a profile: it makes no claim about which class belongs in which frame, in what order, or
-// what a consumer should expect to find where. A GeneralFrame of everything is legal NeTEx and is
-// not EPIP; EpipDbToXml is the driver that answers those questions.
-//
-// It takes the no-hook FrameWriter constructor, so the child-order normalisation EpipDbToXml
-// applies is declined here and the stored bytes come out verbatim.
-//
-// Entry names are the class simple name, so the entries sort alphabetically by class. Each entry
-// stands alone: that is what the repeated preamble buys, and why a consumer can read one file.
+// A GeneralFrame of everything is legal NeTEx and is not EPIP: this export makes no claim about
+// which class belongs in which frame, in what order, or what a consumer should expect to find
+// where. EpipDbToXml is the driver that answers those questions.
 
 import toolkit.harness.DbToZip;
 import toolkit.harness.FrameWriter;
@@ -28,7 +17,6 @@ public class DbToZipRaw {
             "RAW", "every stored object, by class, verbatim", "RAW_EXPORT", "raw:GENERAL");
 
     public static void main(String[] args) throws Exception {
-        // No extra flags of its own: --level and --log-file come from DbToZip.
         DbToZip.driverMain("db-to-zip-raw", args, USAGE, new String[0], a -> (db, tx, out) -> {
             NetexEnvelope env = new NetexEnvelope(ENVELOPE, java.util.List.of(), null);
             FrameWriter fw = new FrameWriter(db, tx, out, env); // no hook: stored bytes, verbatim

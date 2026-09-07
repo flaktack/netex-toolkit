@@ -1,24 +1,13 @@
 package toolkit.store;
 
-// THE SEAM AbstractLmdbStore WAS SPLIT ALONG, pinned from outside.
-//
-// resolve() and resolveEmbeddings() live in ReferenceResolver, EmbeddingResolver, BlobRepair and
-// ClosureQueries. Byte-identity tools answer "did the database change" and not "is it still
-// assembled the way the argument says". Three properties carry the design:
-//
-//   1. THE BIND-TIME REPAIR REACHES THE STORED BYTES, BY PATCH. TestBlobSweepScan covers the
-//      one-shot SWEEP's repair; this covers the tier loop's own, which is the common path -- the
-//      sweep finds nothing after a pure-insert load. A tier-2 match rewrites a reference's version
-//      and a tier-1 match INVENTS its nameOfRefClass, in the stored fragment, without
-//      re-marshalling it.
-//   2. THE STORE HOLDS ONE BlobRepair AND BOTH PASSES SHARE IT. Its RefPatcher's refusal and
-//      odd-name counters are cumulative over the store while the outcome tally resets per stage.
-//      Construct it per pass and half the numbers in every load log change meaning while every
-//      byte stays identical, so only a structural assertion can see it.
-//   3. THE PASSES STILL OWN THEIR WRITE TRANSACTION. StoreResolve's deadlock rule ("opens and
-//      commits its own write txn, never call it under an open rwTxn") is only true because
-//      exactly one place opens it. The resolvers are handed an open txn and neither opens nor
-//      commits one.
+// The seam AbstractLmdbStore was split along, pinned from outside: resolve() and
+// resolveEmbeddings() live in ReferenceResolver, EmbeddingResolver, BlobRepair and ClosureQueries.
+// Byte-identity tools answer "did the database change", not "is it still assembled this way", so
+// three properties are asserted here. The tier loop's own blob repair reaches the stored bytes by
+// patch — TestBlobSweepScan covers the one-shot sweep's, which finds nothing after a pure-insert
+// load. The store holds one BlobRepair and both passes share it. And exactly one place opens the
+// write transaction, which is what makes StoreResolve's rule ("opens and commits its own write
+// txn, never call it under an open rwTxn") true.
 
 import noi.netex.model.Line;
 import noi.netex.model.Route;
@@ -55,7 +44,7 @@ public class TestResolveSeam {
         """;
 
     // TestStore.loadNetex resolves; every arm here needs the load and the pass apart, so the
-    // loader is driven directly. One instance for the file: its JAXB init is the expensive part.
+    // loader is driven directly.
     private static NetexLoader loader;
 
     private static synchronized void load(Store target) throws Exception {
@@ -76,8 +65,8 @@ public class TestResolveSeam {
         throw new AssertionError("no stored " + clazz.getSimpleName() + " " + id);
     }
 
-    // ------------------------------------------------- 1. the tier loop's own blob repair
-
+    /// A tier-2 match rewrites a reference's version and a tier-1 match invents its
+    /// nameOfRefClass, both in the stored fragment and without re-marshalling it.
     @Test
     void testABindTimeTierRepairPatchesTheStoredBytes(TestStore ts) throws Exception {
         load(ts.store);
@@ -103,12 +92,10 @@ public class TestResolveSeam {
         Check.that(!line.contains("xmlns:ns2="), "also patched, not re-marshalled: " + line);
     }
 
-    // ------------------------------------------- 2. one BlobRepair per store, shared by both
-
-    /// Reflection rather than behaviour, and deliberately so: the difference between one shared
-    /// patcher and one per pass is invisible in every byte of the database and shows up only in two
-    /// log lines, one of which says out loud that its counters are cumulative over the store. A
-    /// refactor that made `new BlobRepair(...)` a local would pass the whole rest of the suite.
+    /// Reflection rather than behaviour: one shared patcher and one per pass differ in no byte of
+    /// the database. The RefPatcher's refusal and odd-name counters are cumulative over the store
+    /// while the outcome tally resets per stage, so a second instance would silently make them
+    /// per-pass.
     @Test
     void testTheStoreHoldsOneBlobRepairSharedByBothPasses(TestStore ts) throws Exception {
         Object store = ts.store;
@@ -137,11 +124,8 @@ public class TestResolveSeam {
         return f.get(target);
     }
 
-    // ------------------------------------------------- 3. the transaction stayed in the store
-
-    /// The refusal comes from the store's `checkWritable`, BEFORE any transaction is opened —
-    /// the readonly half of "the store owns the single-writer lock". A resolver that opened its own
-    /// txn would fail later, and differently.
+    /// The refusal comes from the store's `checkWritable`, before any transaction is opened — the
+    /// readonly half of "the store owns the single-writer lock".
     @Test
     void testAReadonlyStoreRefusesBothPassesBeforeOpeningAnything(TestStore ts)
             throws Exception {
@@ -157,9 +141,8 @@ public class TestResolveSeam {
         }
     }
 
-    /// Each pass COMMITS its own transaction: reopening the database from scratch — a fresh handle
-    /// that has never run the pass — finds the edges. If the resolvers had been handed a txn nobody
-    /// committed, this would be empty.
+    /// Each pass commits its own transaction: reopening the database from scratch — a fresh handle
+    /// that has never run the pass — finds the edges.
     @Test
     void testEachPassCommitsBeforeItReturns(TestStore ts) throws Exception {
         Path path = ts.tempPath("commit.lmdb");

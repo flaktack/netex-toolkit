@@ -21,7 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/// The STATIC type-level INVERSE containment index: for each missing class M, which model classes
+/// The static type-level inverse containment index: for each missing class M, which model classes
 /// can transitively contain an M as an attribute. The embedding pass uses it to pick the candidate
 /// container classes worth scanning.
 ///
@@ -33,20 +33,20 @@ import java.util.Set;
 /// - `@XmlElementRef(s)`: the element name resolved through [ModelRegistry], NeTEx element names
 ///    being the model class simple names.
 ///
-/// A discovered ABSTRACT class expands to its concrete subclasses, standing in for the
-/// schema-expanded union; concrete classes are taken as-is. References ARE contained types.
+/// A discovered abstract class expands to its concrete subclasses, standing in for the
+/// schema-expanded union; concrete classes are taken as-is. References are contained types.
 public final class ContainmentIndex {
 
     private ContainmentIndex() {}
 
-    /// The model package, EXACT — `getPackageName().equals(...)`, never a prefix test.
+    /// The model package, matched exactly — `getPackageName().equals(...)`, never a prefix test.
     ///
     /// The walk must exclude GML: geometry carries no ids or refs and is not part of the
-    /// containment shape. Model and GML share the `noi.netex.` root, so a PREFIX test shortened by
+    /// containment shape. Model and GML share the `noi.netex.` root, so a prefix test shortened by
     /// one component would pull every GML class into the walk with no error anywhere.
     private static final String MODEL_PKG = ModelRegistry.MODEL_PKG;
 
-    /// Per-class DIRECT containment contributions (field-level, expansion applied).
+    /// Per-class direct containment contributions (field-level, expansion applied).
     private static final ClassValue<Set<Class<?>>> DIRECT = new ClassValue<>() {
         @Override
         protected Set<Class<?>> computeValue(Class<?> type) {

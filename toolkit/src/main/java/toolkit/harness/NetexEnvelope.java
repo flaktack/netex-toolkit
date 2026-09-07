@@ -6,16 +6,15 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
-/// The `PublicationDelivery` / `CompositeFrame` wrapper every entry of a split NeTEx
-/// export repeats, written straight into a [ZipWriter].
+/// The `PublicationDelivery` / `CompositeFrame` wrapper every entry of a split NeTEx export repeats,
+/// written straight into a [ZipWriter].
 ///
-/// Each entry is an INDEPENDENT delivery — a consumer that reads one file must get a valid document
+/// Each entry is an independent delivery — a consumer that reads one file must get a valid document
 /// — so the preamble is written once per entry, with the codespaces and frame defaults repeated
 /// verbatim in each. This object is therefore built once and written many times.
 ///
-/// NOT reproducible, deliberately: `<PublicationTimestamp>` is a wall clock, in every entry. It is
-/// the one field that makes two exports of one store differ, and why [ZipWriter]'s pinned entry
-/// timestamps buy comparable METADATA rather than a comparable archive.
+/// `<PublicationTimestamp>` is a wall clock, written into every entry. It is the one field that
+/// makes two exports of one store differ.
 ///
 /// Not parameterised: the NeTEx and gml namespaces, the NeTEx version, the default location system
 /// and units, and the `versionRef` on every `TypeOfFrameRef`.

@@ -42,17 +42,16 @@ import java.util.zip.ZipFile;
 /// Feed file or zip to Store: a StAX cursor loop over the interesting-element set, feeding
 /// `store.insertAnyObjects` through a pull iterator. One write txn per stream.
 ///
-/// The attribute denormalisation arms are NOT here. They apply at any depth inside a frame, and
-/// this loop never sees the inside of an interesting element — the unmarshaller consumes that
-/// subtree — so they live in [CopyingCapture], which sees every event. This class contributes only
-/// the effective FrameDefaults for the region the cursor is in.
+/// The attribute denormalisation arms live in [CopyingCapture], which sees every event: they apply
+/// at any depth inside a frame, and this loop never sees the inside of an interesting element
+/// because the unmarshaller consumes that subtree. This class contributes only the effective
+/// FrameDefaults for the region the cursor is in.
 ///
 /// Each interesting element's XML is captured while JAXB unmarshals it and handed to the store as
 /// `WithFragment`, so the value encode is LZ4-only. A failed capture falls back to the store's
 /// re-marshal path, counted and warned.
 ///
-/// THREAD SAFETY: one `NetexLoader` is shareable — every per-stream mutable object is created
-/// inside `open`. A [Store] is not: one per thread.
+/// One `NetexLoader` is shareable across threads. A [Store] is not: one per thread.
 ///
 /// Inputs: .xml, .xml.gz, .zip (every \*.xml member).
 public final class NetexLoader {
@@ -102,8 +101,7 @@ public final class NetexLoader {
                         loaded++;
                     }
                 }
-                // Refuse rather than warn, as ZipLoad does: a zip with no loadable member is a
-                // wrong input, not an empty one.
+                // A zip with no loadable member is refused, as in ZipLoad.
                 if (loaded == 0) {
                     throw new IllegalStateException(input + ": no loadable XML members"
                             + (nonXml > 0 ? " (" + nonXml + " non-XML members ignored)" : ""));
@@ -126,14 +124,12 @@ public final class NetexLoader {
         return total;
     }
 
-    /// What the loader dropped, decided once per feed with the totals in hand. The enforcement
-    /// point is a feed boundary, not the cursor loop. Every entry point that owns a whole feed
-    /// calls this.
+    /// What the loader dropped, decided once per feed with the totals in hand. Called by every entry
+    /// point that owns a whole feed. Tolerated by default rather than refused — both fire on the
+    /// national corpus.
     ///
-    /// Tolerated by default rather than refused — both fire on the national corpus.
-    ///
-    /// The unmapped message carries the ELEMENT NAMES, because they separate the two causes: a
-    /// NeTEx abstract head means the feed used a non-instantiable name, a concrete type means
+    /// The unmapped message carries the element names, because they separate the two causes: a NeTEx
+    /// abstract head means the feed used a non-instantiable name, a concrete type means
     /// `interesting.txt` and the model jar have skewed and a supported class is being dropped.
     public static void reportDropped(String tag, LoadStats stats) {
         Strictness.require(Strictness.DROPPED_OUTPUT, "droppedOutput", stats.unmapped(), tag,
@@ -168,13 +164,11 @@ public final class NetexLoader {
         // too (see toolkit.codec.JaxbPin).
         toolkit.codec.JaxbPin.pin();
         // The label is the reader's system id, so a well-formedness error names the stream instead
-        // of Woodstox's `{unknown-source}`. Not a URI and nothing resolves against it — DTD support
-        // is off and there are no external entities.
+        // of Woodstox's `{unknown-source}`.
         CopyingCapture reader = new CopyingCapture(
                 (org.codehaus.stax2.XMLStreamReader2) xif.createXMLStreamReader(label, in), sets);
-        // The first place a source value is bound, so the first place a bind event can be raised.
-        // The handler counts and delegates its verdict to the RI's default, so tolerance is
-        // unchanged; the stream label is the per-feed axis of the report.
+        // The handler counts bind events and delegates its verdict to the RI's default, so tolerance
+        // is unchanged; the stream label is the per-feed axis of the report.
         Unmarshaller unmarshaller = ctx.createUnmarshaller();
         toolkit.codec.BindEvents events =
                 toolkit.codec.BindEvents.unmarshalling(unmarshaller.getEventHandler());
@@ -250,20 +244,20 @@ public final class NetexLoader {
         final toolkit.codec.BindEvents events;
         final Map<String, Class<?>> classCache = new HashMap<>();
 
-        /// What the UNMARSHALLER sees: `r` plus the xs:collapse on enum-valued element text that
+        /// What the unmarshaller sees: `r` plus the xs:collapse on enum-valued element text that
         /// the JAXB RI omits. The fragment tee stays on `r`, so the stored bytes remain verbatim
         /// while the bean carries the collapsed value.
         final toolkit.codec.EnumWhitespace.Reader enumText;
 
-        // The denormalisation state. The id/version stacks are NOT here — they must be
-        // maintained for every element of the document, including the ones inside a consumed
-        // subtree, so they live in CopyingCapture.
+        // The denormalisation state. The id/version stacks live in CopyingCapture instead: they must
+        // be maintained for every element of the document, including the ones inside a consumed
+        // subtree.
         final ArrayList<VersionFrameDefaultsStructure> frameDefaultsStack = new ArrayList<>();
         String currentDatasourceRef;
         String currentResponsibilitySetRef;
         String currentLocationSystem;
 
-        // Bindings declared by every OPEN, non-consumed ancestor (head = innermost); feeds the
+        // Bindings declared by every open, non-consumed ancestor (head = innermost); feeds the
         // capture's namespace hoisting. Consumed subtrees are balanced and invisible to this loop,
         // so push/pop stays symmetric.
         static final List<String[]> NO_NS = List.of();
@@ -284,7 +278,7 @@ public final class NetexLoader {
             this.unmarshaller = unmarshaller;
             this.events = events;
             this.enumText = toolkit.codec.EnumWhitespace.wrap(r);
-            // The reader is per STREAM. See BindEvents.reader.
+            // The reader is per stream. See BindEvents.reader.
             events.reader(this.enumText);
         }
 
@@ -310,11 +304,11 @@ public final class NetexLoader {
 
         /// The model class for an interesting element name, or null when the model has none.
         ///
-        /// The `catch` is a lookup MISS, not a swallowed error, and not a rare one: the abstract
-        /// substitution-group heads in the interesting set get no generated class, because no
-        /// instance document may contain them. A null therefore means either a schema-invalid name
-        /// in the feed or skew between `interesting.txt` and the model jar, and this method cannot
-        /// tell them apart — [NetexLoader#reportDropped] decides once per feed, on the total.
+        /// The `catch` is a lookup miss, and not a rare one: the abstract substitution-group heads
+        /// in the interesting set get no generated class, because no instance document may contain
+        /// them. A null therefore means either a schema-invalid name in the feed or skew between
+        /// `interesting.txt` and the model jar, and this method cannot tell them apart —
+        /// [NetexLoader#reportDropped] decides once per feed, on the total.
         ///
         /// `computeIfAbsent` stores no null mapping, so an unmapped name pays a classloader miss
         /// per occurrence rather than once.
@@ -335,8 +329,6 @@ public final class NetexLoader {
             try {
                 pending = advance();
             } catch (Exception e) {
-                // WHICH stream and WHERE: the loader is several frames below the driver that knows
-                // the file name, and a feed can be one member of a zip.
                 throw new IllegalStateException(label + ": parse failed" + at(e), e);
             }
             if (pending == null) exhausted = true;
@@ -405,7 +397,7 @@ public final class NetexLoader {
                             // The wrapper only re-reports text; every event still passes through r,
                             // so the capture is unaffected.
                             enumText.reset();
-                            events.binding(c); // one field store
+                            events.binding(c);
                             Object o = unmarshaller.unmarshal(enumText, c);
                             byte[] fragment = null;
                             if (began) {
@@ -418,16 +410,12 @@ public final class NetexLoader {
                             }
                             Object v = (o instanceof JAXBElement<?> je) ? je.getValue() : o;
                             // No post-bind fix-up: every denormalisation arm is injected into the
-                            // READER before the unmarshaller reads the start tag, so the bean and
+                            // reader before the unmarshaller reads the start tag, so the bean and
                             // the captured fragment carry them from the same decision.
                             //
-                            // The next three branches are separate because their verdicts differ:
-                            //
-                            //  - NOT an EntityStructure: build defect. The name was declared
-                            //    interesting, yet its class cannot carry an id, so no feed content
-                            //    can produce a storable object. Refuse.
-                            //  - an EntityStructure with a null id: feed content. The binding makes
-                            //    id optional though NeTEx requires it. Counted, refusable per feed.
+                            // A class that is not an EntityStructure is a build defect and is
+                            // refused; an EntityStructure with a null id is feed content (the
+                            // binding makes id optional though NeTEx requires it) and is counted.
                             if (v == null) {
                                 // xsi:nil on an interesting element. Feed content, nothing to
                                 // store — counted with the id-less ones.
@@ -517,22 +505,17 @@ public final class NetexLoader {
             }
         }
 
-        /// The frame's DefaultLocationSystem, or null when it is absent OR is not a CRS at all.
+        /// The frame's DefaultLocationSystem, or null when it is absent or is not a CRS proj4j can
+        /// resolve.
         ///
-        /// A REFUSAL HERE IS CHEAPER THAN A FALLBACK LATER, because this value is DENORMALISED:
-        /// CopyingCapture's N7 arm stamps it onto every srsName-less geometry under the frame
-        /// (PROV-CAP srsname-depth), so one bad frame default becomes tens of thousands of
-        /// geometries that no CRS registry can resolve. Left null instead, those geometries keep
-        /// no srsName and Projection's resolution rule reads them as WGS84 -- which is what they
-        /// are, and what the fallback arm was going to assume anyway, minus the ERROR and minus
-        /// counting every one of them as possibly-wrong output.
+        /// The value is denormalised: CopyingCapture's N7 arm stamps it onto every srsName-less
+        /// geometry under the frame (PROV-CAP srsname-depth), so one bad frame default becomes tens
+        /// of thousands of geometries that no CRS registry can resolve. Refused here, those
+        /// geometries keep no srsName and Projection's resolution rule reads them as WGS84.
         ///
         /// Publishers really do write a non-CRS here: three abruzzo RAP feeds
         /// (IT-ITF1 0083, 13, TUA-MAAS) carry `<DefaultLocationSystem>Europe/Rome</...>`, copied
         /// from the `DefaultLocale/TimeZone` two lines above it in their own FrameDefaults.
-        ///
-        /// Only a name proj4j cannot resolve is refused, so this can never reject a CRS that
-        /// Projection would have gone on to accept.
         String locationSystemOf(VersionFrameDefaultsStructure fd) {
             String ls = fd.getDefaultLocationSystem();
             if (ls == null) return null;
@@ -561,7 +544,7 @@ public final class NetexLoader {
         public final Set<String> withVersion = new HashSet<>();
         /// Every model class that carries an srsName attribute.
         public final Set<String> srsName = new HashSet<>();
-        /// Classes derived from `DataManagedObjectStructure` — the set BOTH the `dataSourceRef`
+        /// Classes derived from `DataManagedObjectStructure` — the set both the `dataSourceRef`
         /// and `responsibilitySetRef` arms use; see `CopyingCapture.startElement`.
         public final Set<String> dataManagedObjects = new HashSet<>();
 

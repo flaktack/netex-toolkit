@@ -26,12 +26,6 @@ import java.util.regex.Pattern;
 /// `nx lens` — one object, rendered identically across every layer it can reach, with one
 /// verdict line per adjacent boundary.
 ///
-/// ## What this is for
-///
-/// A defect is usually a divergence between two ADJACENT representations of one object, and the
-/// diagnosis cost is in establishing which pair diverged. This is the view where the layers sit
-/// next to each other.
-///
 /// The layers, and where each is read from:
 ///
 /// | | layer | read from |
@@ -43,25 +37,20 @@ import java.util.regex.Pattern;
 /// | `M` | re-marshal | `FragmentCodec.marshalFragment` — what a re-export would emit |
 /// | `E` | export | the element in the exported zip ([XmlFind]) |
 ///
-/// ## Three rendering rules
+/// Three rendering rules:
 ///
-/// 1. Declared-but-null bean fields are printed. The defect shape lives in the gap between a
-/// byte-perfect fragment and a null field, with no exception and no `ValidationEvent`; a renderer
-/// that skipped nulls would render that object as correct.
+/// 1. Declared-but-null bean fields are printed: a byte-perfect fragment can bind to a null field
+/// with no exception and no `ValidationEvent`.
 ///
-/// 2. B0 exists because the fix would otherwise hide the defect it fixed. `FragmentCodec.decode`
-/// wraps its reader in `EnumWhitespace`, so on a current jar B binds the padded value. B0 is the
-/// same unmarshal WITHOUT interception, so the pair shows the defect and the repair holding on
-/// current data. A B0/B divergence names an active interception; a B0 null under non-empty fragment
-/// text is the defect shape. B0 runs with a `ValidationEventCollector` attached, so "nothing was
-/// raised" is measured rather than asserted.
+/// 2. B0 is the same unmarshal without interception. `FragmentCodec.decode` wraps its reader in
+/// `EnumWhitespace`, so on a current jar B binds the padded value and B0 does not. A B0/B
+/// divergence names an active interception; a B0 null under non-empty fragment text is the defect
+/// shape.
 ///
 /// 3. An unreachable layer prints why, never nothing. For a transform-authored object there is no
 /// S layer, and "transform-authored, so there is no source" is the finding.
 ///
-/// ## A diagnostic, not a gate
-///
-/// It renders one object and tells you what differs. No pass/fail, no threshold, no baseline.
+/// A diagnostic, not a gate: no pass/fail, no threshold, no baseline.
 public final class LensCmd {
 
     static final String VERSION = "nx-lens/1";
@@ -96,7 +85,7 @@ public final class LensCmd {
                                           linear scan of exactly what you name.
                                           MEASURED: one feed 0.3 s; all 317 feeds -- 4,413 members,
                                           40.2 GB uncompressed -- 25 s at --workers 16. The index
-                                          §2.1.1 budgets 2-3 days for is not needed for point
+                                          a full build budgets days for is not needed for point
                                           lookup, only for a whole-corpus census.
                   --export PATH           E the element in an export zip. Use --export-entry when you
                                           know the member: VehicleTypes live in a 3 MB entry, so
@@ -108,7 +97,7 @@ public final class LensCmd {
                   --class C               the model class. Prefer this over the spec's ':Class'
                                           suffix: NeTEx ids are colon-heavy and ':' is ambiguous.
                   --pick N                render match N (default 0). ALL matches are always listed
-                                          first -- T5_OTP_GATE §6 measured 1,484 duplicate-id Lines,
+                                          first -- a census measured 1,484 duplicate-id Lines,
                                           so silently taking the first row is a real way to be wrong.
 
                 OUTPUT
@@ -209,7 +198,7 @@ public final class LensCmd {
                 panes.add(Pane.unreachable("S", "source XML", String.format(
                         "no element with id=%s in %d file(s) / %d member(s) (%,d B, %,d elements, %,d ms).%n"
                         + "        If this object is TRANSFORM-AUTHORED there is no S layer and this is the answer,%n"
-                        + "        not a miss: EXPORT_AB §5.6a's source census found modification/status/publication%n"
+                        + "        not a miss: a source census found modification/status/publication%n"
                         + "        occur ZERO times in the corpus -- 100%% of those 3,566,763 attributes are created%n"
                         + "        by the EPIP transform. Otherwise: widen --source, or check the id.",
                         id, sources.size(), r.members(), r.bytes(), r.elements(), r.millis())));
@@ -265,9 +254,6 @@ public final class LensCmd {
                             h.fullKey(), h.localKey());
                 }
                 if (hits.size() > 1) {
-                    // "Are the duplicates the same object twice, or two different objects?" is a
-                    // real question. Answer it here rather than making the operator run --pick
-                    // twice and eyeball two panes.
                     byte[] first = store.rawBlob(hits.get(0));
                     int same = 0, differ = 0;
                     for (int i = 1; i < hits.size(); i++) {
@@ -350,7 +336,7 @@ public final class LensCmd {
                 panes.add(Pane.unreachable("E", "export", String.format(
                         "not present in %s (%d member(s), %,d B, %,d elements, %,d ms).%n"
                         + "        An object stored but not exported is a real class of defect"
-                        + " (EXPORT_AB §5.12 residues).",
+                        + " (residues).",
                         export.getFileName(), r.members(), r.bytes(), r.elements(), r.millis())));
             } else {
                 for (XmlFind.Found f : r.hits()) {
@@ -366,9 +352,6 @@ public final class LensCmd {
         if (diff == null && !verdictsOnly) {
             for (Pane p : panes) p.print(o, focus, head, pretty);
         } else {
-            // Even with the panes suppressed, WHY a layer is missing is printed: hiding the reason
-            // behind a formatting flag turns a retired-format store, a stale db and a
-            // transform-authored object into the same blank.
             for (Pane p : panes) {
                 if (!p.ok()) o.printf("%-6s UNREACHABLE: %s%n", p.code, p.unreachable);
             }
@@ -577,8 +560,8 @@ public final class LensCmd {
 
     // ================================================================== verdicts
 
-    /// One line per boundary. The boundaries are named explicitly rather than derived from pane
-    /// adjacency, because the ones that carry findings are not all adjacent:
+    /// One line per boundary. The boundaries are named explicitly, because the ones that carry
+    /// findings are not all adjacent:
     ///
     /// - `S→F` loader capture fidelity: attribute denormalisation shows here as `+`, a whole-blob
     ///    re-marshal as wholesale change.
@@ -730,10 +713,9 @@ public final class LensCmd {
                     }
                 }
                 // 2. Character data into a complex type. A text-bearing element is a leaf in the
-                //    fragment while the bean models it as a container with the text one level down.
-                //    Joining against the container asks "is there an object here", which there
-                //    always is, so the pane would report a value bound for an object whose geometry
-                //    is empty.
+                //    fragment while the bean models it as a container with the text one level down,
+                //    so joining against the container would report a value bound for an object
+                //    whose geometry is empty.
                 if (r != null && r.complex()) {
                     r = byPath.get(path + "/text()");
                     path = path + "/text()";

@@ -2,26 +2,10 @@ package toolkit.transform.epip;
 
 // The EPIP interchange cluster: the interchange generator and the interchange-point repair.
 //
-// Binding decisions that shape the code below:
-//
-//  - A meeting's 8-way ref choice binds to FOUR typed fields, two journey refs and two
-//    point-in-pattern refs. The model declares no service-journey or stop-point-in-pattern
-//    spellings at all, so a source that used them would be UNREPRESENTABLE: the loader drops the
-//    unknown element and the meeting is skipped as ref-less. No such spelling occurs in the data.
-//  - The interchange's from/to journey refs have a VERSION-DEPENDENT declared type, deprecated at
-//    the newer schema version. The constructor builds the DECLARED type, so JAXB stamps no
-//    xsi:type.
-//  - nameOfRefClass: on POINT refs the derived name is a fixed single-value enum that a
-//    default-suppressing serializer never puts on the wire, so the byte-identical form leaves it
-//    null. On JOURNEY refs the derived name IS emitted, so it is set.
-//  - Projecting a ref also copies the source ref's other version-of-object fields.
-//  - Choice groups split into a JAXBElement ref half plus an embedded half; "no ref" means the
-//    ref half is null.
-//  - A stop-point-in-pattern's ref accessor is a JAXBElement whose SIBLING fare-ref must be
-//    excluded: value present AND not a fare ref. The repair function deliberately does NOT filter
-//    fare refs — the two differ on purpose.
-//  - A keyless lookup takes the first id-index row at the NUL-terminated id prefix and narrows by
-//    instanceof; a same-id row of a foreign class yields null.
+// A meeting's 8-way ref choice binds to four typed fields, two journey refs and two
+// point-in-pattern refs. The model declares no service-journey or stop-point-in-pattern spellings
+// at all, so a source that used them would be unrepresentable: the loader drops the unknown
+// element and the meeting is skipped as ref-less. No such spelling occurs in the data.
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.model.FareScheduledStopPointRefStructure;
@@ -75,8 +59,7 @@ public final class EpipInterchange {
             RefElementIndex.substitutionGroup("JourneyPatternRef");
 
     /// -Dtoolkit.epip.peekJourneyPattern=false reverts to unmarshalling the whole ServiceJourney
-    /// to read its pattern ref. The neutering knob: with it off the repair must produce exactly the
-    /// same interchanges.
+    /// to read its pattern ref. Either way the repair must produce exactly the same interchanges.
     private static final boolean PEEK_JOURNEY_PATTERN =
             Conf.on(Conf.EPIP_PEEK_JOURNEY_PATTERN);
 
@@ -85,34 +68,28 @@ public final class EpipInterchange {
 
     /// -Dtoolkit.epip.peekInterchangeIndex=false reverts the index pass to unmarshalling every
     /// journey to read its id and pattern ref. Read per generator construction rather than at class
-    /// init, so an identity arm can run both paths in ONE JVM.
+    /// init, so an identity arm can run both paths in one JVM.
     private static boolean peekInterchangeIndex() {
         return Conf.on(Conf.EPIP_PEEK_INTERCHANGE_INDEX);
     }
 
     /// -Dtoolkit.epip.idIndexJourneys=false reverts the index pass to reading every stored journey
     /// blob even when the pattern map is empty. Read per generator construction, so an identity arm
-    /// can run every route in ONE JVM.
+    /// can run every route in one JVM.
     private static boolean idIndexJourneys() {
         return Conf.on(Conf.EPIP_ID_INDEX_JOURNEYS);
     }
 
-    /// DIAGNOSTIC ONLY: `-Dtoolkit.epip.idIndexJourneys.force=true` takes the id-index route with
-    /// the guard removed. It then produces a WRONG answer by construction — the pattern map stays
+    /// Diagnostic only: `-Dtoolkit.epip.idIndexJourneys.force=true` takes the id-index route with
+    /// the guard removed. It then produces a wrong answer by construction — the pattern map stays
     /// empty, so every side falls back to the meeting's own stop-point ref.
     private static boolean idIndexJourneysForced() {
         return Conf.on(Conf.EPIP_ID_INDEX_JOURNEYS_FORCE);
     }
 
     /// `-Dtoolkit.epip.idIndexJourneys.verify=true` builds the journey set BOTH ways and fails
-    /// loudly on the first id the two disagree about, naming the id and the direction.
-    ///
-    /// STRICTLY SLOWER than either path alone: it does the index walk AND the whole peek pass, then
-    /// two set comparisons.
-    ///
-    /// It sees BOTH directions: a strict SUPERSET of the journey ids would emit the same
-    /// interchanges and the same digest, so comparing the SETS makes an extra id a failure even
-    /// when it is invisible downstream.
+    /// loudly on the first id the two disagree about, naming the id and the direction. It does the
+    /// index walk and the whole peek pass, so it is slower than either path alone.
     private static boolean idIndexJourneysVerify() {
         return Conf.on(Conf.EPIP_ID_INDEX_JOURNEYS_VERIFY);
     }
@@ -124,8 +101,8 @@ public final class EpipInterchange {
     /// passes at the meeting station — matched through the stop assignments, NOT by parsing ids —
     /// and falling back to the meeting's shared stop-point ref when it cannot be resolved.
     ///
-    /// LAZY: the index passes run on FIRST pull, each cursor fully drained before the next opens,
-    /// and then the meetings stream.
+    /// Lazy: the index passes run on the first pull, each cursor fully drained before the next
+    /// opens, and then the meetings stream.
     public static Iterator<Object> epipServiceJourneyInterchange(
             Store dbRead, Txn txn, GeneratorDefaults generatorDefaults) {
         return new Iterator<>() {
@@ -137,7 +114,6 @@ public final class EpipInterchange {
             Object ready;
 
             private void init() {
-                // Fires when the generator body starts, i.e. on the first pull.
                 Log.info("[epip] epip_service_journey_interchange");
 
                 Map<String, StopPlace> stopPlaces = new LinkedHashMap<>();
@@ -181,7 +157,8 @@ public final class EpipInterchange {
                             : List.of();
                     List<ScheduledStopPointRefStructure> points = new ArrayList<>();
                     for (PointInLinkSequence_VersionedChildStructure pis : pisList) {
-                        // Excludes the fare-ref sibling; see the header.
+                        // The ref accessor's sibling fare-ref is excluded here, unlike in the
+                        // repair below.
                         if (!(pis instanceof StopPointInJourneyPattern spijp)) continue;
                         JAXBElement<? extends ScheduledStopPointRefStructure> el = spijp.getScheduledStopPointRef();
                         ScheduledStopPointRefStructure r = el != null ? el.getValue() : null;
@@ -192,35 +169,30 @@ public final class EpipInterchange {
 
                 // ServiceJourney id -> its pattern id, plus the set of journeys actually present.
                 //
-                // THREE ROUTES. The first is guarded on the pattern map being EMPTY: there the
-                // map is unreachable and the id set can come from the id index without opening a
+                // Three routes. The first is guarded on the pattern map being empty: there the map
+                // is unreachable and the id set can come from the id index without opening a
                 // single blob. Otherwise the pass still needs the pattern ref per journey, read off
-                // the STORED BYTES: one StAX scan per row for the root's id and the first
+                // the stored bytes: one StAX scan per row for the root's id and the first
                 // pattern-ref-group child, no bean built and nothing kept.
                 presentJourneys = new HashSet<>();
                 journeyToPattern = new HashMap<>();
-                // A CORRECTNESS guard, not a performance one: the test forces it open on a
-                // patterned fixture and watches the resolved stop points collapse to the station
-                // aggregate. Do not open it.
+                // A correctness guard, not a performance one: with a non-empty pattern map this
+                // route collapses every resolved stop point to the station aggregate. Do not open
+                // it.
                 if ((patternPoints.isEmpty() || idIndexJourneysForced()) && idIndexJourneys()) {
-                    // WITH patternPoints EMPTY THIS PASS OWES THE LOOP ONE THING: the SET of stored
-                    // ServiceJourney ids. The pattern lookup returns an empty list for every key, so
-                    // the inner map cannot reach an output. The id index already holds that set and
-                    // one cursor walk decompresses NOTHING.
+                    // With patternPoints empty this pass owes the loop one thing: the set of stored
+                    // ServiceJourney ids. The pattern lookup returns an empty list for every key,
+                    // so the inner map cannot reach an output, and the id index already holds that
+                    // set — one cursor walk that decompresses nothing.
                     //
-                    // The id index has exactly three mutation sites and each keeps it in step with
-                    // the class map inside ONE transaction — insert writes both rows together and
-                    // refuses an object with no id; a class purge deletes every index row whose
-                    // FULL_KEY names that class, which is why the filter below is on the full key's
-                    // class rather than the encoded key's trailer; and clone copies both verbatim
-                    // under one predicate. The verify arm below is that argument's detector.
+                    // A class purge deletes every index row whose full key names that class, so the
+                    // filter below is on the full key's class rather than the encoded key's
+                    // trailer.
                     int sjIdx = dbRead.classIdxInt(ServiceJourney.class);
                     for (IdRow row : dbRead.iterIdIndex(txn)) {
                         if (NulKeyCodec.fullKeyClassIdx(row.fullKey()) != sjIdx) continue;
                         presentJourneys.add(NulKeyCodec.idPart(row.encodedKey()));
                     }
-                    // Off by default; when on it throws on the first id the two routes disagree
-                    // about, in either direction.
                     if (idIndexJourneysVerify()) verifyIdIndexAgainstPeek(dbRead, txn, presentJourneys);
                 } else if (peekInterchangeIndex()) {
                     // Per-iterator: neither a StAX factory nor a JAXB unmarshaller is thread-safe.
@@ -230,7 +202,7 @@ public final class EpipInterchange {
                         FragmentPeek.RootChild rc = peek.rootIdAndFirstChildRef(
                                 codec.decompress(row.blob()), JOURNEY_PATTERN_REF);
                         presentJourneys.add(rc.id());
-                        // Presence of the ELEMENT is the question, whatever its @ref, so a child
+                        // Presence of the element is the question, whatever its @ref, so a child
                         // with no ref attribute still maps the id to null.
                         if (rc.child() != null) journeyToPattern.put(rc.id(), rc.child().ref());
                     }
@@ -252,7 +224,7 @@ public final class EpipInterchange {
                 for (ScheduledStopPointRefStructure sspRef
                         : patternPoints.getOrDefault(journeyToPattern.getOrDefault(journeyRef, ""), List.of())) {
                     if (meetingStopPlace.equals(sspToStopPlace.get(sspRef.getRef()))) {
-                        return pointRef(sspRef);   // projectRef(ssp_ref, ScheduledStopPointRef)
+                        return pointRef(sspRef);
                     }
                 }
                 return null;
@@ -262,9 +234,9 @@ public final class EpipInterchange {
                 if (meetings == null) init();
                 while (ready == null && meetings.hasNext()) {
                     JourneyMeeting jm = (JourneyMeeting) meetings.next();
-                    // Typed on the BASE ref structure, not the narrower one: the newer schema
-                    // widens these two elements to the base and deprecates them. Only getRef() is
-                    // read, and it lives on the base, so the base is honest at both versions.
+                    // Typed on the base ref structure: the newer schema widens these two elements
+                    // to the base and deprecates them, and only getRef() is read, which lives on
+                    // the base at both versions.
                     JourneyRefStructure fromJourneyRef = jm.getFromJourneyRef();
                     JourneyRefStructure toJourneyRef = jm.getToJourneyRef();
 
@@ -278,8 +250,6 @@ public final class EpipInterchange {
 
                     ScheduledStopPointRefStructure atPoint = jm.getAtStopPointRef();
                     String meetingStopPlace = atPoint != null ? sspToStopPlace.get(atPoint.getRef()) : null;
-                    // Each side's point is the SSP that journey passes at the meeting station;
-                    // fall back to the shared AtStopPointRef when unresolvable (genuine data gap).
                     ScheduledStopPointRefStructure fromPoint = pointFor(fromJourneyRef.getRef(), meetingStopPlace);
                     if (fromPoint == null) fromPoint = atPoint;
                     ScheduledStopPointRefStructure toPoint = pointFor(toJourneyRef.getRef(), meetingStopPlace);
@@ -291,13 +261,13 @@ public final class EpipInterchange {
                     ServiceJourneyInterchange sji =
                             NetexUtils.project(jm, ServiceJourneyInterchange.class, overrides);
                     // A meeting maps a through-service constraint, so the constraint flags are
-                    // asserted — but NOT Guaranteed, which would promise a wait it does not.
+                    // asserted — but not Guaranteed, which would promise a wait it does not.
                     sji.setStaySeated(Boolean.TRUE);
                     sji.setPlanned(Boolean.TRUE);
                     sji.setAdvertised(Boolean.TRUE);
                     // A derived name would come out "FromJourney"/"ToJourney", which is not a
-                    // class: the refs point at ServiceJourneys, so name them so. The projection
-                    // copies the flattened refs by ALIAS, and these fresh copies replace them.
+                    // class. The projection copies the flattened refs by alias, and these fresh
+                    // copies replace them.
                     sji.setFromJourneyRef(journeyRef(fromJourneyRef));
                     sji.setToJourneyRef(journeyRef(toJourneyRef));
                     ready = sji;
@@ -323,14 +293,13 @@ public final class EpipInterchange {
     /// The verify arm for the id-index route's set: rebuild it the other way and fail on the first
     /// id the two routes disagree about.
     ///
-    /// BOTH DIRECTIONS, and the superset one is the point. A missing id drops interchanges and
-    /// shows up in any output digest; an EXTRA id does not, on a store that drops no meeting.
-    /// So both subtractions are taken:
+    /// Both subtractions are taken: a missing id drops interchanges and shows up in any output
+    /// digest, while an extra id does not, on a store that drops no meeting.
     ///
-    /// - PEEK-ONLY — a stored row with no index row behind it. Detected in class-map cursor order,
+    /// - peek-only — a stored row with no index row behind it. Detected in class-map cursor order,
     ///    so the id named is deterministic.
-    /// - INDEX-ONLY — an index row naming a journey the class map does not hold. Detected in
-    ///    hash-set order, so WHICH id is named is unspecified when there are several.
+    /// - index-only — an index row naming a journey the class map does not hold. Detected in
+    ///    hash-set order, so which id is named is unspecified when there are several.
     private static void verifyIdIndexAgainstPeek(Store dbRead, Txn txn, Set<String> fromIndex) {
         long t0 = System.nanoTime();
         FragmentCodec codec = new FragmentCodec();
@@ -343,8 +312,8 @@ public final class EpipInterchange {
                 throw new IllegalStateException("[epip] ID-INDEX MISMATCH, direction PEEK-ONLY: id "
                         + id + " is a stored ServiceJourney row with no _id_idx row behind it — "
                         + "the interchange generator's _id_idx route would DROP every meeting on it. "
-                        + "EpipInterchange's index-pass comment argues the class map and the index "
-                        + "cannot disagree; on this store they do.");
+                        + "The class map and the index are expected to agree; on this store they "
+                        + "do not.");
             }
         }
         for (String id : fromIndex) {
@@ -353,7 +322,7 @@ public final class EpipInterchange {
                         + id + " came out of the _id_idx walk as a ServiceJourney but has no row in "
                         + "the ServiceJourney class map — the SUPERSET direction, which no output digest "
                         + "on a store that drops no meeting can see. "
-                        + "EpipInterchange's index-pass comment argues this cannot happen.");
+                        + "This is not expected to happen.");
             }
         }
         Log.info("[epip] idIndexJourneys VERIFY: %d ids from _id_idx, %d from the peek route, "
@@ -363,14 +332,14 @@ public final class EpipInterchange {
 
     // ------------------------------------------------------- repairing interchange points
 
-    /// Repair ServiceJourneyInterchange point
-    /// refs that are not on the referenced journey's pattern. When the referenced SSP is absent
-    /// from the journey's pattern but the pattern has exactly one stop assigned to the SAME
-    /// StopPlace, rewrite the ref to that stop's SSP; a cross-border interchange with one side
-    /// off-pattern is re-anchored at the valid endpoint's station (or, failing that, BOTH
-    /// endpoints at the feeder leg's last shared station); anything else is left untouched.
-    /// Must run AFTER the journey transform, when every journey carries a pattern. Yields only
-    /// the changed interchanges; the summary log line fires on exhaustion.
+    /// Repair ServiceJourneyInterchange point refs that are not on the referenced journey's
+    /// pattern. When the referenced SSP is absent from the journey's pattern but the pattern has
+    /// exactly one stop assigned to the same StopPlace, rewrite the ref to that stop's SSP; a
+    /// cross-border interchange with one side off-pattern is re-anchored at the valid endpoint's
+    /// station (or, failing that, both endpoints at the feeder leg's last shared station);
+    /// anything else is left untouched. Must run after the journey transform, when every journey
+    /// carries a pattern. Yields only the changed interchanges; the summary log line fires on
+    /// exhaustion.
     public static Iterator<Object> epipRepairInterchangePoints(
             Store dbRead, Txn txn, GeneratorDefaults generatorDefaults) {
         return new Iterator<>() {
@@ -388,7 +357,7 @@ public final class EpipInterchange {
                 sspToStop = new HashMap<>();
                 for (Object o : dbRead.iterOnlyObjects(txn, PassengerStopAssignment.class)) {
                     PassengerStopAssignment psa = (PassengerStopAssignment) o;
-                    // The choice values: an EMBEDDED stop point or stop place carries no ref and
+                    // The choice values: an embedded stop point or stop place carries no ref and
                     // is skipped.
                     JAXBElement<? extends ScheduledStopPointRefStructure> sspEl = psa.getScheduledStopPointRef();
                     JAXBElement<? extends StopPlaceRefStructure> stopEl = psa.getStopPlaceRef();
@@ -401,7 +370,7 @@ public final class EpipInterchange {
             }
 
             /// The journey's pattern ref, or [#NO_PATTERN] when the row is not a ServiceJourney or
-            /// carries no pattern-ref ELEMENT at all — which is not the same as an element whose
+            /// carries no pattern-ref element at all — which is not the same as an element whose
             /// `@ref` is absent.
             ///
             /// Read off the stored bytes: the field is an `@XmlElementRef`, so the element is the
@@ -427,7 +396,8 @@ public final class EpipInterchange {
             /// The journey's pattern stops as an ordered first-wins map from stop-point id to ref
             /// object; null when the journey or its pattern ref is unresolvable.
             private Map<String, ScheduledStopPointRefStructure> journeyPoints(String sjId) {
-                // Keyless load: the first row at the NUL-terminated id prefix.
+                // Keyless load: the first id-index row at the NUL-terminated id prefix, whatever
+                // its class; a same-id row of a foreign class yields null here.
                 long sjKey = dbRead.lookupFullKey(txn, sjId, null, ServiceJourney.class);
                 if (sjKey == -1) return null;
                 String patId = journeyPatternRef(sjKey);
@@ -441,8 +411,8 @@ public final class EpipInterchange {
                         refs = new LinkedHashMap<>();
                         for (PointInLinkSequence_VersionedChildStructure p : pat.getPointsInSequence()
                                 .getPointInJourneyPatternOrStopPointInJourneyPatternOrTimingPointInJourneyPattern()) {
-                            // Only StopPointInJourneyPattern carries the field, and NO fare-ref
-                            // filter here — deliberately unlike the generator.
+                            // Only StopPointInJourneyPattern carries the field, and no fare-ref
+                            // filter here, unlike the generator above.
                             ScheduledStopPointRefStructure r = null;
                             if (p instanceof StopPointInJourneyPattern spijp
                                     && spijp.getScheduledStopPointRef() != null) {
@@ -481,7 +451,7 @@ public final class EpipInterchange {
                         }
                         if (points.containsKey(point.getRef())) continue;
                         // Same-station remap: the referenced SSP is not on the pattern but the
-                        // pattern has exactly one stop at the SAME StopPlace.
+                        // pattern has exactly one stop at the same StopPlace.
                         String stop = sspToStop.get(point.getRef());
                         List<ScheduledStopPointRefStructure> candidates = new ArrayList<>();
                         for (Map.Entry<String, ScheduledStopPointRefStructure> e : points.entrySet()) {
@@ -496,11 +466,8 @@ public final class EpipInterchange {
                         }
                     }
 
-                    // Shared-station handover fallback (cross-border interchanges only). One
-                    // endpoint off: keep the valid endpoint, re-anchor the off side at the valid
-                    // endpoint's station if its pattern serves it. Otherwise anchor BOTH
-                    // endpoints at the feeder leg's LAST shared station, each ref in its own
-                    // journey's coding.
+                    // Shared-station handover fallback, cross-border only: each ref ends up in its
+                    // own journey's coding.
                     if (!offSides.isEmpty() && Boolean.TRUE.equals(sji.isCrossBorder())
                             && fromPts != null && toPts != null) {
                         boolean repairedSide = false;
@@ -525,14 +492,14 @@ public final class EpipInterchange {
                             }
                         }
                         if (!repairedSide) {
-                            Set<String> toStations = new HashSet<>();   // {...} - {None}
+                            Set<String> toStations = new HashSet<>();
                             for (String ref : toPts.keySet()) {
                                 String s = sspToStop.get(ref);
                                 if (s != null) toStations.add(s);
                             }
                             String sharedFromRef = null;
                             String station = null;
-                            for (String ref : fromPts.keySet()) {       // shared[-1]: last wins
+                            for (String ref : fromPts.keySet()) {       // last shared one wins
                                 String s = sspToStop.get(ref);
                                 if (s != null && toStations.contains(s)) {
                                     sharedFromRef = ref;
@@ -541,7 +508,7 @@ public final class EpipInterchange {
                             }
                             if (sharedFromRef != null) {
                                 String sharedToRef = null;
-                                for (String ref : toPts.keySet()) {     // next(...): first match
+                                for (String ref : toPts.keySet()) {     // first match wins
                                     if (station.equals(sspToStop.get(ref))) {
                                         sharedToRef = ref;
                                         break;
@@ -601,9 +568,9 @@ public final class EpipInterchange {
         else sji.setToPointRef(fresh);
     }
 
-    /// A fresh point ref copying the source's attributes. `nameOfRefClass` deliberately NOT set:
-    /// the derived name lands in a fixed single-value enum that the serializer suppresses as a
-    /// schema default, so the wire never carries it.
+    /// A fresh point ref copying the source's attributes. `nameOfRefClass` is not set: the derived
+    /// name lands in a fixed single-value enum that the serializer suppresses as a schema default,
+    /// so the wire never carries it.
     private static ScheduledStopPointRefStructure pointRef(ScheduledStopPointRefStructure src) {
         ScheduledStopPointRefStructure ref = new ScheduledStopPointRefStructure();
         copyRefAttributes(src, ref);
@@ -613,9 +580,9 @@ public final class EpipInterchange {
     /// A fresh journey ref with `nameOfRefClass` set explicitly to `"ServiceJourney"`: without the
     /// correct name a downstream consumer cannot resolve the ref.
     ///
-    /// Constructed as the DECLARED base type, not the narrower one. The newer schema widens these
-    /// elements to the base, so a narrower value would become a SUBTYPE of the declared type and
-    /// JAXB would stamp `xsi:type` on every one of them.
+    /// Constructed as the declared base type. The newer schema widens these elements to the base,
+    /// so a narrower value would become a subtype of the declared type and JAXB would stamp
+    /// `xsi:type` on every one of them.
     ///
     /// This does not compile at the older schema version, where the setter takes the narrower type.
     private static JourneyRefStructure journeyRef(JourneyRefStructure src) {
@@ -629,8 +596,8 @@ public final class EpipInterchange {
     /// call site above.
     private static void copyRefAttributes(VersionOfObjectRefStructure src, VersionOfObjectRefStructure dst) {
         dst.setValue(src.getValue());
-        // PURE COPIES: the timestamps are carriers assigned straight across, so each keeps its
-        // SOURCE lexical — offset, milliseconds and all.
+        // Pure copies: the timestamps are carriers assigned straight across, so each keeps its
+        // source lexical — offset, milliseconds and all.
         dst.setCreated(src.getCreated());
         dst.setChanged(src.getChanged());
         dst.setVersion(src.getVersion());
