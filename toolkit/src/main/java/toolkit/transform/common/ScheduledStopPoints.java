@@ -51,10 +51,18 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class ScheduledStopPoints {
 
     private static final ObjectFactory FACTORY = new ObjectFactory();
+
+    /// The `:Operator:` id token, matched case-insensitively. NeTEx ids are case-preserving and a
+    /// publisher may spell the class token in any case. The minted id always carries the canonical
+    /// token, the way [toolkit.model.NetexUtils#getId] spells one.
+    private static final Pattern OPERATOR_TOKEN =
+            Pattern.compile(":Operator:", Pattern.CASE_INSENSITIVE);
 
     /// Same-physical-stop duplicates sit within this radius.
     ///
@@ -496,11 +504,16 @@ public final class ScheduledStopPoints {
         Map<String, Authority> synthAuthority = new LinkedHashMap<>();
         List<Object> out = new ArrayList<>();
 
-        java.util.function.Function<String, String> authorityForOperator = opId -> {
-            if (opId == null || opId.isEmpty() || !opId.contains(":Operator:")) return null;
+        Function<String, String> authorityForOperator = opId -> {
+            if (opId == null || opId.isEmpty()) return null;
+            Matcher token = OPERATOR_TOKEN.matcher(opId);
+            if (!token.find()) return null;
             String existing = authBySuffix.get(lastSegment(opId));
             if (existing != null) return existing;
-            String authId = opId.replaceFirst(":Operator:", ":Authority:");
+            // A store holding exactly one Authority offers no other candidate. Only the Network
+            // arm reaches this: the Line arm below consults soleAuthority before it calls in here.
+            if (soleAuthority != null) return soleAuthority;
+            String authId = token.replaceFirst(":Authority:");
             if (!synthAuthority.containsKey(authId)) {
                 Operator op = operators.get(opId);
                 MultilingualString name = op != null
