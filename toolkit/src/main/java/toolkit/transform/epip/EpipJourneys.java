@@ -228,12 +228,27 @@ public final class EpipJourneys {
 
     // ------------------------------------------------------ service_journey_pattern_from_calls
 
+    /// Hex digits of the md5 kept in a synthesized pattern id — 8 bytes. A collision is silent
+    /// data loss: the journey is repointed at the taken id and its passing times are derived from
+    /// a pattern that is then never emitted, leaving a timetable against somebody else's stop
+    /// sequence.
+    private static final int ID_HEX = 16;
+
     /// Synthesize a ServiceJourneyPattern from a journey's calls. The pattern id is the truncated
     /// md5 over [line ref, direction, per-point signatures]; the projected points and notice
     /// assignments are numbered from that identity, and the notices' journey-level validity
     /// conditions are cleared. The journey's own pattern ref is not set here; the caller wires it.
     public static ServiceJourneyPattern serviceJourneyPatternFromCalls(
             ServiceJourney sj, GeneratorDefaults generatorDefaults) {
+        return serviceJourneyPatternFromCalls(sj, generatorDefaults, null);
+    }
+
+    /// The generator's entry point, carrying the per-run map from an issued id to the full digest
+    /// behind it. A second signature landing on an id another one already holds widens that one
+    /// pattern to the full digest rather than colliding; passing null skips the check, which is
+    /// what a caller synthesizing a single pattern in isolation wants.
+    static ServiceJourneyPattern serviceJourneyPatternFromCalls(
+            ServiceJourney sj, GeneratorDefaults generatorDefaults, Map<String, String> fullById) {
         List<StopPointInJourneyPattern> piss = new ArrayList<>();
 
         // Because NeTEx only supports LineRef from a Route, and a ServiceJourneyPattern can
@@ -255,7 +270,18 @@ public final class EpipJourneys {
             lSsp.add(pointInPatternSignature(pis));
         }
 
-        String id = md5Head8(String.join(";", lSsp));
+        String full = md5Hex(String.join(";", lSsp));
+        String id = full.substring(0, ID_HEX);
+        if (fullById != null) {
+            // The map holds the digest of whichever signature claimed the id first, so every
+            // later journey on the widened pattern re-derives the same widened id.
+            String seen = fullById.putIfAbsent(id, full);
+            if (seen != null && !seen.equals(full)) {
+                Log.error("ServiceJourneyPattern id collision at %d hex digits on %s; "
+                        + "widening this pattern to the full digest %s", ID_HEX, id, full);
+                id = full;
+            }
+        }
 
         for (StopPointInJourneyPattern pis : piss) {
             pis.setId(NetexUtils.getId(generatorDefaults.codespace(), StopPointInJourneyPattern.class,
@@ -464,6 +490,9 @@ public final class EpipJourneys {
                        Set<String> uicOperatingPeriodsIds,
                        Set<String> dayTypeAssignmentsIds,
                        Map<String, JAXBElement<? extends VehicleTypeRefStructure>> vehicleTypes,
+                       // Issued synthesized-pattern id to the full md5 behind it; the collision
+                       // check in serviceJourneyPatternFromCalls.
+                       Map<String, String> sjpFullHash,
                        Dropped dropped) {}
 
     /// Serial only. Per journey, a four-way dispatch:
@@ -490,7 +519,7 @@ public final class EpipJourneys {
             Store dbRead, Txn txn, GeneratorDefaults generatorDefaults, Dropped dropped) {
         Ctx ctx = new Ctx(dbRead, txn, generatorDefaults, buildJourneyIndexes(dbRead, txn),
                 new HashSet<>(), new HashSet<>(), new HashSet<>(), new HashSet<>(), new HashSet<>(),
-                new HashMap<>(), dropped);
+                new HashMap<>(), new HashMap<>(), dropped);
 
         Log.info("Service journeys for now ");
 
@@ -563,7 +592,8 @@ public final class EpipJourneys {
             if (sj.getJourneyPatternRef() != null) {
                 // keep the existing ref
             } else {
-                serviceJourneyPattern = serviceJourneyPatternFromCalls(sj, ctx.generatorDefaults());
+                serviceJourneyPattern =
+                        serviceJourneyPatternFromCalls(sj, ctx.generatorDefaults(), ctx.sjpFullHash());
                 sj.setJourneyPatternRef(FACTORY.createServiceJourneyPatternRef(
                         (ServiceJourneyPatternRefStructure) NetexUtils.getRef(serviceJourneyPattern)));
             }
@@ -836,12 +866,13 @@ public final class EpipJourneys {
         };
     }
 
-    /// The first 8 hex digits of the MD5 of the UTF-8 bytes — lowercase, first 4 bytes.
-    private static String md5Head8(String input) {
+    /// The MD5 of the UTF-8 bytes, all 32 hex digits, lowercase. Callers truncate to [#ID_HEX] and
+    /// keep the untruncated digest to tell a collision from the same pattern seen twice.
+    private static String md5Hex(String input) {
         try {
             byte[] digest = MessageDigest.getInstance("MD5").digest(input.getBytes(StandardCharsets.UTF_8));
-            StringBuilder hex = new StringBuilder(8);
-            for (int i = 0; i < 4; i++) hex.append(String.format("%02x", digest[i]));
+            StringBuilder hex = new StringBuilder(2 * digest.length);
+            for (byte b : digest) hex.append(String.format("%02x", b));
             return hex.toString();
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);

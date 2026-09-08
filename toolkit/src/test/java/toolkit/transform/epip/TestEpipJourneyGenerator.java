@@ -144,14 +144,14 @@ public class TestEpipJourneyGenerator {
     ///
     /// The signatures hashed. A line wrap inside these quoted transcriptions stands for exactly one
     /// space (sig2 wraps after "lang=None," — the true string continues " text_id_type=...";
-    /// joining the lines without that space rederives 5dcf3d17, not the asserted hash):
+    /// joining the lines without that space rederives 5dcf3d17add71818, not the asserted hash):
     ///
     ///     'ssp1|1|StopUseEnumeration.ACCESS|True||'
     ///     "ssp2|2|StopUseEnumeration.NO_BOARDING_OR_ALIGHTING|False|(MultilingualString(lang=None,
     ///      text_id_type=None, content=['Bolzano/Bozen']), None)|not1"
     ///
-    /// and md5(';'.join(['line1', 'DirectionTypeEnumeration.OUTBOUND', sig1, sig2]))[0:8] =
-    /// "3b4597d7". The direction component hashed is the enum repr
+    /// and md5(';'.join(['line1', 'DirectionTypeEnumeration.OUTBOUND', sig1, sig2]))[0:16] =
+    /// "3b4597d7c4bc884e". The direction component hashed is the enum repr
     /// "DirectionTypeEnumeration.OUTBOUND", not the XML token 'outbound'.
     @Test
     void testMd5SignatureIsStable() {
@@ -213,7 +213,7 @@ public class TestEpipJourneyGenerator {
 
         ServiceJourneyPattern sjp = EpipJourneys.serviceJourneyPatternFromCalls(sj, GeneratorDefaults.TEST);
 
-        Check.equals("test:ServiceJourneyPattern:3b4597d7", sjp.getId(),
+        Check.equals("test:ServiceJourneyPattern:3b4597d7c4bc884e", sjp.getId(),
                 "pattern id must equal the md5 of the signature bytes");
         Check.equals("1", sjp.getVersion(), "pattern version is the journey's");
 
@@ -222,14 +222,14 @@ public class TestEpipJourneyGenerator {
         Check.equals(2, points.size(), "two projected points");
         StopPointInJourneyPattern p1 = (StopPointInJourneyPattern) points.get(0);
         StopPointInJourneyPattern p2 = (StopPointInJourneyPattern) points.get(1);
-        Check.equals("test:StopPointInJourneyPattern:3b4597d7-1", p1.getId(), "point 1 id from hash-order");
-        Check.equals("test:StopPointInJourneyPattern:3b4597d7-2", p2.getId(), "point 2 id from hash-order");
+        Check.equals("test:StopPointInJourneyPattern:3b4597d7c4bc884e-1", p1.getId(), "point 1 id from hash-order");
+        Check.equals("test:StopPointInJourneyPattern:3b4597d7c4bc884e-2", p2.getId(), "point 2 id from hash-order");
 
         // The projected NoticeAssignment is renumbered from the pattern identity and its
         // journey-calendar validity conditions are cleared.
         NoticeAssignment projected = (NoticeAssignment) ((JAXBElement<?>) p2.getNoticeAssignments()
                 .getNoticeAssignment_OrNoticeAssignmentView().get(0)).getValue();
-        Check.equals("test:NoticeAssignment:3b4597d7-2-1", projected.getId(),
+        Check.equals("test:NoticeAssignment:3b4597d7c4bc884e-2-1", projected.getId(),
                 "notice assignment renumbered from the pattern identity");
         Check.isNull(projected.getValidityConditions(), "journey validity conditions cleared");
         Check.that(projected.getValidBetween().isEmpty(), "journey validBetween cleared");
@@ -246,7 +246,8 @@ public class TestEpipJourneyGenerator {
     ///      content=[\'A\xa0B<bsu>200bC\x85D\x1bE<bsU>000e0041F<U+1F68C literal>\']),
     ///      MultilingualString(lang=None, text_id_type=None, content=["it\'s\xa0ok"]))|'
     ///
-    /// with direction None -> 'None'; md5(';'.join(['line2', 'None', sig]))[0:8] = "f079c9aa".
+    /// with direction None -> 'None'; md5(';'.join(['line2', 'None', sig]))[0:16] =
+    /// "f079c9aa130ace35".
     @Test
     void testMd5SignatureNonPrintableRepr() {
         ServiceJourney sj = new ServiceJourney();
@@ -282,10 +283,10 @@ public class TestEpipJourneyGenerator {
 
         ServiceJourneyPattern sjp = EpipJourneys.serviceJourneyPatternFromCalls(sj, GeneratorDefaults.TEST);
 
-        Check.equals("test:ServiceJourneyPattern:f079c9aa", sjp.getId(),
+        Check.equals("test:ServiceJourneyPattern:f079c9aa130ace35", sjp.getId(),
                 "pattern id must equal the md5 over the escaped-repr signature bytes");
         StopPointInJourneyPattern p1 = (StopPointInJourneyPattern) sjp.getPointsInSequence()
                 .getPointInJourneyPatternOrStopPointInJourneyPatternOrTimingPointInJourneyPattern().get(0);
-        Check.equals("test:StopPointInJourneyPattern:f079c9aa-1", p1.getId(), "point id from hash-order");
+        Check.equals("test:StopPointInJourneyPattern:f079c9aa130ace35-1", p1.getId(), "point id from hash-order");
     }
 }
