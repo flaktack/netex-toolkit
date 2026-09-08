@@ -336,10 +336,11 @@ public final class EpipInterchange {
     /// pattern. When the referenced SSP is absent from the journey's pattern but the pattern has
     /// exactly one stop assigned to the same StopPlace, rewrite the ref to that stop's SSP; a
     /// cross-border interchange with one side off-pattern is re-anchored at the valid endpoint's
-    /// station (or, failing that, both endpoints at the feeder leg's last shared station);
-    /// anything else is left untouched. Must run after the journey transform, when every journey
-    /// carries a pattern. Yields only the changed interchanges; the summary log line fires on
-    /// exhaustion.
+    /// station (or, failing that, both endpoints at the feeder leg's last shared station); a side
+    /// still off-pattern with several stops at the station is resolved by which leg it is, the
+    /// feeder taking the last call and the distributor the first; anything else is left untouched.
+    /// Must run after the journey transform, when every journey carries a pattern. Yields only the
+    /// changed interchanges; the summary log line fires on exhaustion.
     public static Iterator<Object> epipRepairInterchangePoints(
             Store dbRead, Txn txn, GeneratorDefaults generatorDefaults) {
         return new Iterator<>() {
@@ -348,7 +349,7 @@ public final class EpipInterchange {
             // Per-iterator: neither a StAX factory nor a JAXB unmarshaller is thread-safe.
             final FragmentPeek peek = new FragmentPeek();
             final Map<String, Map<String, ScheduledStopPointRefStructure>> patCache = new HashMap<>();
-            long repaired, handover, unrepairable, unresolved;
+            long repaired, handover, disambiguated, unrepairable, unresolved;
             Iterator<Object> sjis;
             Object ready;
             boolean logged;
@@ -426,6 +427,26 @@ public final class EpipInterchange {
                 return patCache.get(patId);
             }
 
+            /// Resolve a side the same-station remap left off-pattern because the journey calls
+            /// that station more than once. The Swiss JourneyMeeting carries a single
+            /// AtStopPointRef for both legs, so a turnback yields two calls at one station and the
+            /// side decides which: the feeder's leg ends there, the distributor's leg begins there.
+            /// Sides with no candidate at all are left untouched.
+            private boolean disambiguateRepeatedCalls(ServiceJourneyInterchange sji,
+                    List<String> offSides,
+                    Map<String, List<ScheduledStopPointRefStructure>> offCands) {
+                boolean any = false;
+                for (String side : offSides) {
+                    List<ScheduledStopPointRefStructure> cands = offCands.get(side);
+                    if (cands == null) continue;
+                    setPoint(sji, side,
+                            side.equals("from") ? cands.get(cands.size() - 1) : cands.get(0));
+                    disambiguated++;
+                    any = true;
+                }
+                return any;
+            }
+
             private void pump() {
                 if (sjis == null) init();
                 while (ready == null && sjis.hasNext()) {
@@ -440,6 +461,9 @@ public final class EpipInterchange {
 
                     boolean changed = false;
                     List<String> offSides = new ArrayList<>();
+                    // The same-station stops of an off side, kept for the turnback disambiguation
+                    // below; absent for a side whose station the pattern does not serve at all.
+                    Map<String, List<ScheduledStopPointRefStructure>> offCands = new HashMap<>();
                     for (String side : new String[] {"from", "to"}) {
                         boolean isFrom = side.equals("from");
                         ScheduledStopPointRefStructure point = isFrom ? sji.getFromPointRef() : sji.getToPointRef();
@@ -463,6 +487,7 @@ public final class EpipInterchange {
                             changed = true;
                         } else {
                             offSides.add(side);
+                            if (!candidates.isEmpty()) offCands.put(side, candidates);
                         }
                     }
 
@@ -518,12 +543,15 @@ public final class EpipInterchange {
                                 setPoint(sji, "to", toPts.get(sharedToRef));
                                 handover++;
                                 changed = true;
+                            } else if (disambiguateRepeatedCalls(sji, offSides, offCands)) {
+                                changed = true;
                             } else {
                                 unrepairable++;
                             }
                         }
                     } else if (!offSides.isEmpty()) {
-                        unrepairable++;
+                        if (disambiguateRepeatedCalls(sji, offSides, offCands)) changed = true;
+                        else unrepairable++;
                     }
 
                     if (changed) ready = sji;
@@ -532,10 +560,11 @@ public final class EpipInterchange {
                     logged = true;
                     Log.info("[epip] repair_interchange_points: rewrote %d point refs onto "
                             + "the referenced journey's pattern, re-anchored %d cross-border "
-                            + "interchanges at a shared handover station "
+                            + "interchanges at a shared handover station, resolved %d per side "
+                            + "at a station the journey calls twice "
                             + "(%d left as-is: no shared/same-station stop; "
                             + "%d journey/pattern refs unresolved)",
-                            repaired, handover, unrepairable, unresolved);
+                            repaired, handover, disambiguated, unrepairable, unresolved);
                 }
             }
 
