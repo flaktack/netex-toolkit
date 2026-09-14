@@ -123,6 +123,11 @@ public class TestEpipTransform {
               <AuthorityRef ref="auth1" version="1"/>
             </Line>
             <Line id="line2" version="1"><Name>L2</Name><OperatorRef ref="op2" version="1"/></Line>
+            <Line id="line3" version="1"><Name>L3</Name>
+              <AuthorityRef ref="auth1" version="1"/>
+              <OperatorRef ref="op1" version="1"/>
+              <additionalOperators><OperatorRef ref="op2" version="1"/></additionalOperators>
+            </Line>
           </lines>
           <scheduledStopPoints>
             <ScheduledStopPoint id="sspA" version="1"><Name>Alpha</Name></ScheduledStopPoint>
@@ -367,6 +372,19 @@ public class TestEpipTransform {
                     "the demoted ref keeps its OperatorRef element name");
             Check.equals("op1", additional.get(0).getValue().getRef(), "the demoted ref is op1");
             Check.equals("op2", lines.get("line2").getOperatorRef().getRef(), "line2 untouched");
+
+            // line3 brought its own additionalOperators. The demoted primary goes to the front of
+            // that list: nothing in the element distinguishes it from the refs the feed put there,
+            // so position is what a consumer restoring the primary reference reads.
+            Line line3 = lines.get("line3");
+            Check.isNull(line3.getOperatorRef(), "line3 OperatorRef demoted");
+            List<JAXBElement<? extends noi.netex.model.TransportOrganisationRefStructure>>
+                    line3Additional = line3.getAdditionalOperators().getTransportOrganisationRef();
+            Check.equals(2, line3Additional.size(), "the feed's own entry is kept, not replaced");
+            Check.equals("op1", line3Additional.get(0).getValue().getRef(),
+                    "the demoted primary is first");
+            Check.equals("op2", line3Additional.get(1).getValue().getRef(),
+                    "the feed's own additional operator follows it");
 
             // B locations + C ensemble: sspA had NO location — it inherited quay qA1's
             // projected-CRS location, which the ensemble then reprojected and quantized.

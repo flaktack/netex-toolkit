@@ -49,6 +49,7 @@ import toolkit.model.RecursiveAttributes;
 import toolkit.store.Store;
 import toolkit.store.Stores;
 import toolkit.store.Txn;
+import toolkit.transform.common.LineAuthorities;
 import toolkit.transform.epip.Backfills;
 import toolkit.transform.epip.Direction;
 import toolkit.transform.feedfix.AxisOrder;
@@ -181,8 +182,17 @@ public final class EpipToDb {
 
     // ---------------------------------------------------------------- phase B: the generators
 
-    /// The five EPIP generators, in order, each piped to insertAnyObjects.
+    /// The authority backfill, then the five EPIP generators, in order, each piped to
+    /// insertAnyObjects.
+    ///
+    /// The backfill has to stay ahead of the line generator: it gives a Line an authorityRef, and
+    /// the generator is what then demotes whichever organisation reference is not primary into
+    /// additionalOperators. Reversed, a backfilled Line reaches the export carrying both.
+    ///
+    /// The pass skips a Line that already has an authorityRef, so a pipeline that also runs it per
+    /// feed gets the same store either way.
     public static void runGenerators(Store db, Txn txn, GeneratorDefaults gd) {
+        db.insertAnyObjects(txn, LineAuthorities.backfillLineAuthorities(db, txn));
         db.insertAnyObjects(txn, EpipCalendar.epipServiceCalendar(db, txn, gd));
         db.insertAnyObjects(txn, EpipInterchange.epipServiceJourneyInterchange(db, txn, gd));
         db.insertAnyObjects(txn, EpipLines.epipLineGenerator(db, txn, gd));

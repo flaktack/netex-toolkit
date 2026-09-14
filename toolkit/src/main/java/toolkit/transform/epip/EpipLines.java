@@ -3,10 +3,10 @@ package toolkit.transform.epip;
 // The EPIP line generator.
 //
 // additionalOperators.transportOrganisationRef is the one choice-group site: a
-// List<JAXBElement<? extends TransportOrganisationRefStructure>> substitution-group list. The append
-// wraps the ref object in its typed ObjectFactory element (createOperatorRef / createAuthorityRef)
-// so the serialized element names are right; both OperatorRefStructure and AuthorityRef extend the
-// list's bound.
+// List<JAXBElement<? extends TransportOrganisationRefStructure>> substitution-group list. The
+// demotion wraps the ref object in its typed ObjectFactory element (createOperatorRef /
+// createAuthorityRef) so the serialized element names are right; both OperatorRefStructure and
+// AuthorityRef extend the list's bound.
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.model.Line;
@@ -25,10 +25,10 @@ public final class EpipLines {
     private EpipLines() {}
 
     /// Re-emit every Line with branding/type-of-service/type-of-product-category refs dropped; when
-    /// a Line carries BOTH an operatorRef and an authorityRef, one of them moves into
-    /// additionalOperators (appending when the list already exists, else creating it) and is
-    /// cleared — which one is moved is decided by [EpipConfig#AUTHORITY_REFERENCE]: `true` keeps the
-    /// Authority primary and demotes the Operator; `false` the reverse.
+    /// a Line carries both an operatorRef and an authorityRef, one of them moves to the front of
+    /// additionalOperators (creating the list when there is none) and is cleared — which one is
+    /// moved is decided by [EpipConfig#AUTHORITY_REFERENCE]: `true` keeps the Authority primary and
+    /// demotes the Operator; `false` the reverse.
     ///
     /// Yield order: each Line in class-map order, processed lazily as it is pulled. The switch is
     /// read statically.
@@ -56,22 +56,27 @@ public final class EpipLines {
         line.setTypeOfProductCategoryRef(null);
         if (line.getOperatorRef() != null && line.getAuthorityRef() != null) {
             if (EpipConfig.AUTHORITY_REFERENCE) {
-                appendAdditionalOperator(line, FACTORY.createOperatorRef(line.getOperatorRef()));
+                demoteAdditionalOperator(line, FACTORY.createOperatorRef(line.getOperatorRef()));
                 line.setOperatorRef(null);
             } else {
-                appendAdditionalOperator(line, FACTORY.createAuthorityRef(line.getAuthorityRef()));
+                demoteAdditionalOperator(line, FACTORY.createAuthorityRef(line.getAuthorityRef()));
                 line.setAuthorityRef(null);
             }
         }
     }
 
-    /// Append when additionalOperators exists AND its list is non-empty, else replace the container
-    /// with a fresh one holding just this ref.
-    private static void appendAdditionalOperator(
+    /// Put the demoted reference first when additionalOperators exists and its list is non-empty,
+    /// else replace the container with a fresh one holding just this ref.
+    ///
+    /// The list it joins may already hold references the feed put there — a line's co-operating
+    /// companies, which some profiles populate — and nothing in the element distinguishes those
+    /// from the one demoted here. Position is the only marker there is, so a consumer restoring
+    /// the primary reference reads the first entry of its kind.
+    private static void demoteAdditionalOperator(
             Line line, JAXBElement<? extends TransportOrganisationRefStructure> ref) {
         TransportOrganisationRefs_RelStructure ao = line.getAdditionalOperators();
         if (ao != null && !ao.getTransportOrganisationRef().isEmpty()) {
-            ao.getTransportOrganisationRef().add(ref);
+            ao.getTransportOrganisationRef().add(0, ref);
         } else {
             TransportOrganisationRefs_RelStructure fresh = new TransportOrganisationRefs_RelStructure();
             fresh.getTransportOrganisationRef().add(ref);

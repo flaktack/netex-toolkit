@@ -1,28 +1,19 @@
 package toolkit.transform.common;
 
-// The four transforms a pipeline driver composes, plus stopplaceCoord:
+// The three transforms a pipeline driver composes, plus stopplaceCoord:
 //
 //   synthesizeStopPlacesFromSsps        StopPlace + PassengerStopAssignment for every unassigned
 //                                       locatable ScheduledStopPoint (SSP-only feeds)
 //   backfillStopplaceCentroidsFromQuays lift a child Quay's Location onto a centroid-less
 //                                       StopPlace, so OTP does not see a station without
 //                                       coordinates
-//   backfillLineAuthorities             give every Line an OTP-resolvable authority
 //   planStopplaceMerge                  merge co-located same-name duplicate StopPlaces
 
-import noi.netex.model.Authority;
-import noi.netex.model.AuthorityRef;
-import noi.netex.model.AuthorityRefStructure;
 import noi.netex.model.EntityInVersionStructure;
-import noi.netex.model.GroupOfLines;
-import noi.netex.model.Line;
 import noi.netex.model.LocationStructure;
 import noi.netex.text.Mls;
 import noi.netex.model.MultilingualString;
-import noi.netex.model.Network;
 import noi.netex.model.ObjectFactory;
-import noi.netex.model.Operator;
-import noi.netex.model.OperatorRefStructure;
 import noi.netex.model.PassengerStopAssignment;
 import noi.netex.model.PrivateCodeStructure;
 import noi.netex.model.Quay;
@@ -33,7 +24,6 @@ import noi.netex.model.ScheduledStopPointRefStructure;
 import noi.netex.model.SimplePoint_VersionStructure;
 import noi.netex.model.StopPlace;
 import noi.netex.model.StopPlaceRefStructure;
-import noi.netex.model.TransportOrganisationRefStructure;
 import jakarta.xml.bind.JAXBElement;
 import toolkit.store.Store;
 import toolkit.store.Txn;
@@ -51,18 +41,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Predicate;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public final class ScheduledStopPoints {
 
     private static final ObjectFactory FACTORY = new ObjectFactory();
-
-    /// The `:Operator:` id token, matched case-insensitively. NeTEx ids are case-preserving and a
-    /// publisher may spell the class token in any case. The minted id always carries the canonical
-    /// token, the way [toolkit.model.NetexUtils#getId] spells one.
-    private static final Pattern OPERATOR_TOKEN =
-            Pattern.compile(":Operator:", Pattern.CASE_INSENSITIVE);
 
     /// Same-physical-stop duplicates sit within this radius.
     ///
@@ -482,111 +464,7 @@ public final class ScheduledStopPoints {
         return out;
     }
 
-    // ---------------------------------------------------------------- 3: line authorities
-
-    /// Repaired Networks, Lines given an authorityRef, then the synthesised Authorities.
-    public static List<Object> backfillLineAuthorities(Store db, Txn txn) {
-        Set<String> authorities = new LinkedHashSet<>();
-        for (Object o : db.iterOnlyObjects(txn, Authority.class)) {
-            String id = ((Authority) o).getId();
-            if (id != null && !id.isEmpty()) authorities.add(id);
-        }
-        // match on the last id segment (operator ids carry a company-code segment the authority
-        // id lacks); build order is the authorities iteration order, and a clash keeps the last
-        Map<String, String> authBySuffix = new LinkedHashMap<>();
-        for (String a : authorities) authBySuffix.put(lastSegment(a), a);
-        String soleAuthority = authorities.size() == 1 ? authorities.iterator().next() : null;
-        Map<String, Operator> operators = new LinkedHashMap<>();
-        for (Object o : db.iterOnlyObjects(txn, Operator.class)) {
-            Operator op = (Operator) o;
-            if (op.getId() != null && !op.getId().isEmpty()) operators.put(op.getId(), op);
-        }
-        Map<String, Authority> synthAuthority = new LinkedHashMap<>();
-        List<Object> out = new ArrayList<>();
-
-        Function<String, String> authorityForOperator = opId -> {
-            if (opId == null || opId.isEmpty()) return null;
-            Matcher token = OPERATOR_TOKEN.matcher(opId);
-            if (!token.find()) return null;
-            String existing = authBySuffix.get(lastSegment(opId));
-            if (existing != null) return existing;
-            // A store holding exactly one Authority offers no other candidate. Only the Network
-            // arm reaches this: the Line arm below consults soleAuthority before it calls in here.
-            if (soleAuthority != null) return soleAuthority;
-            String authId = token.replaceFirst(":Authority:");
-            if (!synthAuthority.containsKey(authId)) {
-                Operator op = operators.get(opId);
-                MultilingualString name = op != null
-                        ? (op.getName() != null ? op.getName() : op.getLegalName()) : null;
-                Authority a = new Authority();
-                a.setId(authId);
-                a.setVersion(op != null ? op.getVersion() : "1");
-                a.setName(name != null ? name : Mls.of(lastSegment(opId)));
-                synthAuthority.put(authId, a);
-            }
-            return authId;
-        };
-
-        long netFixed = 0;
-        Set<String> resolvableGroups = new HashSet<>();
-        for (Object o : db.iterOnlyObjects(txn, Network.class)) {
-            Network net = (Network) o;
-            JAXBElement<? extends TransportOrganisationRefStructure> orgEl = net.getTransportOrganisationRef();
-            TransportOrganisationRefStructure org = orgEl == null ? null : orgEl.getValue();
-            if (org instanceof OperatorRefStructure opRef) { // repair Operator-typed org ref
-                String authId = authorityForOperator.apply(opRef.getRef());
-                if (authId != null) {
-                    AuthorityRef ar = new AuthorityRef();
-                    ar.setRef(authId);
-                    ar.setVersion(opRef.getVersion());
-                    net.setTransportOrganisationRef(FACTORY.createAuthorityRef(ar));
-                    org = ar;
-                    out.add(net);
-                    netFixed++;
-                }
-            }
-            boolean hasAuth = org instanceof AuthorityRefStructure
-                    && org.getRef() != null && !org.getRef().isEmpty();
-            if (hasAuth && net.getGroupsOfLines() != null) {
-                for (GroupOfLines g : net.getGroupsOfLines().getGroupOfLines()) {
-                    if (g.getId() != null && !g.getId().isEmpty()) resolvableGroups.add(g.getId());
-                }
-            }
-        }
-
-        long lineFixed = 0;
-        for (Object o : db.iterOnlyObjects(txn, Line.class)) {
-            Line line = (Line) o;
-            var grp = line.getRepresentedByGroupRef();
-            if (line.getAuthorityRef() != null
-                    || (grp != null && resolvableGroups.contains(grp.getRef()))) {
-                continue; // already resolvable
-            }
-            String authId = soleAuthority != null ? soleAuthority
-                    : (line.getOperatorRef() != null
-                            ? authorityForOperator.apply(line.getOperatorRef().getRef()) : null);
-            if (authId == null) continue;
-            if (grp != null) line.setRepresentedByGroupRef(null); // dead end -> authorityRef wins
-            AuthorityRef ar = new AuthorityRef();
-            ar.setRef(authId);
-            ar.setVersion(line.getVersion());
-            line.setAuthorityRef(ar);
-            out.add(line);
-            lineFixed++;
-        }
-
-        out.addAll(synthAuthority.values());
-        Log.info("[backfill_line_authorities] gave %d Lines an authorityRef, repaired "
-                + "%d Network org refs (%d Authorities synthesised)", lineFixed, netFixed, synthAuthority.size());
-        return out;
-    }
-
-    private static String lastSegment(String id) {
-        int i = id.lastIndexOf(':');
-        return i < 0 ? id : id.substring(i + 1);
-    }
-
-    // ---------------------------------------------------------------- 4: duplicate-stop merge
+    // ---------------------------------------------------------------- 3: duplicate-stop merge
 
     /// Cluster StopPlaces that are both within the merge radius and share a normalised name, elect
     /// one survivor per cluster (most quays, tie-broken by id), move quays in, re-point PSAs.

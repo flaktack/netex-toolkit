@@ -2,8 +2,10 @@
 /// no other `toolkit.transform` package themselves. The surface a pipeline builds its own drivers
 /// on, reached through the jar, including from outside this repository.
 ///
-/// [toolkit.transform.common.ScheduledStopPoints] (ScheduledStopPoint synthesis, centroid and
-/// authority backfill, and the same-name stop-merge plan) and
+/// [toolkit.transform.common.ScheduledStopPoints] (ScheduledStopPoint synthesis, centroid backfill
+/// and the same-name stop-merge plan), [toolkit.transform.common.LineAuthorities] (the Line
+/// authority backfill, which synthesises an Authority from a Line's Operator where the feed
+/// publishes none) and
 /// [toolkit.transform.common.MpLoadRules] (the zip-loader dedup rules, shaped as `Store.MergeFn`
 /// policies: the `MergeFn` machinery is toolkit mechanism, and the rules themselves are policy that
 /// no single loader owns).
