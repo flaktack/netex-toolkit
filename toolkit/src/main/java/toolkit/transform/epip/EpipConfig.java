@@ -13,12 +13,6 @@ public final class EpipConfig {
     /// additionalOperators (the Authority stays primary); false moves the AUTHORITY instead.
     public static final boolean AUTHORITY_REFERENCE = true;
 
-    /// The PublicationDelivery `<ParticipantRef>`.
-    public static final String PARTICPANT_REF = "NDOV";
-
-    /// The PublicationDelivery description.
-    public static final String XML_DESCRIPTION = "Huge XML Serializer test";
-
     /// The xmlns of the generator-defaults Codespace ([GeneratorDefaults#PRODUCTION]).
     public static final String CODESPACE = "OPENOV";
 

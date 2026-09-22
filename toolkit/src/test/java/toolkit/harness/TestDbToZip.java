@@ -3,9 +3,9 @@ package toolkit.harness;
 // The EXPORT sandwich and the three pieces it is built from.
 //
 // COVERAGE GAP: nothing here asserts the EPIP export driver's entry names, ordering or colocation.
-// TestFragmentOrder reaches that driver for the child-order normalisation alone; equivalence of an
-// export across a refactor is checked out-of-band with tools/diff/export_zip.py, which is not the
-// same as a test.
+// The last two methods do run that driver, but only for the envelope values it decides in setup();
+// TestFragmentOrder reaches it for the child-order normalisation. Equivalence of an export across a
+// refactor is checked out-of-band with tools/diff/export_zip.py, which is not the same as a test.
 
 import org.junit.jupiter.api.Test;
 import toolkit.test.Check;
@@ -16,10 +16,14 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -37,8 +41,9 @@ public class TestDbToZip {
         </ServiceFrame>
         """;
 
-    /// Every entry carries the 1980 DOS epoch, not the clock. This is the ONLY reproducibility the
-    /// exporter offers: the entry CONTENT still holds a live PublicationTimestamp.
+    /// Every entry carries the 1980 DOS epoch, not the clock. That pins the METADATA; the content
+    /// is pinned separately, by supplying the envelope's two stamps — see
+    /// [#testPinnedEnvelopeStampsMakeTheExportByteReproducible].
     @Test
     void testEveryEntryCarriesThePinnedTimestamp() throws Exception {
         Path zip = Files.createTempFile("zipwriter-", ".zip");
@@ -136,6 +141,26 @@ public class TestDbToZip {
         // write no element at all rather than an empty one.
         Check.that(!xml.contains("<codespaces>"), "no codespaces element when there are none");
         Check.that(!xml.contains("<DefaultLocale>"), "no locale block when none was derived");
+    }
+
+    /// The two stamps are [NetexEnvelope.Options] values like the rest. A supplied timestamp is
+    /// emitted VERBATIM — the exporter must not reformat what the caller pinned — and a supplied
+    /// frame version reaches both the composite frame and `frameOpen`.
+    @Test
+    void testTheEnvelopeStampsComeFromItsOptionsWhenSupplied() throws Exception {
+        NetexEnvelope env = new NetexEnvelope(
+                new NetexEnvelope.Options("P", "d", "CF_ID", "test:CF_TYPE",
+                        LocalDateTime.of(2026, 1, 1, 0, 0, 0), "20260101"),
+                List.of(), null);
+        Check.equals("20260101", env.version(), "the frame version is the supplied one");
+
+        String xml = wrapped(env);
+        Check.that(xml.contains("<PublicationTimestamp>2026-01-01T00:00</PublicationTimestamp>"),
+                "the supplied timestamp is emitted verbatim: " + xml);
+        Check.that(xml.contains("<CompositeFrame id=\"CF_ID\" version=\"20260101\">"),
+                "the composite frame carries the supplied version");
+        Check.that(xml.contains("<ServiceFrame id=\"SF\" version=\"20260101\">"),
+                "frameOpen carries it too");
     }
 
     /// Codespaces and the derived locale are repeated verbatim in every entry, and the locale
@@ -359,5 +384,92 @@ public class TestDbToZip {
         Check.equals(3, a.intFlag("--level", 3), "the default when the flag is absent");
         // The third case — a non-integer value — prints the usage and exits 2, so it cannot be
         // asserted in-process; it is exercised from the command line instead.
+    }
+
+    /// `Args.dateTimeFlag`, the same three cases as [#testIntFlagReadsAValueOrItsDefault] — and the
+    /// same reason the third one is not here.
+    @Test
+    void testDateTimeFlagReadsAValueOrItsDefault() {
+        Args a = Args.parse(new String[] {"--publication-timestamp", "2026-01-01T00:00:00", "p"},
+                "test <x> [--publication-timestamp ISO]", "--publication-timestamp=", "--other=");
+        Check.equals(LocalDateTime.of(2026, 1, 1, 0, 0, 0),
+                a.dateTimeFlag("--publication-timestamp", null), "the given value");
+        Check.equals(null, a.dateTimeFlag("--other", null), "null default when the flag is absent");
+    }
+
+    // ------------------------------------------------------------ the EPIP envelope, end to end
+    // These run the REAL driver surface — DbToZip.driverMain over EpipDbToZip's own flags and
+    // setup — because the envelope values are decided in setup(), and a test that built the
+    // Options itself would not see a flag that setup forgot to read.
+
+    /// One EPIP export, driven exactly as `EpipDbToXml` drives it.
+    private static Path epipExport(TestStore ts, String name, String... envelopeArgs)
+            throws Exception {
+        Path db = ts.buildDbFile(FRAMES, name + ".lmdb");
+        Path out = ts.tempPath(name + ".zip");
+        List<String> args = new ArrayList<>(List.of(db.toString(), out.toString()));
+        args.addAll(List.of(envelopeArgs));
+        DbToZip.driverMain(EpipDbToZip.TAG, args.toArray(new String[0]),
+                EpipDbToZip.USAGE, EpipDbToZip.flags(), EpipDbToZip::setup);
+        return out;
+    }
+
+    /// Every `<PublicationTimestamp>` in a zip, deduplicated.
+    private static Set<String> timestamps(Path zip) throws Exception {
+        Set<String> found = new TreeSet<>();
+        try (ZipFile zf = new ZipFile(zip.toFile())) {
+            for (ZipEntry e : zf.stream().toList()) {
+                String s = new String(zf.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8);
+                int i = s.indexOf("<PublicationTimestamp>");
+                Check.that(i >= 0, e.getName() + " carries a PublicationTimestamp");
+                found.add(s.substring(i + "<PublicationTimestamp>".length(),
+                        s.indexOf("</PublicationTimestamp>", i)));
+            }
+        }
+        return found;
+    }
+
+    /// With no envelope flags the delivery names the toolkit that produced it and the export
+    /// profile that shaped it — NOT the Dutch NDOV sample the profile was first written against.
+    /// The absence half is the point: `NDOV` names a real and unrelated organisation, so a
+    /// consumer reading it would misattribute the data.
+    ///
+    /// And every entry of ONE export carries ONE timestamp. `open()` runs per entry, so a clock
+    /// read there gave each entry its own.
+    @Test
+    void testTheEpipEnvelopeDefaultsNameTheToolkitAndTheProfile(TestStore ts) throws Exception {
+        Path zip = epipExport(ts, "defaults");
+        int entries;
+        try (ZipFile zf = new ZipFile(zip.toFile())) {
+            entries = zf.size();
+            for (ZipEntry e : zf.stream().toList()) {
+                String s = new String(zf.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8);
+                Check.that(s.contains("<ParticipantRef>netex-toolkit</ParticipantRef>"),
+                        e.getName() + ": ParticipantRef defaults to the toolkit's name");
+                Check.that(s.contains("<Text>epip-db-to-xml</Text>"),
+                        e.getName() + ": the description defaults to EpipDbToZip.TAG");
+                Check.that(!s.contains("NDOV"), e.getName() + ": no NDOV anywhere");
+                Check.that(!s.contains("Huge XML Serializer"),
+                        e.getName() + ": no placeholder description anywhere");
+            }
+        }
+        Check.that(entries > 1, "more than one entry, so the next check is not vacuous");
+        Check.equals(1, timestamps(zip).size(),
+                "every entry of one export shares one timestamp, not one each");
+    }
+
+    /// Pin both stamps and two exports of one store are byte-identical. This is the whole point of
+    /// making them configurable: it turns the package doc's standing "not reproducible" caveat into
+    /// something a caller can switch off.
+    @Test
+    void testPinnedEnvelopeStampsMakeTheExportByteReproducible(TestStore ts) throws Exception {
+        String[] pinned = {"--publication-timestamp", "2026-01-01T00:00:00",
+                "--frame-version", "20260101"};
+        Path a = epipExport(ts, "repro-a", pinned);
+        Path b = epipExport(ts, "repro-b", pinned);
+        Check.that(Arrays.equals(Files.readAllBytes(a), Files.readAllBytes(b)),
+                "two exports of one store are byte-identical once both stamps are pinned");
+        Check.equals(Set.of("2026-01-01T00:00"), timestamps(a),
+                "and the pinned timestamp is what every entry carries, verbatim");
     }
 }

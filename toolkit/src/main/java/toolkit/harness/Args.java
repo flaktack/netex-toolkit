@@ -1,5 +1,7 @@
 package toolkit.harness;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -63,6 +65,20 @@ public final class Args {
             return Integer.parseInt(v);
         } catch (NumberFormatException e) {
             die(flag + " must be an integer, got " + v);
+            return defaultValue; // unreachable: die() exits
+        }
+    }
+
+    /// An ISO-8601 local date-time flag, or its default. As with [#intFlag], a value that does not
+    /// parse prints the usage and exits 2 rather than falling back — a caller that asks for a fixed
+    /// timestamp and gets the clock instead would not be able to tell.
+    public LocalDateTime dateTimeFlag(String flag, LocalDateTime defaultValue) {
+        String v = values.get(flag);
+        if (v == null) return defaultValue;
+        try {
+            return LocalDateTime.parse(v);
+        } catch (DateTimeParseException e) {
+            die(flag + " must be an ISO-8601 local date-time (2026-01-01T00:00:00), got " + v);
             return defaultValue; // unreachable: die() exits
         }
     }

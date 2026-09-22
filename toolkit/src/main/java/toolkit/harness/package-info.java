@@ -23,9 +23,11 @@
 /// [toolkit.harness.FrameWriter], which decompresses a stored row and hands the fragment to a
 /// caller-supplied hook that decides what is emitted.
 ///
-/// Pinned entry timestamps make export metadata comparable; they do not make the archive
-/// reproducible, because the exporter writes a wall clock into `<PublicationTimestamp>`. Compare
-/// exports with `tools/diff/export_zip.py`, which normalises exactly that field.
+/// Pinned entry timestamps make export metadata comparable. They make the archive reproducible only
+/// once the envelope's two clock reads are supplied too — `<PublicationTimestamp>` and the frame
+/// `version`, both [toolkit.harness.NetexEnvelope.Options] values. Left unset they come off the
+/// clock. Compare exports with `tools/diff/export_zip.py`, which normalises the timestamp field
+/// either way.
 ///
 /// [toolkit.harness.Args] is the only CLI parser in the tree: known flags, loud on anything else,
 /// exit 2.

@@ -14,10 +14,11 @@ import java.util.zip.ZipOutputStream;
 /// A zip an export writes entry by entry, with the entry metadata pinned and the byte/object totals
 /// kept. No NeTEx and no profile knowledge: it takes names and bytes.
 ///
-/// Pinning buys comparable metadata, not a reproducible archive. Every entry is stamped at the DOS
-/// epoch, so the headers carry no wall clock; the content still does, in each entry's
-/// `<PublicationTimestamp>`, and so therefore do the deflated bytes. Compare exports with
-/// `tools/diff/export_zip.py`, which normalises that field — never by hash.
+/// Pinning buys comparable metadata; a reproducible archive needs the content pinned too. Every
+/// entry is stamped at the DOS epoch, so the headers carry no wall clock. The content carries one
+/// only when the envelope is left to read it — see [NetexEnvelope] — and then so do the deflated
+/// bytes. Compare exports with `tools/diff/export_zip.py`, which normalises
+/// `<PublicationTimestamp>`; hash them only once that field is pinned.
 ///
 /// `setTimeLocal`, not `setTime`: the latter round-trips through a timezone, so the same instant
 /// lands on a different DOS field depending on where the exporter runs.

@@ -23,9 +23,10 @@ package toolkit.harness;
 // the whole group; an individual file's index is popped the moment that file is mapped.
 //
 // Entry order is g* < shared-*, and within a shard the numbered files precede gSS-shared.xml.
-// Entry metadata is pinned to the 1980 DOS epoch by [ZipWriter]; the
-// content is not reproducible, because every entry's <PublicationTimestamp> is a wall clock —
-// compare two exports with tools/diff/export_zip.py.
+// Entry metadata is pinned to the 1980 DOS epoch by [ZipWriter]. The content is reproducible only
+// when --publication-timestamp and --frame-version are both given; without them the envelope reads
+// the clock and two exports of one store differ in those two fields. tools/diff/export_zip.py
+// normalises <PublicationTimestamp>, so it compares either way.
 //
 // Stored values are already LZ4'd XML fragments, so emission is decompress + byte copy between
 // literal frame wrappers. shared-06 is the one exception: the closure decodes each
@@ -81,12 +82,15 @@ public final class EpipDbToZip {
 
     /// Named for the driver: it is what a user types.
     public static final String USAGE = "EpipDbToXml <db> <out.zip> [--shards N (>= 1)]"
-            + " [--journeys-per-file N] [--level N (0..9)] [--log-file F]";
+            + " [--journeys-per-file N] [--participant-ref S] [--description S]"
+            + " [--composite-frame-id S] [--publication-timestamp ISO] [--frame-version S]"
+            + " [--level N (0..9)] [--log-file F]";
 
-    /// The two flags the harness cannot know about; `--level` and `--log-file` come from
-    /// [DbToZip].
+    /// The flags the harness cannot know about; `--level` and `--log-file` come from [DbToZip].
     public static String[] flags() {
-        return new String[] {"--shards=", "--journeys-per-file="};
+        return new String[] {"--shards=", "--journeys-per-file=", "--participant-ref=",
+                "--description=", "--composite-frame-id=", "--publication-timestamp=",
+                "--frame-version="};
     }
 
     /// The profile's own options, read off the parsed [Args] before the store is opened — a
@@ -97,6 +101,14 @@ public final class EpipDbToZip {
     ///
     /// journeys-per-file is a bound rather than a target: only a single pattern with more journeys
     /// than the bound can overshoot it.
+    ///
+    /// The five envelope values are the publisher's, not the profile's, which is why they are flags
+    /// and not constants: an export labelled with this toolkit's own name is a default, not an
+    /// answer. `typeOfFrameRef` is NOT among them — it is what makes the document EPIP, so a flag
+    /// there would let a caller mislabel a document this profile did not produce.
+    ///
+    /// Supplying both `--publication-timestamp` and `--frame-version` makes the export
+    /// byte-reproducible; see [NetexEnvelope].
     public static DbToZip.ExportFn setup(Args a) {
         int shards = a.intFlag("--shards", 8);
         int journeysPerFile = a.intFlag("--journeys-per-file", 12_500);
@@ -104,7 +116,15 @@ public final class EpipDbToZip {
             System.err.println("usage: " + USAGE);
             System.exit(2);
         }
-        return (db, tx, zip) -> new EpipDbToZip(db, tx, zip).export(shards, journeysPerFile);
+        NetexEnvelope.Options envelope = new NetexEnvelope.Options(
+                a.get("--participant-ref", "netex-toolkit"),
+                a.get("--description", TAG),
+                a.get("--composite-frame-id", "EU_NETWORK_OFFER"),
+                "epip:EU_PI_NETWORK_OFFER",
+                a.dateTimeFlag("--publication-timestamp", null),
+                a.get("--frame-version", null));
+        return (db, tx, zip) ->
+                new EpipDbToZip(db, tx, zip, envelope).export(shards, journeysPerFile);
     }
 
     // ------------------------------------------------------------ class routing (simple names)
@@ -182,15 +202,11 @@ public final class EpipDbToZip {
             "ValueSet",
             "VehicleType");
 
-    /// The two strings the EPIP profile puts in the per-entry envelope. Everything else in the
-    /// wrapper is NeTEx-generic and lives in [NetexEnvelope].
-    private static final NetexEnvelope.Options ENVELOPE = new NetexEnvelope.Options(
-            "NDOV", "Huge XML Serializer test", "EU_NETWORK_OFFER", "epip:EU_PI_NETWORK_OFFER");
-
     // ------------------------------------------------------------ state
     private final Store store;
     private final Txn tx;
     private final ZipWriter out;
+    private final NetexEnvelope.Options envelope; // the per-entry wrapper's values, from setup
     private final FragmentCodec codec = new FragmentCodec();
     private NetexEnvelope env; // built in export(), once the codespaces and the locale are known
     private FrameWriter fw;    // built with env in export(); it repeats the envelope per entry
@@ -201,10 +217,11 @@ public final class EpipDbToZip {
     private Class<?> serviceLinkClass;
     private Class<?> interchangeClass;
 
-    private EpipDbToZip(Store store, Txn tx, ZipWriter out) {
+    private EpipDbToZip(Store store, Txn tx, ZipWriter out, NetexEnvelope.Options envelope) {
         this.store = store;
         this.tx = tx;
         this.out = out;
+        this.envelope = envelope;
     }
 
     // ------------------------------------------------------------ export driver
@@ -217,7 +234,7 @@ public final class EpipDbToZip {
             }
         }
         defaultLocale = deriveDefaultLocale(); // one envelope-level pass, shared by every entry
-        env = new NetexEnvelope(ENVELOPE, codespaces, defaultLocale);
+        env = new NetexEnvelope(envelope, codespaces, defaultLocale);
         fw = new FrameWriter(store, tx, out, env, FragmentOrder::normalise);
 
         journeyGroups(shards, journeysPerFile);
