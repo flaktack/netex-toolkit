@@ -27,6 +27,7 @@ import noi.netex.model.ServiceJourney;
 import noi.netex.model.ServiceJourneyPattern;
 import noi.netex.model.ServiceJourneyPatternRefStructure;
 import noi.netex.model.StopPlace;
+import noi.netex.model.TransportOrganisationRefs_RelStructure;
 import noi.netex.model.VehicleType;
 import toolkit.harness.Ensemble;
 import toolkit.store.Store;
@@ -44,6 +45,24 @@ public final class Backfills {
 
     // ------------------------------------------------- serviceJourneyOperatorOp
 
+    /// A line's operator: its own ref, else the first OperatorRef in additionalOperators.
+    ///
+    /// `EpipLines` runs before this pass and moves the non-primary organisation to the front of
+    /// that list, position being the only thing that separates it from refs a feed put there
+    /// itself, so once a line carries an authorityRef its operator is reachable only there.
+    /// Reading the own ref alone maps every such line to null, and every journey on it then
+    /// loses the operator its line names.
+    private static OperatorRefStructure operatorOf(
+            OperatorRefStructure own, TransportOrganisationRefs_RelStructure additional) {
+        if (own != null) return own;
+        if (additional == null) return null;
+        for (JAXBElement<? extends noi.netex.model.TransportOrganisationRefStructure> el
+                : additional.getTransportOrganisationRef()) {
+            if (el.getValue() instanceof OperatorRefStructure op) return op;
+        }
+        return null;
+    }
+
     /// Query phase: build the line/route/pattern -&gt; operator indexes once, and return the
     /// per-object operation (ServiceJourney -&gt; changed?). Everything the operation needs is ready
     /// before the first object is processed.
@@ -55,11 +74,13 @@ public final class Backfills {
         Map<String, OperatorRefStructure> lineOperatorRef = new HashMap<>();
         for (Object o : dbRead.iterOnlyObjects(txn, Line.class)) {
             Line line = (Line) o;
-            lineOperatorRef.put(line.getId(), line.getOperatorRef());
+            lineOperatorRef.put(line.getId(), operatorOf(line.getOperatorRef(),
+                    line.getAdditionalOperators()));
         }
         for (Object o : dbRead.iterOnlyObjects(txn, FlexibleLine.class)) {
             FlexibleLine fl = (FlexibleLine) o;
-            lineOperatorRef.put(fl.getId(), fl.getOperatorRef());
+            lineOperatorRef.put(fl.getId(), operatorOf(fl.getOperatorRef(),
+                    fl.getAdditionalOperators()));
         }
 
         Map<String, OperatorRefStructure> routeOperatorRef = new HashMap<>();

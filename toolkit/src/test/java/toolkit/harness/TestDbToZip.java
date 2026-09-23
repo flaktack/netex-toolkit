@@ -24,6 +24,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -456,6 +458,52 @@ public class TestDbToZip {
         Check.that(entries > 1, "more than one entry, so the next check is not vacuous");
         Check.equals(1, timestamps(zip).size(),
                 "every entry of one export shares one timestamp, not one each");
+    }
+
+    /// Every frame id carries the profile's frame-id structure — codespace, country, local code,
+    /// `FrameType_EPIP_TYPE`, topic — which the profile makes mandatory, unlike the structure for
+    /// frame contents. Country and local are empty here and keep their placeholder colons.
+    ///
+    /// The topic is bounded and sanitised: a shard reaches the minter as `00_0001`, and an
+    /// underscore is not among the characters the profile allows.
+    @Test
+    void testEveryFrameIdCarriesTheProfilesFrameIdStructure(TestStore ts) throws Exception {
+        Path zip = epipExport(ts, "frameids");
+        Set<String> ids = new TreeSet<>();
+        try (ZipFile zf = new ZipFile(zip.toFile())) {
+            for (ZipEntry e : zf.stream().toList()) {
+                String s = new String(zf.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8);
+                Matcher m = Pattern.compile(
+                        "<(CompositeFrame|ResourceFrame|SiteFrame|ServiceFrame|TimetableFrame"
+                                + "|ServiceCalendarFrame)\\b[^>]*\\bid=\"([^\"]*)\"").matcher(s);
+                while (m.find()) ids.add(m.group(2));
+            }
+        }
+        Check.that(!ids.isEmpty(), "the export has frames to check");
+        Pattern shape = Pattern.compile("^epd:[A-Z]*:[^:]*:[A-Za-z]+_EU_PI_[A-Z_]+:[A-Za-z0-9-]{1,15}$");
+        for (String id : ids) {
+            Check.that(shape.matcher(id).matches(), "frame id is structured: " + id);
+            Check.that(!id.contains("_EU_PI_NETWORK_00"), "the shard topic is not underscored: " + id);
+        }
+        Check.that(ids.contains("epd:::CompositeFrame_EU_PI_NETWORK_OFFER:offer"),
+                "the composite frame is minted too, not left as a bare literal: " + ids);
+        Check.that(ids.contains("epd:::ResourceFrame_EU_PI_COMMON:common"),
+                "and the resource frame's EPIP type is EU_PI_COMMON: " + ids);
+    }
+
+    /// The EPIP data codespace has to be declared: an id carrying a prefix the document never
+    /// defines is what the profile forbids, and the frame ids above all carry it.
+    @Test
+    void testTheEpipCodespaceIsDeclaredInEveryEntry(TestStore ts) throws Exception {
+        Path zip = epipExport(ts, "codespace");
+        try (ZipFile zf = new ZipFile(zip.toFile())) {
+            for (ZipEntry e : zf.stream().toList()) {
+                String s = new String(zf.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8);
+                Check.that(s.contains("<Codespace id=\"epip_data\">"),
+                        e.getName() + " declares the codespace its frame ids use");
+                Check.that(s.contains("<Xmlns>epd</Xmlns>"), e.getName() + " names the prefix");
+            }
+        }
     }
 
     /// Pin both stamps and two exports of one store are byte-identical. This is the whole point of

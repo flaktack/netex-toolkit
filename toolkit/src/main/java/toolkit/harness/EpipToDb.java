@@ -48,6 +48,7 @@ import noi.netex.model.VehicleType;
 import toolkit.geo.Projection;
 import toolkit.model.GeoClasses;
 import toolkit.model.ModelRegistry;
+import toolkit.model.NetexUtils;
 import toolkit.model.RecursiveAttributes;
 import toolkit.store.Store;
 import toolkit.store.Stores;
@@ -76,6 +77,13 @@ public final class EpipToDb {
     /// resolve: the clone is byte-faithful, resolved state included), then run the in-place
     /// transformation there.
     public static void cloneAndTransform(Path source, Path target, String format) throws Exception {
+        cloneAndTransform(source, target, format, GeneratorDefaults.PRODUCTION);
+    }
+
+    /// [#cloneAndTransform] over a caller-chosen codespace, which is the only part of the defaults
+    /// a driver has reason to set: it decides the prefix of every id no source could supply.
+    public static void cloneAndTransform(Path source, Path target, String format,
+                                         GeneratorDefaults gd) throws Exception {
         long t0 = System.nanoTime();
         try (Store src = Stores.open(source, true);
              Store dst = Stores.create(target, format)) {
@@ -85,7 +93,7 @@ public final class EpipToDb {
             }
         }
         Log.info("[epip] clone %s -> %s done (%.1f s)", source, target, Log.secs(t0));
-        inPlace(target, GeneratorDefaults.PRODUCTION);
+        inPlace(target, gd);
         Log.info("[epip_db_to_db] done (%.1f s)", Log.secs(t0));
         Log.info("[epip] jvm peak rss %d kB", Log.peakRssKb());
         toolkit.codec.BindEvents.report("epip-db-to-db");
@@ -184,7 +192,11 @@ public final class EpipToDb {
     /// The pass skips a Line that already has an authorityRef, so a pipeline that also runs it per
     /// feed gets the same store either way.
     public static void runGenerators(Store db, Txn txn, GeneratorDefaults gd) {
-        db.insertAnyObjects(txn, LineAuthorities.backfillLineAuthorities(db, txn));
+        // The codespace the fallback ids carry, as a row, so the export declares it the way it
+        // declares a feed's own. Its id is fixed, so a second run replaces this rather than adding
+        // a second: an id-carrying object is keyed on (id, version, class).
+        db.insertAnyObjects(txn, List.<Object>of(gd.codespace()).iterator());
+        db.insertAnyObjects(txn, LineAuthorities.backfillLineAuthorities(db, txn, gd.codespace()));
         db.insertAnyObjects(txn, EpipCalendar.epipServiceCalendar(db, txn, gd));
         db.insertAnyObjects(txn, EpipInterchange.epipServiceJourneyInterchange(db, txn, gd));
         db.insertAnyObjects(txn, EpipLines.epipLineGenerator(db, txn, gd));
@@ -248,6 +260,9 @@ public final class EpipToDb {
         // knows the reprojection is finished.
         Projection.reportDropped("epip-db-to-db");
         AxisOrder.reportSwapped("epip-db-to-db");
+        // Phase B's generators derive most of their ids; this is the first point after all of them
+        // and the Direction inference above, so it is where the count is whole.
+        NetexUtils.reportIdFallbacks("epip-db-to-db");
     }
 
     /// Add the after-midnight re-encoding to an ensemble's operations, one per journey class.

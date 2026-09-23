@@ -4,6 +4,7 @@
 import toolkit.harness.Args;
 import toolkit.harness.EpipToDb;
 import toolkit.store.Stores;
+import toolkit.transform.epip.GeneratorDefaults;
 import toolkit.util.Log;
 
 import java.nio.file.Path;
@@ -12,8 +13,8 @@ public class EpipDbToDb {
 
     public static void main(String[] args) {
         Args a = Args.parse(args,
-                "EpipDbToDb <source_db> <target_db> [--log-file F] [--format v2]",
-                "--log-file=", "--format=").expectPositional(2);
+                "EpipDbToDb <source_db> <target_db> [--log-file F] [--format v2] [--codespace S]",
+                "--log-file=", "--format=", "--codespace=").expectPositional(2);
         String logFile = a.get("--log-file", null);
         if (logFile != null) Log.toFile(Path.of(logFile));
         Path source = Path.of(a.positional().get(0));
@@ -39,7 +40,10 @@ public class EpipDbToDb {
             System.exit(1);
         }
         try {
-            EpipToDb.cloneAndTransform(source, target, fmt);
+            // --codespace decides the prefix of every id no source object could supply; unset, the
+            // EPIP data codespace the profile reserves for exactly that.
+            EpipToDb.cloneAndTransform(source, target, fmt,
+                    GeneratorDefaults.withCodespace(a.get("--codespace", null)));
         } catch (Exception e) {
             Log.error("%s", Log.trace(e));
             throw new RuntimeException(e);

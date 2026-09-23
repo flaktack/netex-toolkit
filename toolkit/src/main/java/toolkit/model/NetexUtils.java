@@ -7,6 +7,7 @@ package toolkit.model;
 import noi.netex.model.Codespace;
 import noi.netex.model.OrderedVersionOfObjectRefStructure;
 import noi.netex.model.VersionOfObjectRefStructure;
+import toolkit.util.Strictness;
 
 import java.lang.reflect.Method;
 import java.math.BigInteger;
@@ -14,8 +15,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.LongAdder;
 
 public final class NetexUtils {
 
@@ -29,6 +32,122 @@ public final class NetexUtils {
     /// `"IT-x-1"`; the class name is the model class's simple name, not its binary name.
     public static String getId(Codespace codespace, Class<?> clazz, String id) {
         return codespace.getXmlns() + ":" + clazz.getSimpleName() + ":" + id.replace(":", "-");
+    }
+
+    // ------------------------------------------------------------- deriving an id from its source
+    //
+    // A generated object's id takes the id grammar of the object it was generated from, so a
+    // document does not carry one shape for the objects a feed published and another for the ones
+    // the toolkit minted. The feed decides the structure; this only swaps the class token.
+    //
+    // [#deriveId] always answers, so no caller has to invent a miss path. Two earlier sites did
+    // invent one and disagreed: a blind String.replace cannot fail, so a token it does not find
+    // leaves the source's own id on a different class, while returning null declines to mint at
+    // all. Both are silent.
+
+    /// How many ids [#deriveId] composed from the fallback codespace because the source carried no
+    /// class token.
+    private static final LongAdder ID_FALLBACKS = new LongAdder();
+
+    /// Report the count under the `idFallback` concern and reset it, returning what was reported.
+    /// Idempotent: a second call after a first reports zero, which [Strictness#require] keeps
+    /// silent.
+    ///
+    /// Called by the driver, the way `toolkit.geo.Projection.reportDropped` is: this class owns no
+    /// pass and cannot know when one has finished.
+    public static long reportIdFallbacks(String tag) {
+        long n = ID_FALLBACKS.sumThenReset();
+        Strictness.require(Strictness.ID_FALLBACK, "idFallback", n, tag,
+                "ids were composed from the configured codespace because the object they were "
+                        + "generated from carried no class token to derive from");
+        return n;
+    }
+
+    /// The start of the first token naming a NeTEx class, or -1.
+    ///
+    /// The first such token, because [object type] precedes [technical identifier] in an EPIP id,
+    /// so a technical id that happens to spell a class name cannot win. Never index 0: an id
+    /// opening with its class token carries no codespace, and propagating that would spread an id
+    /// the profile does not allow.
+    ///
+    /// A source id that is ITSELF derived carries two class tokens, and the first is the one this
+    /// finds -- so deriving from `<cs>:ServiceJourney:<tech>:DayType:<tech>` cuts at ServiceJourney
+    /// and yields `<cs>:<Target>:<tech>` rather than extending the chain. That is the intended
+    /// outcome and the reason the first token wins: taking the last instead would grow an id by one
+    /// class token per generation. What it costs is that the prefix names the object the chain
+    /// started from, not the object in hand. Uniqueness is unaffected, because it rests on the
+    /// technical id the caller supplies.
+    private static int classTokenStart(String id) {
+        if (id == null || id.isEmpty()) return -1;
+        for (int from = id.indexOf(':') + 1; from > 0; ) {
+            int end = id.indexOf(':', from);
+            int stop = end < 0 ? id.length() : end;
+            if (stop > from
+                    && ModelRegistry.classForNameIgnoreCase(id.substring(from, stop)) != null) {
+                return from;
+            }
+            if (end < 0) return -1;
+            from = end + 1;
+        }
+        return -1;
+    }
+
+    /// The id up to its class token, or null where it carries none.
+    ///
+    /// The part a publisher's own objects share: an id is `<codespace>:<Class>:<identifier>`, so
+    /// what precedes the class token is what a Line, its Operator and its Authority have in common
+    /// when one publisher issued all three. That makes it a join key, which is the only reason the
+    /// token's POSITION matters — the class of the object being read already says which token it
+    /// is, but not where in the id it sits, nor whether it is there at all.
+    public static String codespacePrefix(String id) {
+        int start = classTokenStart(id);
+        return start < 0 ? null : id.substring(0, start);
+    }
+
+    /// The id with its class token replaced by `target`'s simple name, or null where it carries no
+    /// token naming a NeTEx class. Everything around the token is kept, so the codespace, the
+    /// country and local codes and any trailing segments survive.
+    ///
+    /// The primitive. A caller that mints an object wants [#deriveId]; this is for one that needs
+    /// to know the id carried no token — a lookup keyed on the part ahead of it, say.
+    public static String swapClassToken(String id, Class<?> target) {
+        int start = classTokenStart(id);
+        if (start < 0) return null;
+        int end = id.indexOf(':', start);
+        return id.substring(0, start) + target.getSimpleName()
+                + (end < 0 ? "" : id.substring(end));
+    }
+
+    /// `sourceId`'s grammar with its class token swapped for `target` and everything after it
+    /// replaced by `technicalId`; [#getId] over `fallback` where `sourceId` carries no class token.
+    ///
+    /// The segments after the class token are replaced rather than preserved: in an EPIP id they
+    /// are the technical identifier and an optional id-provider, and which slot a feed has put
+    /// which value in cannot be read off the id. Dropping them keeps the shape without guessing
+    /// their meaning, and costs no uniqueness — `technicalId` is a digest.
+    public static String deriveId(String sourceId, Class<?> target, String technicalId,
+                                  Codespace fallback) {
+        int start = classTokenStart(sourceId);
+        if (start < 0) {
+            ID_FALLBACKS.increment();
+            return getId(fallback, target, technicalId);
+        }
+        return sourceId.substring(0, start) + target.getSimpleName() + ":"
+                + technicalId.replace(":", "-");
+    }
+
+    /// `sourceId` with its class token swapped for `target`, every segment around it kept;
+    /// [#getId] over `fallback` where it carries no class token.
+    ///
+    /// For a generated object that stands one-to-one for its source and so wants its identity
+    /// rather than a new technical id — a UIC OPERATING PERIOD for a DAY TYPE, an AUTHORITY for an
+    /// OPERATOR. Two such objects of the same class from one source would collide, which is what
+    /// makes this the wrong overload for anything minted per-signature.
+    public static String deriveId(String sourceId, Class<?> target, Codespace fallback) {
+        String swapped = swapClassToken(sourceId, target);
+        if (swapped != null) return swapped;
+        ID_FALLBACKS.increment();
+        return getId(fallback, target, sourceId == null ? target.getSimpleName() : sourceId);
     }
 
     // ------------------------------------------------------------- getRef / getFakeRef

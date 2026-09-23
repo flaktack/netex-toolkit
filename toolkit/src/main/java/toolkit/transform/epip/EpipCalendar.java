@@ -293,8 +293,8 @@ public final class EpipCalendar {
                     }
 
                     UicOperatingPeriod uicOperatingPeriod = new UicOperatingPeriod();
-                    uicOperatingPeriod.setId(
-                            dayTypeRef.getRef().replace(":DayType:", ":UicOperatingPeriod:"));
+                    uicOperatingPeriod.setId(NetexUtils.deriveId(dayTypeRef.getRef(),
+                            UicOperatingPeriod.class, generatorDefaults.codespace()));
                     uicOperatingPeriod.setVersion(dayTypeRef.getVersion());
                     uicOperatingPeriod.setValidDayBits(validDayBits.toString());
                     // Synthesis site. myFrom and myTo are computed values, so the carrier is built
@@ -302,8 +302,11 @@ public final class EpipCalendar {
                     uicOperatingPeriod.setFromDate(XmlDateTime.from(myFrom));
                     uicOperatingPeriod.setToDate(XmlDateTime.from(myTo));
 
-                    // id rewrite :DayType: -> :DayTypeAssignment:.
+                    // project() copies the id across with every other matching field, so the class
+                    // token has to be swapped after it or the assignment carries its DayType's id.
                     DayTypeAssignment resDta = NetexUtils.project(myDayType, DayTypeAssignment.class);
+                    resDta.setId(NetexUtils.deriveId(myDayType.getId(), DayTypeAssignment.class,
+                            generatorDefaults.codespace()));
                     // project() copies JAXB's DEFAULTED getters into real fields, so the synthesized
                     // assignment HOLDS modification=NEW status=ACTIVE publication=PUBLIC — three
                     // attributes that must never reach the wire. The omission is enforced at marshal

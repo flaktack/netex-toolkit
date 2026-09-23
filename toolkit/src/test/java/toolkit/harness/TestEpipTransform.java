@@ -371,7 +371,19 @@ public class TestEpipTransform {
             Check.equals("OperatorRef", additional.get(0).getName().getLocalPart(),
                     "the demoted ref keeps its OperatorRef element name");
             Check.equals("op1", additional.get(0).getValue().getRef(), "the demoted ref is op1");
-            Check.equals("op2", lines.get("line2").getOperatorRef().getRef(), "line2 untouched");
+
+            // line2 arrived with an operatorRef and NO authorityRef, and op2's id carries no class
+            // token to derive an Authority from. The backfill mints one over the fallback codespace
+            // rather than declining, so line2 is attributed and its operator demoted like line1's.
+            // Declining is what left 8,318 Lines with no agency for a consumer to use.
+            Line line2 = lines.get("line2");
+            Check.isNull(line2.getOperatorRef(), "line2 OperatorRef demoted");
+            Check.equals("test:Authority:op2", line2.getAuthorityRef().getRef(),
+                    "line2 gets an Authority minted over the fallback codespace");
+            Check.equals("op2",
+                    line2.getAdditionalOperators().getTransportOrganisationRef().get(0)
+                            .getValue().getRef(),
+                    "and op2 is the demoted ref");
 
             // line3 brought its own additionalOperators. The demoted primary goes to the front of
             // that list: nothing in the element distinguishes it from the refs the feed put there,

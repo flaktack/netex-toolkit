@@ -235,6 +235,64 @@ public class TestEpipJourneyGenerator {
         Check.that(projected.getValidBetween().isEmpty(), "journey validBetween cleared");
     }
 
+    /// A two-call journey with the given id. The signature, and so the hash, depends on the calls
+    /// and the line — never on the journey's own id, which is what the next test rests on.
+    private static ServiceJourney twoCallJourney(String id) {
+        ServiceJourney sj = new ServiceJourney();
+        sj.setId(id);
+        sj.setVersion("1");
+        LineRefStructure line = new LineRefStructure();
+        line.setRef("line1");
+        line.setVersion("1");
+        sj.setLineRef(FACTORY.createLineRef(line));
+
+        Calls_RelStructure calls = new Calls_RelStructure();
+        for (int i = 1; i <= 2; i++) {
+            Call c = new Call();
+            c.setId("c" + i);
+            c.setVersion("1");
+            c.setOrder(BigInteger.valueOf(i));
+            ScheduledStopPointRefStructure s = new ScheduledStopPointRefStructure();
+            s.setRef("ssp" + i);
+            s.setVersion("1");
+            c.setScheduledStopPointRef(FACTORY.createScheduledStopPointRef(s));
+            DepartureStructure dep = new DepartureStructure();
+            dep.setTime(XmlTime.of(10, i, 0));
+            c.setDeparture(dep);
+            Calls.add(calls, c);
+        }
+        sj.setCalls(calls);
+        return sj;
+    }
+
+    /// The id the toolkit mints takes the grammar of the journey it was generated from, so a
+    /// generated pattern stops being the one object in a document with a different id shape.
+    ///
+    /// The hash is the same either way — it is the md5 of the signature, and the journey's own id
+    /// is not in it. Only the wrapper moves, which is the property the whole change rests on: an
+    /// id that moved its hash would be a different pattern, not the same one renamed.
+    @Test
+    void testAGeneratedIdTakesItsSourcesGrammar() {
+        ServiceJourneyPattern bare =
+                EpipJourneys.serviceJourneyPatternFromCalls(twoCallJourney("sj1"),
+                        GeneratorDefaults.TEST);
+        ServiceJourneyPattern structured = EpipJourneys.serviceJourneyPatternFromCalls(
+                twoCallJourney("IT:ITF2::VehicleJourney:busREGIONEMOLISE:A101"),
+                GeneratorDefaults.TEST);
+
+        String hash = bare.getId().substring(bare.getId().lastIndexOf(':') + 1);
+        Check.equals("test:ServiceJourneyPattern:" + hash, bare.getId(),
+                "an id with no class token falls back to the configured codespace");
+        Check.equals("IT:ITF2::ServiceJourneyPattern:" + hash, structured.getId(),
+                "a structured id yields the same hash under the feed's own codespace");
+
+        List<PointInLinkSequence_VersionedChildStructure> points = structured.getPointsInSequence()
+                .getPointInJourneyPatternOrStopPointInJourneyPatternOrTimingPointInJourneyPattern();
+        Check.equals("IT:ITF2::StopPointInJourneyPattern:" + hash + "-1",
+                ((StopPointInJourneyPattern) points.get(0)).getId(),
+                "the points derive from the journey too, not from the configured codespace");
+    }
+
     /// The sigRepr battery: the ddSig MultilingualString renderings carry every non-printable
     /// escape class — \xNN (NBSP, C1 NEL, ESC), BMP backslash-u (ZWSP), astral backslash-U (tag
     /// char) — a literal printable astral emoji, and the single-quote → double-quote switch. No

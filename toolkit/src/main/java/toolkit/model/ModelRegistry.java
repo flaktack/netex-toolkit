@@ -14,6 +14,7 @@ import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -44,6 +45,7 @@ public final class ModelRegistry {
 
     private static List<Class<?>> classes;
     private static Map<String, Class<?>> byName;
+    private static Map<String, Class<?>> byLowerName;
     private static List<Class<?>> allModelClasses;
     private static Map<Class<?>, List<Class<?>>> concreteSubclasses;
 
@@ -87,6 +89,16 @@ public final class ModelRegistry {
         return classForName(name) != null;
     }
 
+    /// [#classForName] ignoring case, for reading a class token out of a feed's id: NeTEx ids are
+    /// case-preserving and a publisher may spell the token in any case — Italian feeds write
+    /// `:authority:` and `:operator:`. Where two class names differ only in case the exact-case
+    /// entry wins, so this never disagrees with [#classForName] on a name that one would answer.
+    public static Class<?> classForNameIgnoreCase(String name) {
+        Class<?> exact = classForName(name);
+        if (exact != null || name == null) return exact;
+        return byLowerName.get(name.toLowerCase(Locale.ROOT));
+    }
+
     private static void scan() {
         try {
             List<Class<?>> out = new ArrayList<>(2200);
@@ -121,6 +133,13 @@ public final class ModelRegistry {
                     Class.forName(MODEL_PKG + ".DataManagedObjectStructure", false, cl));
             classes = Collections.unmodifiableList(out);
             byName = names;
+            // putIfAbsent, so a name whose exact-case spelling is already indexed is not displaced
+            // by another differing only in case.
+            Map<String, Class<?>> lower = new HashMap<>(names.size());
+            for (Map.Entry<String, Class<?>> e : names.entrySet()) {
+                lower.putIfAbsent(e.getKey().toLowerCase(Locale.ROOT), e.getValue());
+            }
+            byLowerName = lower;
             all.sort((a, b) -> a.getName().compareTo(b.getName()));
             allModelClasses = Collections.unmodifiableList(all);
             concreteSubclasses = new HashMap<>();

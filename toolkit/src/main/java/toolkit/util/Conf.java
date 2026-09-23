@@ -281,6 +281,9 @@ public final class Conf {
     public static final Flag STRICT_DROPPED_OUTPUT = bool("strict.droppedOutput", false,
             "refuse a run that dropped objects from its own output");
 
+    public static final Flag STRICT_ID_FALLBACK = bool("strict.idFallback", false,
+            "refuse a run that minted an id it could not derive from its source object");
+
     // ---------------------------------------------------------------- harness
 
     public static final Flag EPIP_PARALLEL_JOURNEYS = integer("epip.parallelJourneys", 0,

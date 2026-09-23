@@ -16,6 +16,7 @@ import toolkit.store.Store;
 import toolkit.store.Txn;
 import toolkit.test.Check;
 import toolkit.test.TestStore;
+import toolkit.transform.epip.GeneratorDefaults;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -98,7 +99,8 @@ public class TestLineAuthorities {
     /// What a driver does with the pass: raw-clone the source, then overlay what it repaired.
     private static void apply(Store src, Txn stx, Store dst, Txn dtx) {
         dst.cloneFrom(src, stx, dtx, null, 0);
-        dst.insertAnyObjects(dtx, LineAuthorities.backfillLineAuthorities(src, stx));
+        dst.insertAnyObjects(dtx, LineAuthorities.backfillLineAuthorities(src, stx,
+                GeneratorDefaults.TEST.codespace()));
     }
 
     /// Load the fixture, then run the pass the way a driver would.

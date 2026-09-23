@@ -70,6 +70,18 @@ public final class Strictness {
     /// `-Dtoolkit.strict.droppedOutput=true` makes the number refusable.
     public static final boolean DROPPED_OUTPUT = flag(Conf.STRICT_DROPPED_OUTPUT);
 
+    /// A generated object's id was composed from the configured codespace because the object it was
+    /// generated from carried no class token to derive from, so it does not share the grammar of
+    /// the feed objects around it.
+    ///
+    /// Counts only a derivation that was attempted and failed — the two generators with no source
+    /// object compose from the codespace directly and are not counted, so a non-zero value is
+    /// always a feed whose ids the derivation could not read.
+    ///
+    /// Not fatal by default: a feed is free to publish ids this cannot parse, and the id it gets
+    /// is still unique. `-Dtoolkit.strict.idFallback=true` makes the number refusable.
+    public static final boolean ID_FALLBACK = flag(Conf.STRICT_ID_FALLBACK);
+
     /// The master switch, then the concern's own flag. Defaults live in [Conf].
     private static boolean flag(Conf.Flag f) {
         return ALL || Conf.on(f);

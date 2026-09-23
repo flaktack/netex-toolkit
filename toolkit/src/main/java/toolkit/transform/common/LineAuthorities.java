@@ -10,6 +10,7 @@ package toolkit.transform.common;
 import noi.netex.model.Authority;
 import noi.netex.model.AuthorityRef;
 import noi.netex.model.AuthorityRefStructure;
+import noi.netex.model.Codespace;
 import noi.netex.model.GroupOfLines;
 import noi.netex.model.Line;
 import noi.netex.text.Mls;
@@ -22,6 +23,7 @@ import noi.netex.model.OrganisationTypeEnumeration;
 import noi.netex.model.TransportOrganisation_VersionStructure;
 import noi.netex.model.TransportOrganisationRefStructure;
 import jakarta.xml.bind.JAXBElement;
+import toolkit.model.NetexUtils;
 import toolkit.store.Store;
 import toolkit.store.Txn;
 import toolkit.util.Log;
@@ -33,32 +35,29 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public final class LineAuthorities {
 
     private static final ObjectFactory FACTORY = new ObjectFactory();
 
-    /// The class tokens an id carries, matched case-insensitively. NeTEx ids are case-preserving
-    /// and a publisher may spell the token in any case — Italian feeds write `:authority:` and
-    /// `:operator:`. A minted id always carries the canonical token, the way
-    /// [toolkit.model.NetexUtils#getId] spells one.
-    private static final Pattern OPERATOR_TOKEN =
-            Pattern.compile(":Operator:", Pattern.CASE_INSENSITIVE);
-    private static final Pattern AUTHORITY_TOKEN =
-            Pattern.compile(":Authority:", Pattern.CASE_INSENSITIVE);
-    private static final Pattern LINE_TOKEN =
-            Pattern.compile(":Line:", Pattern.CASE_INSENSITIVE);
-
     private LineAuthorities() {}
 
     /// Repaired Networks, Lines given an authorityRef, then the synthesised Authorities.
-    public static List<Object> backfillLineAuthorities(Store db, Txn txn) {
+    ///
+    /// `fallback` names the codespace a minted Authority's id takes when the Operator's carries no
+    /// class token to derive from. A [Codespace] rather than the generators' defaults record: this
+    /// package is the shared leaf and does not depend on a profile.
+    public static List<Object> backfillLineAuthorities(Store db, Txn txn, Codespace fallback) {
         // The Authority of an id's codespace, where the codespace holds exactly one. An id is
         // `<codespace>:<Class>:<identifier>`, so the part ahead of the class token is what a Line,
         // its Operator and its Authority share when one publisher issued all three. A codespace
         // holding several Authorities names none of them, and is dropped.
+        //
+        // The prefix comes from NetexUtils, which finds the token by asking whether it names a
+        // NeTEx class rather than matching one spelling per class. It is a JOIN KEY, so what
+        // matters is that every side computes it the same way: it keeps the separator that a
+        // hand-written `:Class:` match would have cut before, and a mix of the two conventions
+        // builds a key that never matches.
         //
         // A minted Authority must not enter this index: it answers for the one Operator it was
         // derived from, not for every later Operator of the same codespace.
@@ -72,7 +71,7 @@ public final class LineAuthorities {
             if (id == null || id.isEmpty()) continue;
             published.add(id);
             authorityVersion.put(id, auth.getVersion());
-            String prefix = prefixBefore(id, AUTHORITY_TOKEN);
+            String prefix = NetexUtils.codespacePrefix(id);
             if (prefix == null) continue;
             String seen = authByPrefix.put(prefix, id);
             if (seen != null && !seen.equals(id)) ambiguousPrefix.add(prefix);
@@ -89,11 +88,13 @@ public final class LineAuthorities {
 
         Function<String, String> authorityForOperator = opId -> {
             if (opId == null || opId.isEmpty()) return null;
-            Matcher token = OPERATOR_TOKEN.matcher(opId);
-            if (!token.find()) return null;
-            String existing = authByPrefix.get(opId.substring(0, token.start()));
+            // The prefix lookup keeps the primitive's null: an id with no class token shares no
+            // codespace, so there is nothing to look up. Minting below has a fallback instead, so
+            // such an Operator still yields an Authority rather than leaving its Line unattributed.
+            String prefix = NetexUtils.codespacePrefix(opId);
+            String existing = prefix == null ? null : authByPrefix.get(prefix);
             if (existing != null) return existing;
-            String authId = token.replaceFirst(":Authority:");
+            String authId = NetexUtils.deriveId(opId, Authority.class, fallback);
             // A publisher may already issue the Authority under the id this derives — an Operator
             // and its Authority differing only in the class token is how a feed says one
             // organisation holds both roles. Minting there would write a second object over a
@@ -112,7 +113,8 @@ public final class LineAuthorities {
                 // owner's with the class token swapped, the way the toolkit derives one.
                 TransportOrganisation_VersionStructure.Address address =
                         new TransportOrganisation_VersionStructure.Address();
-                address.setId(AUTHORITY_TOKEN.matcher(authId).replaceFirst(":Address:"));
+                address.setId(NetexUtils.deriveId(authId,
+                        TransportOrganisation_VersionStructure.Address.class, fallback));
                 address.setVersion(a.getVersion());
                 a.setAddress(address);
                 synthAuthority.put(authId, a);
@@ -155,7 +157,7 @@ public final class LineAuthorities {
                 continue; // already resolvable
             }
             // The Line's own codespace first: it is the only source a Line with no operatorRef has.
-            String authId = authByPrefix.get(prefixBefore(line.getId(), LINE_TOKEN));
+            String authId = authByPrefix.get(NetexUtils.codespacePrefix(line.getId()));
             if (authId == null && line.getOperatorRef() != null) {
                 authId = authorityForOperator.apply(line.getOperatorRef().getRef());
             }
@@ -179,15 +181,6 @@ public final class LineAuthorities {
         ar.setRef(authId);
         ar.setVersion(authorityVersion.get(authId));
         return ar;
-    }
-
-    /// The id up to its class token, or null where the id carries none. Never matches an empty
-    /// prefix to another: an id opening with its class token has no codespace to share.
-    private static String prefixBefore(String id, Pattern token) {
-        if (id == null || id.isEmpty()) return null;
-        Matcher m = token.matcher(id);
-        if (!m.find() || m.start() == 0) return null;
-        return id.substring(0, m.start());
     }
 
     private static String lastSegment(String id) {

@@ -283,17 +283,20 @@ public final class EpipJourneys {
             }
         }
 
+        // Every id below derives from the journey's, not from the pattern's: the pattern's own id is
+        // not built until after this loop, and both resolve to the same prefix anyway.
         for (StopPointInJourneyPattern pis : piss) {
-            pis.setId(NetexUtils.getId(generatorDefaults.codespace(), StopPointInJourneyPattern.class,
-                    id + "-" + sigStr(pis.getOrder())));
+            pis.setId(NetexUtils.deriveId(sj.getId(), StopPointInJourneyPattern.class,
+                    id + "-" + sigStr(pis.getOrder()), generatorDefaults.codespace()));
             // Projected notice-assignment ids embed the creating journey's id, which is meaningless
             // on a pattern shared by many; they are renumbered from the pattern identity.
             if (pis.getNoticeAssignments() != null) {
                 List<JAXBElement<?>> nas = pis.getNoticeAssignments().getNoticeAssignment_OrNoticeAssignmentView();
                 for (int i = 0; i < nas.size(); i++) {
                     if (nas.get(i).getValue() instanceof NoticeAssignment na) {
-                        na.setId(NetexUtils.getId(generatorDefaults.codespace(), NoticeAssignment.class,
-                                id + "-" + sigStr(pis.getOrder()) + "-" + (i + 1)));
+                        na.setId(NetexUtils.deriveId(sj.getId(), NoticeAssignment.class,
+                                id + "-" + sigStr(pis.getOrder()) + "-" + (i + 1),
+                                generatorDefaults.codespace()));
                         // The projected validity conditions are the creating journey's operating
                         // days — journey-level data that is wrong on a shared pattern.
                         na.setValidityConditions(null);
@@ -304,7 +307,8 @@ public final class EpipJourneys {
         }
 
         ServiceJourneyPattern sjp = new ServiceJourneyPattern();
-        sjp.setId(NetexUtils.getId(generatorDefaults.codespace(), ServiceJourneyPattern.class, id));
+        sjp.setId(NetexUtils.deriveId(sj.getId(), ServiceJourneyPattern.class, id,
+                generatorDefaults.codespace()));
         sjp.setVersion(sj.getVersion());
         RouteView routeView = new RouteView();
         routeView.setLineRef(sj.getLineRef());

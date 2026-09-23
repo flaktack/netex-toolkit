@@ -56,6 +56,7 @@ import toolkit.store.RawRow;
 import toolkit.store.Store;
 import toolkit.store.Txn;
 import toolkit.store.UnresolvedRow;
+import toolkit.transform.epip.EpipConfig;
 import toolkit.util.Log;
 import toolkit.util.PeekIterator;
 
@@ -84,13 +85,14 @@ public final class EpipDbToZip {
     public static final String USAGE = "EpipDbToXml <db> <out.zip> [--shards N (>= 1)]"
             + " [--journeys-per-file N] [--participant-ref S] [--description S]"
             + " [--composite-frame-id S] [--publication-timestamp ISO] [--frame-version S]"
+            + " [--codespace-country CC] [--codespace-local S]"
             + " [--level N (0..9)] [--log-file F]";
 
     /// The flags the harness cannot know about; `--level` and `--log-file` come from [DbToZip].
     public static String[] flags() {
         return new String[] {"--shards=", "--journeys-per-file=", "--participant-ref=",
                 "--description=", "--composite-frame-id=", "--publication-timestamp=",
-                "--frame-version="};
+                "--frame-version=", "--codespace-country=", "--codespace-local="};
     }
 
     /// The profile's own options, read off the parsed [Args] before the store is opened — a
@@ -119,12 +121,15 @@ public final class EpipDbToZip {
         NetexEnvelope.Options envelope = new NetexEnvelope.Options(
                 a.get("--participant-ref", "netex-toolkit"),
                 a.get("--description", TAG),
-                a.get("--composite-frame-id", "EU_NETWORK_OFFER"),
+                // null: minted in export(), which is the first point that knows the codespace.
+                a.get("--composite-frame-id", null),
                 "epip:EU_PI_NETWORK_OFFER",
                 a.dateTimeFlag("--publication-timestamp", null),
                 a.get("--frame-version", null));
-        return (db, tx, zip) ->
-                new EpipDbToZip(db, tx, zip, envelope).export(shards, journeysPerFile);
+        String country = a.get("--codespace-country", "");
+        String local = a.get("--codespace-local", "");
+        return (db, tx, zip) -> new EpipDbToZip(db, tx, zip, envelope, country, local)
+                .export(shards, journeysPerFile);
     }
 
     // ------------------------------------------------------------ class routing (simple names)
@@ -202,12 +207,63 @@ public final class EpipDbToZip {
             "ValueSet",
             "VehicleType");
 
+    /// The EPIP data codespace, written when the store declares none of its own.
+    private static final byte[] EPIP_CODESPACE = ("<Codespace id=\"" + EpipConfig.CODESPACE_ID
+            + "\"><Xmlns>" + EpipConfig.CODESPACE + "</Xmlns><XmlnsUrl>"
+            + EpipConfig.CODESPACE_URL + "</XmlnsUrl></Codespace>")
+            .getBytes(StandardCharsets.UTF_8);
+
+    /// The `<Xmlns>` of a Codespace fragment whose `id` is the EPIP one, else null. A byte scan:
+    /// the fragment is stored XML and decoding it to ask two questions would cost a JAXB bind.
+    private static String xmlnsOfEpipCodespace(byte[] fragment) {
+        String s = new String(fragment, StandardCharsets.UTF_8);
+        if (!s.contains("id=\"" + EpipConfig.CODESPACE_ID + "\"")) return null;
+        return between(s, "<Xmlns>", "</Xmlns>");
+    }
+
+    /// A VERSION FRAME identifier, per the profile's frame-id structure:
+    /// `{codespace}:{country}:{local}:{FrameType}_{EPIP_TYPE}:{topic}`.
+    ///
+    /// Mandatory, unlike the structure for frame contents, which is why this is minted rather than
+    /// taken from whatever the source frames were called. Country and local are empty by default —
+    /// the merged corpus spans three countries and has no single one — and an empty field keeps its
+    /// placeholder colon.
+    ///
+    /// The topic is sanitised, not trusted: the profile allows only letters, digits and hyphen, and
+    /// bounds it at fifteen characters. The shard suffix reaches this as `00_0001`, so the
+    /// underscore alone would breach it.
+    private String frameId(String frameType, String epipType, String topic) {
+        StringBuilder b = new StringBuilder(64);
+        b.append(generatedCodespace).append(':').append(country).append(':').append(local)
+                .append(':').append(frameType).append('_').append(epipType).append(':');
+        int n = 0;
+        for (int i = 0; i < topic.length() && n < 15; i++) {
+            char c = topic.charAt(i);
+            boolean ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+            if (ok) {
+                b.append(c);
+                n++;
+            } else if (n > 0 && b.charAt(b.length() - 1) != '-') {
+                b.append('-');
+                n++;
+            }
+        }
+        if (n == 0) b.append("all");
+        return b.toString();
+    }
+
     // ------------------------------------------------------------ state
     private final Store store;
     private final Txn tx;
     private final ZipWriter out;
     private final NetexEnvelope.Options envelope; // the per-entry wrapper's values, from setup
     private final FragmentCodec codec = new FragmentCodec();
+    /// The xmlns of the EPIP data codespace as this store declares it, resolved in export() before
+    /// the first entry. What the synthetic ServiceCalendar's id is built over.
+    private String generatedCodespace;
+    /// The frame-id country and local codes, empty unless a single-country export names them.
+    private final String country;
+    private final String local;
     private NetexEnvelope env; // built in export(), once the codespaces and the locale are known
     private FrameWriter fw;    // built with env in export(); it repeats the envelope per entry
     private final List<byte[]> codespaces = new ArrayList<>();
@@ -217,11 +273,14 @@ public final class EpipDbToZip {
     private Class<?> serviceLinkClass;
     private Class<?> interchangeClass;
 
-    private EpipDbToZip(Store store, Txn tx, ZipWriter out, NetexEnvelope.Options envelope) {
+    private EpipDbToZip(Store store, Txn tx, ZipWriter out, NetexEnvelope.Options envelope,
+                        String country, String local) {
         this.store = store;
         this.tx = tx;
         this.out = out;
         this.envelope = envelope;
+        this.country = country;
+        this.local = local;
     }
 
     // ------------------------------------------------------------ export driver
@@ -230,30 +289,52 @@ public final class EpipDbToZip {
         Class<?> cs = store.classForName("Codespace");
         if (cs != null) {
             for (RawRow r : store.iterRawObjects(tx, cs)) {
-                codespaces.add(FragmentOrder.normalise(cs, codec.decompress(r.blob())));
+                byte[] frag = FragmentOrder.normalise(cs, codec.decompress(r.blob()));
+                codespaces.add(frag);
+                if (generatedCodespace == null) {
+                    generatedCodespace = xmlnsOfEpipCodespace(frag);
+                }
             }
         }
+        // The transform inserts the codespace its fallback ids carry, so a store it wrote declares
+        // one already. A store it did not -- a feed loaded and exported straight through -- gets the
+        // EPIP one added here, because the frame ids below carry that prefix whatever the contents
+        // do. Added only when absent: several feeds publish it themselves.
+        if (generatedCodespace == null) {
+            codespaces.add(EPIP_CODESPACE);
+            generatedCodespace = EpipConfig.CODESPACE;
+        }
         defaultLocale = deriveDefaultLocale(); // one envelope-level pass, shared by every entry
-        env = new NetexEnvelope(envelope, codespaces, defaultLocale);
+        // The composite frame's id is minted like every other frame's unless a caller named one.
+        // It cannot be minted in setup(): the codespace is only known once the store is open.
+        NetexEnvelope.Options opts = envelope.compositeFrameId() != null ? envelope
+                : new NetexEnvelope.Options(envelope.participantRef(), envelope.description(),
+                        frameId("CompositeFrame", "EU_PI_NETWORK_OFFER", "offer"),
+                        envelope.typeOfFrameRef(), envelope.publicationTimestamp(),
+                        envelope.frameVersion());
+        env = new NetexEnvelope(opts, codespaces, defaultLocale);
         fw = new FrameWriter(store, tx, out, env, FragmentOrder::normalise);
 
         journeyGroups(shards, journeysPerFile);
 
         // shared entries
         fw.entry("shared-01-resource.xml");
-        env.frameOpen(out, "ResourceFrame", "COMMON", "epip:COMMON");
+        env.frameOpen(out, "ResourceFrame", frameId("ResourceFrame", "EU_PI_COMMON", "common"),
+                "epip:EU_PI_COMMON");
         fw.containers(RESOURCE);
         out.write("</ResourceFrame>");
         fw.end();
 
         fw.entry("shared-02-sites.xml");
-        env.frameOpen(out, "SiteFrame", "EU_PI_STOP", "epip:EU_PI_STOP");
+        env.frameOpen(out, "SiteFrame", frameId("SiteFrame", "EU_PI_STOP", "stops"),
+                "epip:EU_PI_STOP");
         fw.containers(SITES);
         out.write("</SiteFrame>");
         fw.end();
 
         fw.entry("shared-03-network.xml");
-        env.frameOpen(out, "ServiceFrame", "EU_PI_NETWORK", "epip:EU_PI_NETWORK");
+        env.frameOpen(out, "ServiceFrame", frameId("ServiceFrame", "EU_PI_NETWORK", "network"),
+                "epip:EU_PI_NETWORK");
         // Exactly ONE Network, a direct child with no container element — every extra
         // Network row is dropped. Deterministic "first" = the store's scan (key) order, which is
         // insertion order for the toolkit's local keys.
@@ -265,9 +346,13 @@ public final class EpipDbToZip {
         trainNumbers();
 
         fw.entry("shared-05-calendar.xml");
-        env.frameOpen(out, "ServiceCalendarFrame", "EU_PI_CALENDAR", "epip:EU_PI_CALENDAR");
-        out.write("<ServiceCalendar id=\"OPENOV:ServiceCalendar:ServiceCalendar\" version=\""
-                + env.version() + "\">");
+        env.frameOpen(out, "ServiceCalendarFrame",
+                frameId("ServiceCalendarFrame", "EU_PI_CALENDAR", "calendar"),
+                "epip:EU_PI_CALENDAR");
+        // The one object the EXPORT synthesises, so it has no source id to derive from and takes
+        // the codespace the store declares -- the same fallback the transform's generators use.
+        out.write("<ServiceCalendar id=\"" + generatedCodespace
+                + ":ServiceCalendar:ServiceCalendar\" version=\"" + env.version() + "\">");
         calendarValidity();
         fw.containers(CALENDAR);
         out.write("</ServiceCalendar></ServiceCalendarFrame>");
@@ -983,14 +1068,16 @@ public final class EpipDbToZip {
         String suffix = String.format("%02d_%04d", shard, seq);
         fw.entry(name);
         if (!patterns.isEmpty()) {
-            env.frameOpen(out, "ServiceFrame", "EU_PI_NETWORK_" + suffix, "epip:EU_PI_NETWORK");
+            env.frameOpen(out, "ServiceFrame", frameId("ServiceFrame", "EU_PI_NETWORK", suffix),
+                    "epip:EU_PI_NETWORK");
             out.write("<journeyPatterns>");
             fw.byFullKey(patterns, sjp);
             out.write("</journeyPatterns>");
             out.write("</ServiceFrame>");
         }
         if (!journeys.isEmpty()) {
-            env.frameOpen(out, "TimetableFrame", "EU_PI_TIMETABLE_" + suffix, "epip:EU_PI_TIMETABLE");
+            env.frameOpen(out, "TimetableFrame", frameId("TimetableFrame", "EU_PI_TIMETABLE", suffix),
+                    "epip:EU_PI_TIMETABLE");
             out.write("<vehicleJourneys>");
             fw.byFullKey(journeys, sj);
             out.write("</vehicleJourneys>");
@@ -1018,14 +1105,16 @@ public final class EpipDbToZip {
         String suffix = String.format("%02d_shared", shard);
         fw.entry(String.format("g%02d-shared.xml", shard));
         if (!links.isEmpty()) {
-            env.frameOpen(out, "ServiceFrame", "EU_PI_NETWORK_" + suffix, "epip:EU_PI_NETWORK");
+            env.frameOpen(out, "ServiceFrame", frameId("ServiceFrame", "EU_PI_NETWORK", suffix),
+                    "epip:EU_PI_NETWORK");
             out.write("<serviceLinks>");
             fw.byFullKey(links, serviceLinkClass);
             out.write("</serviceLinks>");
             out.write("</ServiceFrame>");
         }
         if (!interchanges.isEmpty()) {
-            env.frameOpen(out, "TimetableFrame", "EU_PI_TIMETABLE_" + suffix, "epip:EU_PI_TIMETABLE");
+            env.frameOpen(out, "TimetableFrame", frameId("TimetableFrame", "EU_PI_TIMETABLE", suffix),
+                    "epip:EU_PI_TIMETABLE");
             out.write("<journeyInterchanges>");
             fw.byFullKey(interchanges, interchangeClass);
             out.write("</journeyInterchanges>");
@@ -1045,7 +1134,8 @@ public final class EpipDbToZip {
     private void trainNumbers() throws IOException {
         if (!fw.hasRows("TrainNumber")) return;
         fw.entry("shared-04-links.xml");
-        env.frameOpen(out, "TimetableFrame", "EU_PI_TIMETABLE_LINKS", "epip:EU_PI_TIMETABLE");
+        env.frameOpen(out, "TimetableFrame",
+                frameId("TimetableFrame", "EU_PI_TIMETABLE", "links"), "epip:EU_PI_TIMETABLE");
         // Container order = TimetableFrameGroup's xsd:sequence of groups:
         //   TimetablePropertiesGroup -> TimetableDefaultsGroup -> TimeDemandTypeInFrameGroup
         //   -> TimetableJourneyInFrameGroup (vehicleJourneys, then trainNumbers)

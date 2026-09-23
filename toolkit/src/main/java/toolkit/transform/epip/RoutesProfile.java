@@ -145,7 +145,8 @@ public final class RoutesProfile {
                                 + joinPyFloats(posValues(firstChoiceItem(only.getLineString()))));
                 only.getLineString().setId("LineString_" + objectId);
                 sl = new ServiceLink();
-                sl.setId(NetexUtils.getId(generatorDefaults.codespace(), ServiceLink.class, objectId));
+                sl.setId(NetexUtils.deriveId(route.getId(), ServiceLink.class, objectId,
+                        generatorDefaults.codespace()));
                 sl.setVersion(route.getVersion());
                 sl.setDistance(only.getDistance());
                 sl.setFromPointRef(NetexUtils.project(fromSsp, ScheduledStopPointRefStructure.class));
@@ -200,7 +201,8 @@ public final class RoutesProfile {
                                     + joinPyFloats(posValues(firstChoiceItem(lineString))));
                     lineString.setId("LineString_" + objectId);
                     sl = new ServiceLink();
-                    sl.setId(NetexUtils.getId(generatorDefaults.codespace(), ServiceLink.class, objectId));
+                    sl.setId(NetexUtils.deriveId(route.getId(), ServiceLink.class, objectId,
+                            generatorDefaults.codespace()));
                     sl.setVersion(route.getVersion());
                     sl.setDistance(distance);
                     sl.setFromPointRef(NetexUtils.project(fromSsp, ScheduledStopPointRefStructure.class));
