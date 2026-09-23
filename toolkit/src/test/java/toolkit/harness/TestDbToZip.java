@@ -564,6 +564,32 @@ public class TestDbToZip {
         }
     }
 
+    /// A publisher naming its own codespace gets it on the frame ids too, and gets it declared —
+    /// once. The export cannot read the choice off the store, which may declare several codespaces
+    /// and says of none of them that the generated ids were built over it, so it is told.
+    ///
+    /// The regression this pins: keying the scan off the EPIP codespace's `id` rather than its
+    /// xmlns. A custom codespace takes its xmlns for an id, so the scan missed it, declared a second
+    /// codespace nothing referenced, and minted frame ids under `epd` while the contents carried
+    /// the publisher's.
+    @Test
+    void testACustomCodespaceReachesTheFrameIdsAndIsDeclaredOnce(TestStore ts) throws Exception {
+        Path zip = epipExport(ts, "cs-custom", "--codespace", "NOI");
+        try (ZipFile zf = new ZipFile(zip.toFile())) {
+            for (ZipEntry e : zf.stream().toList()) {
+                String s = new String(zf.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8);
+                Check.that(s.contains("<Codespace id=\"NOI\"><Xmlns>NOI</Xmlns></Codespace>"),
+                        e.getName() + " declares the publisher's codespace: " + s);
+                Check.that(!s.contains("epip_data"),
+                        e.getName() + " does not also declare the EPIP one, which nothing uses");
+                Matcher m = Pattern.compile("<CompositeFrame\\b[^>]*\\bid=\"([^\"]*)\"").matcher(s);
+                Check.that(m.find(), e.getName() + " has a composite frame");
+                Check.equals("NOI:::CompositeFrame_EU_PI_NETWORK_OFFER:offer", m.group(1),
+                        "the frame id carries the publisher's codespace, not the profile's");
+            }
+        }
+    }
+
     /// Pin both stamps and two exports of one store are byte-identical. This is the whole point of
     /// making them configurable: it turns the package doc's standing "not reproducible" caveat into
     /// something a caller can switch off.

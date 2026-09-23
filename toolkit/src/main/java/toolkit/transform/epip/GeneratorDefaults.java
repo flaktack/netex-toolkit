@@ -32,7 +32,12 @@ public record GeneratorDefaults(Codespace codespace, String version) {
             String.valueOf(EpipConfig.VERSION));
 
     /// The same defaults over a different codespace xmlns, for a publisher that does not want the
-    /// EPIP one. The id and URL follow the xmlns, so a custom codespace is still self-describing.
+    /// EPIP one. The id follows the xmlns; the URL is left unset, because a publisher's codespace
+    /// has no URL this can derive and NeTEx makes `XmlnsUrl` optional.
+    ///
+    /// The export has to be given the same xmlns — see `EpipDbToZip`'s `--codespace`. Every id
+    /// neither side could read off a source object carries this prefix, and the two sides mint
+    /// those ids independently.
     public static GeneratorDefaults withCodespace(String xmlns) {
         if (xmlns == null || xmlns.equals(EpipConfig.CODESPACE)) return PRODUCTION;
         return new GeneratorDefaults(codespace(xmlns, xmlns, null),

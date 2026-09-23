@@ -86,14 +86,14 @@ public final class EpipDbToZip {
     public static final String USAGE = "EpipDbToXml <db> <out.zip> [--shards N (>= 1)]"
             + " [--journeys-per-file N] [--participant-ref S] [--description S]"
             + " [--composite-frame-id S] [--publication-timestamp ISO] [--frame-version S]"
-            + " [--codespace-country CC] [--codespace-local S]"
+            + " [--codespace S] [--codespace-country CC] [--codespace-local S]"
             + " [--level N (0..9)] [--log-file F]";
 
     /// The flags the harness cannot know about; `--level` and `--log-file` come from [DbToZip].
     public static String[] flags() {
         return new String[] {"--shards=", "--journeys-per-file=", "--participant-ref=",
                 "--description=", "--composite-frame-id=", "--publication-timestamp=",
-                "--frame-version=", "--codespace-country=", "--codespace-local="};
+                "--frame-version=", "--codespace=", "--codespace-country=", "--codespace-local="};
     }
 
     /// The profile's own options, read off the parsed [Args] before the store is opened — a
@@ -129,7 +129,10 @@ public final class EpipDbToZip {
                 a.get("--frame-version", null));
         String country = a.get("--codespace-country", "");
         String local = a.get("--codespace-local", "");
-        return (db, tx, zip) -> new EpipDbToZip(db, tx, zip, envelope, country, local)
+        // Must match the transform's own --codespace: it names the prefix of every id neither side
+        // could read off a source object, and the two sides mint those ids independently.
+        String codespace = a.get("--codespace", EpipConfig.CODESPACE);
+        return (db, tx, zip) -> new EpipDbToZip(db, tx, zip, envelope, country, local, codespace)
                 .export(shards, journeysPerFile);
     }
 
@@ -208,18 +211,25 @@ public final class EpipDbToZip {
             "ValueSet",
             "VehicleType");
 
-    /// The EPIP data codespace, written when the store declares none of its own.
-    private static final byte[] EPIP_CODESPACE = ("<Codespace id=\"" + EpipConfig.CODESPACE_ID
-            + "\"><Xmlns>" + EpipConfig.CODESPACE + "</Xmlns><XmlnsUrl>"
-            + EpipConfig.CODESPACE_URL + "</XmlnsUrl></Codespace>")
-            .getBytes(StandardCharsets.UTF_8);
-
-    /// The `<Xmlns>` of a Codespace fragment whose `id` is the EPIP one, else null. A byte scan:
-    /// the fragment is stored XML and decoding it to ask two questions would cost a JAXB bind.
-    private static String xmlnsOfEpipCodespace(byte[] fragment) {
+    /// Whether this Codespace fragment declares `xmlns`. A byte scan: the fragment is stored XML and
+    /// decoding it to ask one question would cost a JAXB bind.
+    ///
+    /// The `<Xmlns>` is what an id carries, so it is what decides the match. The `id` attribute does
+    /// not: a custom codespace takes its xmlns as its id, where the EPIP one is `epip_data` for an
+    /// xmlns of `epd`, and matching on `id` finds the second but never the first.
+    private static boolean declaresXmlns(byte[] fragment, String xmlns) {
         String s = new String(fragment, StandardCharsets.UTF_8);
-        if (!s.contains("id=\"" + EpipConfig.CODESPACE_ID + "\"")) return null;
-        return between(s, "<Xmlns>", "</Xmlns>");
+        return xmlns.equals(between(s, "<Xmlns>", "</Xmlns>"));
+    }
+
+    /// A Codespace declaration for `xmlns`, written when the store declares none. The EPIP data
+    /// codespace has an id and a URL the profile fixes; any other takes its xmlns for an id, which
+    /// is the row the transform inserts for it.
+    private static byte[] codespaceDecl(String xmlns) {
+        boolean epip = EpipConfig.CODESPACE.equals(xmlns);
+        return ("<Codespace id=\"" + (epip ? EpipConfig.CODESPACE_ID : xmlns) + "\"><Xmlns>" + xmlns
+                + "</Xmlns>" + (epip ? "<XmlnsUrl>" + EpipConfig.CODESPACE_URL + "</XmlnsUrl>" : "")
+                + "</Codespace>").getBytes(StandardCharsets.UTF_8);
     }
 
     /// A VERSION FRAME identifier, per the profile's frame-id structure:
@@ -259,9 +269,10 @@ public final class EpipDbToZip {
     private final ZipWriter out;
     private final NetexEnvelope.Options envelope; // the per-entry wrapper's values, from setup
     private final FragmentCodec codec = new FragmentCodec();
-    /// The xmlns of the EPIP data codespace as this store declares it, resolved in export() before
-    /// the first entry. What the synthetic ServiceCalendar's id is built over.
-    private String generatedCodespace;
+    /// The codespace a generated id falls back to, and so the one every frame id carries. The
+    /// transform's `--codespace`, which the export has to be given too: the store may declare
+    /// several codespaces and nothing in it says which one the generated ids were built over.
+    private final String generatedCodespace;
     /// The frame-id country and local codes, empty unless a single-country export names them.
     private final String country;
     private final String local;
@@ -275,36 +286,39 @@ public final class EpipDbToZip {
     private Class<?> interchangeClass;
 
     private EpipDbToZip(Store store, Txn tx, ZipWriter out, NetexEnvelope.Options envelope,
-                        String country, String local) {
+                        String country, String local, String generatedCodespace) {
         this.store = store;
         this.tx = tx;
         this.out = out;
         this.envelope = envelope;
         this.country = country;
         this.local = local;
+        this.generatedCodespace = generatedCodespace;
     }
 
     // ------------------------------------------------------------ export driver
 
     private void export(int shards, int journeysPerFile) throws IOException {
         Class<?> cs = store.classForName("Codespace");
+        boolean declared = false;
         if (cs != null) {
             for (RawRow r : store.iterRawObjects(tx, cs)) {
                 byte[] frag = FragmentOrder.normalise(cs, codec.decompress(r.blob()));
                 codespaces.add(frag);
-                if (generatedCodespace == null) {
-                    generatedCodespace = xmlnsOfEpipCodespace(frag);
-                }
+                declared |= declaresXmlns(frag, generatedCodespace);
             }
         }
         // The transform inserts the codespace its fallback ids carry, so a store it wrote declares
-        // one already. A store it did not -- a feed loaded and exported straight through -- gets the
-        // EPIP one added here, because the frame ids below carry that prefix whatever the contents
-        // do. Added only when absent: several feeds publish it themselves.
-        if (generatedCodespace == null) {
-            codespaces.add(EPIP_CODESPACE);
-            generatedCodespace = EpipConfig.CODESPACE;
-        }
+        // one already. A store it did not -- a feed loaded and exported straight through -- gets one
+        // added here, because the frame ids below carry that prefix whatever the contents do. Added
+        // only when absent: several feeds publish it themselves.
+        //
+        // Logged either way. The codespace is the caller's to name on both the transform and the
+        // export, and naming it on one alone leaves the frame ids and the ids they govern under
+        // different prefixes -- a document that still validates, so nothing downstream would say so.
+        if (!declared) codespaces.add(codespaceDecl(generatedCodespace));
+        Log.info("[%s] generated ids take codespace %s, %s by the store",
+                TAG, generatedCodespace, declared ? "declared" : "undeclared and added here");
         defaultLocale = deriveDefaultLocale(); // one envelope-level pass, shared by every entry
         // The composite frame's id is minted like every other frame's unless a caller named one.
         // It cannot be minted in setup(): the codespace is only known once the store is open.
