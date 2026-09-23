@@ -416,6 +416,70 @@ public class TestDbToZip {
         return out;
     }
 
+    /// A journey categorised by a TypeOfService the feed defines, beside a second definition the
+    /// feed declares and nothing uses — the shape of a published code list.
+    private static final String TYPE_OF_SERVICE = """
+        <ResourceFrame id="rf" version="1">
+          <typesOfValue>
+            <TypeOfService id="tos1" version="1"><Name>Regional</Name></TypeOfService>
+            <TypeOfService id="tos2" version="1"><Name>Unused</Name></TypeOfService>
+          </typesOfValue>
+        </ResourceFrame>
+        <ServiceFrame id="sf" version="1">
+          <lines>
+            <Line id="l1" version="1"><Name>L</Name><TransportMode>bus</TransportMode></Line>
+          </lines>
+        </ServiceFrame>
+        <TimetableFrame id="tf" version="1">
+          <vehicleJourneys>
+            <ServiceJourney id="sj1" version="1"><LineRef ref="l1" version="1"/>
+              <TypeOfServiceRef ref="tos1" version="1"/></ServiceJourney>
+          </vehicleJourneys>
+        </TimetableFrame>
+        """;
+
+    /// A TypeOfService is emitted in the ResourceFrame's `typesOfValue`, not left to the general
+    /// frame's closure. `typesOfValueInFrame_RelStructure` is a repeated choice of ValueSet and
+    /// TypeOfValue, and TypeOfService substitutes for TypeOfValue, so it belongs there.
+    ///
+    /// What makes this load-bearing rather than tidying: every ServiceJourney may carry a
+    /// TypeOfServiceRef, and the profile requires a ref to resolve inside the same document. While
+    /// the definitions lived only in the GeneralFrame, removing that frame would have dangled one
+    /// reference per journey.
+    ///
+    /// Only the REFERENCED definitions go in. The profile's data-relevance rule asks that a
+    /// document carry no unused ancillary definition, and a class map has no opinion on which rows
+    /// are used — where the closure it replaces here could not reach an unreferenced object at all.
+    @Test
+    void testATypeOfServiceIsEmittedInTheResourceFrame(TestStore ts) throws Exception {
+        Path db = ts.buildDbFile(TYPE_OF_SERVICE, "tos.lmdb");
+        Path out = ts.tempPath("tos.zip");
+        DbToZip.driverMain(EpipDbToZip.TAG, new String[] {db.toString(), out.toString()},
+                EpipDbToZip.USAGE, EpipDbToZip.flags(), EpipDbToZip::setup);
+
+        Map<String, String> byEntry = new LinkedHashMap<>();
+        try (ZipFile zf = new ZipFile(out.toFile())) {
+            for (ZipEntry e : zf.stream().toList()) {
+                byEntry.put(e.getName(),
+                        new String(zf.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8));
+            }
+        }
+        String resource = byEntry.get("shared-01-resource.xml");
+        Check.that(resource != null, "the resource frame entry exists: " + byEntry.keySet());
+        Check.that(resource.contains("<typesOfValue>") && resource.contains("id=\"tos1\""),
+                "the referenced TypeOfService is in typesOfValue: " + resource);
+        for (Map.Entry<String, String> e : byEntry.entrySet()) {
+            if (e.getKey().equals("shared-01-resource.xml")) continue;
+            Check.that(!e.getValue().contains("<TypeOfService "),
+                    e.getKey() + " does not emit it a second time: " + e.getValue());
+        }
+        Check.that(byEntry.values().stream().noneMatch(s -> s.contains("id=\"tos2\"")),
+                "and the definition nothing references is emitted nowhere: " + resource);
+        // The reference the definition exists for, and the document it has to resolve in.
+        Check.that(byEntry.values().stream().anyMatch(s -> s.contains("<TypeOfServiceRef")),
+                "the journey still carries its TypeOfServiceRef");
+    }
+
     /// One journey on a ServicePattern, one on nothing at all. EPIP permits ServicePattern beside
     /// ServiceJourneyPattern, and this profile emits only the latter.
     private static final String SERVICE_PATTERN = """

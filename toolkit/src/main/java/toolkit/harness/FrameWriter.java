@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.function.LongPredicate;
 
 /// Turns stored rows into emitted fragment bytes, into a [ZipWriter].
 ///
@@ -125,12 +126,20 @@ public final class FrameWriter {
     /// A container tag is written only when something lands in it. An empty `<lines/>` is not the
     /// same document as no `<lines>` at all, and for most NeTEx containers it is not even valid.
     public void containers(Map<String, List<String>> plan) throws IOException {
+        containers(plan, fk -> true);
+    }
+
+    /// [#containers] with a row filter, consulted once per row on its full_key. The writer does not
+    /// ask what the filter decides on: which rows a profile considers payload is the profile's to
+    /// say, and a container left empty by it writes no tag, exactly as one with no rows does.
+    public void containers(Map<String, List<String>> plan, LongPredicate keep) throws IOException {
         for (Map.Entry<String, List<String>> e : plan.entrySet()) {
             boolean any = false;
             for (String className : e.getValue()) {
                 Class<?> c = db.classForName(className);
                 if (c == null) continue;
                 for (RawRow r : db.iterRawObjects(tx, c)) {
+                    if (!keep.test(db.fullKeyOf(c, r.localKey()))) continue;
                     if (!any) {
                         out.write("<" + e.getKey() + ">");
                         any = true;

@@ -14,7 +14,7 @@ package toolkit.harness;
 //                            empty.
 //   shared-05-calendar.xml   ServiceCalendarFrame EU_PI_CALENDAR, UicOperatingPeriods only
 //   shared-06-other.xml      GeneralFrame OTHER_REFERENCED — the reference-graph closure over the
-//                            29 listed classes; TrainNumbers excluded; omitted when empty
+//                            30 listed classes; TrainNumbers excluded; omitted when empty
 //   gSS-shared.xml           ServiceFrame(serviceLinks) + TimetableFrame(journeyInterchanges) —
 //                            the SHARD's shared group file; omitted when the shard has neither
 //   gSS-NNNN.xml             ServiceFrame(journeyPatterns) + TimetableFrame(their journeys)
@@ -141,7 +141,10 @@ public final class EpipDbToZip {
     private static final Map<String, List<String>> RESOURCE = orderedMap(
             "dataSources", "DataSource",
             "responsibilitySets", "ResponsibilitySet",
-            "typesOfValue", "ValueSet",
+            // typesOfValueInFrame_RelStructure is a repeated CHOICE of ValueSet and TypeOfValue, so
+            // a TypeOfValue subclass goes in directly and in any order. TypeOfService reaches it
+            // through the substitution group TypeOfService < TypeOfEntity < TypeOfValue.
+            "typesOfValue", "ValueSet,TypeOfService",
             "organisations", "Authority,Operator",
             "vehicleTypes", "VehicleType",
             "zones", "TransportAdministrativeZone");
@@ -180,6 +183,10 @@ public final class EpipDbToZip {
 
     /// The classes whose outward references define the OTHER_REFERENCED general frame. The closure
     /// yields what these reference (directly and transitively) but never the classes themselves.
+    ///
+    /// So the list doubles as the exclusion set, and that is why a class another frame emits is
+    /// named here too: naming it is how the closure is told not to emit it a second time. That is
+    /// what puts TypeOfService and ValueSet here, both of which the ResourceFrame emits.
     private static final List<String> OTHER_REFERENCED_CLASSES = List.of(
             "Authority",
             "Connection",
@@ -207,6 +214,7 @@ public final class EpipDbToZip {
             "TariffZone",
             "TopographicPlace",
             "TransportAdministrativeZone",
+            "TypeOfService",
             "UicOperatingPeriod",
             "ValueSet",
             "VehicleType");
@@ -230,6 +238,25 @@ public final class EpipDbToZip {
         return ("<Codespace id=\"" + (epip ? EpipConfig.CODESPACE_ID : xmlns) + "\"><Xmlns>" + xmlns
                 + "</Xmlns>" + (epip ? "<XmlnsUrl>" + EpipConfig.CODESPACE_URL + "</XmlnsUrl>" : "")
                 + "</Codespace>").getBytes(StandardCharsets.UTF_8);
+    }
+
+    /// The ResourceFrame classes whose instances belong in the document only once something
+    /// names them.
+    ///
+    /// The profile's data-relevance rule asks that a document carry no unused ancillary
+    /// definition, and a class map has no opinion on which of its rows the data uses. A publisher
+    /// declares a whole code list where its data names part of it.
+    private static final Set<String> RESOURCE_ONLY_WHEN_REFERENCED = Set.of("TypeOfService");
+
+    /// Whether a ResourceFrame row is worth emitting — true for everything but an unreferenced
+    /// instance of a vocabulary class.
+    ///
+    /// The inverse CSR answers "does anything reference this". The store caches it and the
+    /// OTHER_REFERENCED closure builds it either way, so asking here only moves the build
+    /// earlier.
+    private boolean keepResourceRow(long fullKey) {
+        if (!vocabularyIdx.contains(NulKeyCodec.fullKeyClassIdx(fullKey))) return true;
+        return store.csr(tx).in(fullKey).length > 0;
     }
 
     /// A VERSION FRAME identifier, per the profile's frame-id structure:
@@ -276,6 +303,8 @@ public final class EpipDbToZip {
     /// The frame-id country and local codes, empty unless a single-country export names them.
     private final String country;
     private final String local;
+    /// The class indices of [#RESOURCE_ONLY_WHEN_REFERENCED] this store has a class map for.
+    private final Set<Integer> vocabularyIdx = new HashSet<>();
     private NetexEnvelope env; // built in export(), once the codespaces and the locale are known
     private FrameWriter fw;    // built with env in export(); it repeats the envelope per entry
     private final List<byte[]> codespaces = new ArrayList<>();
@@ -294,6 +323,10 @@ public final class EpipDbToZip {
         this.country = country;
         this.local = local;
         this.generatedCodespace = generatedCodespace;
+        for (String n : RESOURCE_ONLY_WHEN_REFERENCED) {
+            Class<?> c = store.classForName(n);
+            if (c != null) vocabularyIdx.add(store.classIdxInt(c));
+        }
     }
 
     // ------------------------------------------------------------ export driver
@@ -336,7 +369,7 @@ public final class EpipDbToZip {
         fw.entry("shared-01-resource.xml");
         env.frameOpen(out, "ResourceFrame", frameId("ResourceFrame", "EU_PI_COMMON", "common"),
                 "epip:EU_PI_COMMON");
-        fw.containers(RESOURCE);
+        fw.containers(RESOURCE, this::keepResourceRow);
         out.write("</ResourceFrame>");
         fw.end();
 
