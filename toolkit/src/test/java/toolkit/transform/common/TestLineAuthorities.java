@@ -9,6 +9,7 @@ package toolkit.transform.common;
 // export spells the class token in a case the canonical id does not use.
 
 import noi.netex.model.Authority;
+import noi.netex.model.FlexibleLine;
 import noi.netex.model.Line;
 import noi.netex.text.Mls;
 import org.junit.jupiter.api.Test;
@@ -81,6 +82,23 @@ public class TestLineAuthorities {
         </organisations></ResourceFrame>
         """;
 
+    /// One Line and one FlexibleLine of the same Operator, neither with an authorityRef.
+    private static final String FLEXIBLE_LINE = """
+        <ServiceFrame id="sf" version="1">
+          <lines>
+            <Line id="ch:2:Line:plain" version="any"><Name>P</Name><TransportMode>bus</TransportMode>
+              <OperatorRef ref="ch:1:Operator:234"/></Line>
+            <FlexibleLine id="ch:2:FlexibleLine:onDemand" version="any"><Name>F</Name>
+              <TransportMode>bus</TransportMode>
+              <OperatorRef ref="ch:1:Operator:234"/>
+              <FlexibleLineType>hailAndRideSections</FlexibleLineType></FlexibleLine>
+          </lines>
+        </ServiceFrame>
+        <ResourceFrame id="rf" version="1"><organisations>
+          <Operator id="ch:1:Operator:234" version="3"><Name>Saastal Bergbahnen AG</Name></Operator>
+        </organisations></ResourceFrame>
+        """;
+
     /// One codespace, two Authorities: ambiguous, so neither answers for the codespace.
     private static final String AMBIGUOUS_CODESPACE = """
         <ServiceFrame id="sf" version="1">
@@ -127,6 +145,28 @@ public class TestLineAuthorities {
 
     private static Map<String, Authority> authoritiesOf(TestStore db) {
         return byId(db, Authority.class, Authority::getId);
+    }
+
+    private static Map<String, FlexibleLine> flexibleLinesOf(TestStore db) {
+        return byId(db, FlexibleLine.class, FlexibleLine::getId);
+    }
+
+    /// A FlexibleLine is a Line with flexible-service fields added, so it carries the same
+    /// authorityRef and wants the same repair. The pass read only the Line class map, so every
+    /// FlexibleLine reached a consumer with no agency to resolve -- the defect this pass exists to
+    /// fix, left standing for one of the two classes.
+    @Test
+    void testAFlexibleLineIsAttributedLikeALine(TestStore db) throws Exception {
+        TestStore target = run(db, FLEXIBLE_LINE);
+
+        Check.equals("ch:1:Authority:234",
+                flexibleLinesOf(target).get("ch:2:FlexibleLine:onDemand").getAuthorityRef().getRef(),
+                "the FlexibleLine is attributed from its Operator, like a Line");
+        Check.equals("ch:1:Authority:234",
+                linesOf(target).get("ch:2:Line:plain").getAuthorityRef().getRef(),
+                "and the Line beside it is unaffected");
+        Check.equals(1, authoritiesOf(target).size(),
+                "both share the one Authority minted for their common Operator");
     }
 
     @Test

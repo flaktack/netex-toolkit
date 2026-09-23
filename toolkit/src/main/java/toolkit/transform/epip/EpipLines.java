@@ -9,7 +9,9 @@ package toolkit.transform.epip;
 // AuthorityRef extend the list's bound.
 
 import jakarta.xml.bind.JAXBElement;
+import noi.netex.model.FlexibleLine;
 import noi.netex.model.Line;
+import noi.netex.model.Line_VersionStructure;
 import noi.netex.model.ObjectFactory;
 import noi.netex.model.TransportOrganisationRefStructure;
 import noi.netex.model.TransportOrganisationRefs_RelStructure;
@@ -34,23 +36,31 @@ public final class EpipLines {
     /// read statically.
     public static Iterator<Object> epipLineGenerator(
             Store dbRead, Txn txnRead, GeneratorDefaults generatorDefaults) {
-        Iterator<Object> lines = dbRead.iterOnlyObjects(txnRead, Line.class).iterator();
+        // Both concrete line classes. A FlexibleLine is a Line with flexible-service fields
+        // added, so it carries the same organisation CHOICE and the same refs the profile has no
+        // field for; draining one class map alone leaves every FlexibleLine unprocessed.
+        //
+        // Drained in turn rather than collected: the generator's contract is that it decodes one
+        // object at a time, and a store holds every Line it has.
+        Iterator<Object> plain = dbRead.iterOnlyObjects(txnRead, Line.class).iterator();
+        Iterator<Object> flexible = dbRead.iterOnlyObjects(txnRead, FlexibleLine.class).iterator();
         return new Iterator<>() {
             @Override
             public boolean hasNext() {
-                return lines.hasNext();
+                return plain.hasNext() || flexible.hasNext();
             }
 
             @Override
             public Object next() {
-                Line line = (Line) lines.next();
+                Line_VersionStructure line =
+                        (Line_VersionStructure) (plain.hasNext() ? plain.next() : flexible.next());
                 process(line);
                 return line;
             }
         };
     }
 
-    private static void process(Line line) {
+    private static void process(Line_VersionStructure line) {
         line.setBrandingRef(null);
         line.setTypeOfServiceRef(null);
         line.setTypeOfProductCategoryRef(null);
@@ -73,7 +83,8 @@ public final class EpipLines {
     /// from the one demoted here. Position is the only marker there is, so a consumer restoring
     /// the primary reference reads the first entry of its kind.
     private static void demoteAdditionalOperator(
-            Line line, JAXBElement<? extends TransportOrganisationRefStructure> ref) {
+            Line_VersionStructure line,
+            JAXBElement<? extends TransportOrganisationRefStructure> ref) {
         TransportOrganisationRefs_RelStructure ao = line.getAdditionalOperators();
         if (ao != null && !ao.getTransportOrganisationRef().isEmpty()) {
             ao.getTransportOrganisationRef().add(0, ref);

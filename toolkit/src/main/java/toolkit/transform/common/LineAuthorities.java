@@ -11,8 +11,10 @@ import noi.netex.model.Authority;
 import noi.netex.model.AuthorityRef;
 import noi.netex.model.AuthorityRefStructure;
 import noi.netex.model.Codespace;
+import noi.netex.model.FlexibleLine;
 import noi.netex.model.GroupOfLines;
 import noi.netex.model.Line;
+import noi.netex.model.Line_VersionStructure;
 import noi.netex.text.Mls;
 import noi.netex.model.MultilingualString;
 import noi.netex.model.Network;
@@ -30,6 +32,7 @@ import toolkit.util.Log;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,7 +45,9 @@ public final class LineAuthorities {
 
     private LineAuthorities() {}
 
-    /// Repaired Networks, Lines given an authorityRef, then the synthesised Authorities.
+    /// Repaired Networks, Lines and FlexibleLines given an authorityRef, then the synthesised
+    /// Authorities. The two line classes are siblings, not one a subclass of the other, so a caller
+    /// overlaying the result has to route them to their own class maps.
     ///
     /// `fallback` names the codespace a minted Authority's id takes when the Operator's carries no
     /// class token to derive from. A [Codespace] rather than the generators' defaults record: this
@@ -148,9 +153,12 @@ public final class LineAuthorities {
             }
         }
 
+        // Both concrete line classes. FlexibleLine extends Line_VersionStructure, so it carries
+        // the same authorityRef, operatorRef and representedByGroupRef and takes the same
+        // repair; draining one class map alone leaves every FlexibleLine unattributed.
         long lineFixed = 0;
-        for (Object o : db.iterOnlyObjects(txn, Line.class)) {
-            Line line = (Line) o;
+        for (Object o : lines(db, txn)) {
+            Line_VersionStructure line = (Line_VersionStructure) o;
             var grp = line.getRepresentedByGroupRef();
             if (line.getAuthorityRef() != null
                     || (grp != null && resolvableGroups.contains(grp.getRef()))) {
@@ -181,6 +189,29 @@ public final class LineAuthorities {
         ar.setRef(authId);
         ar.setVersion(authorityVersion.get(authId));
         return ar;
+    }
+
+    /// Every Line of a store, both concrete classes, as one sequence. A FlexibleLine is a Line with
+    /// flexible-service fields added, so every field this pass reads is on the shared supertype.
+    ///
+    /// Drained in turn rather than collected: a store holds every Line it has, and this pass keeps
+    /// only the ones it repairs.
+    private static Iterable<Object> lines(Store db, Txn txn) {
+        return () -> new Iterator<>() {
+            private final Iterator<Object> plain = db.iterOnlyObjects(txn, Line.class).iterator();
+            private final Iterator<Object> flexible =
+                    db.iterOnlyObjects(txn, FlexibleLine.class).iterator();
+
+            @Override
+            public boolean hasNext() {
+                return plain.hasNext() || flexible.hasNext();
+            }
+
+            @Override
+            public Object next() {
+                return plain.hasNext() ? plain.next() : flexible.next();
+            }
+        };
     }
 
     private static String lastSegment(String id) {
