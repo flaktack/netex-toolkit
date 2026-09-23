@@ -421,7 +421,7 @@ public final class BindCmd {
     /// its own; the `JAXBContext` behind them is shared and built once.
     static final class Worker {
         private final FragmentCodec codec = new FragmentCodec();
-        private final XMLInputFactory xif = XMLInputFactory.newInstance();
+        private final XMLInputFactory xif = new com.fasterxml.aalto.stax.InputFactoryImpl();
         private final int maxDepth, values;
         private final boolean doAttrs;
         private final Map<String, Set<String>> attrTable;

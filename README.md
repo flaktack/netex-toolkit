@@ -226,8 +226,9 @@ The toolkit has a custom netex-model due to how NeTEx meets JAXB. The ones worth
 - **2.0 redefines `MultilingualString` as a mixed type**, so `getValue()`/`setValue()` cease to exist and there is one
   state for null and empty — `<Name/>` reads null where simple content read `""`. Every call site goes through the `Mls`
   accessor seam.
-- **Two StAX implementations, chosen once** (`Stax`). Woodstox where per-event character offsets are required, because
-  that is what lets `RefPatcher` splice attributes into stored bytes; Aalto for decode, because it is faster.
+- **One StAX reader, built in one place** (`Stax`). Every reader of a stored fragment shares it, because those
+  byte-reads are compared against unmarshalled bean fields; its per-event input byte offsets are what let `RefPatcher`
+  splice attributes into stored bytes.
 - **An element name does not determine a class.** Some NeTEx names are declared with different types in different
   parents, so `RefElementIndex` returns a candidate set; a caller must reach the same verdict for all of them or fall
   back to unmarshalling.

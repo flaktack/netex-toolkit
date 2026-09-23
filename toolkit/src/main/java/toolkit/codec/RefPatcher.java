@@ -1,6 +1,5 @@
 package toolkit.codec;
 
-import com.ctc.wstx.stax.WstxInputFactory;
 import org.codehaus.stax2.LocationInfo;
 import org.codehaus.stax2.XMLStreamReader2;
 
@@ -8,9 +7,10 @@ import javax.xml.stream.XMLInputFactory;
 import javax.xml.stream.XMLStreamConstants;
 import javax.xml.stream.XMLStreamReader;
 import java.io.ByteArrayInputStream;
-import java.io.StringReader;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -26,9 +26,11 @@ import toolkit.util.Log;
 /// Resolve repairs a reference by setting `version` and/or `nameOfRefClass` and then persisting
 /// the object. Persisting through a full re-marshal, to change one start-tag attribute, is where
 /// stored-fragment loss comes from. [#patch] instead rewrites exactly the affected start tags and
-/// passes every other character through verbatim: the parser only locates element boundaries, via
-/// Woodstox [LocationInfo] character offsets, and nothing outside a patched start tag is rewritten,
-/// so text, CDATA, comments, entity references and attribute order survive byte for byte.
+/// passes every other byte through verbatim: the parser only locates element boundaries, via
+/// [LocationInfo] per-event input byte offsets, and nothing outside a patched start tag is
+/// rewritten, so text, CDATA, comments, entity references and attribute order survive byte for
+/// byte. The surgery is done on the raw bytes: every character it keys on is ASCII, and a UTF-8
+/// multi-byte sequence contains no ASCII byte.
 ///
 /// Matching is by the triple (`@ref`, `@version`, `@nameOfRefClass`) as it appears in the fragment,
 /// on any element carrying an unqualified `ref` attribute, in any namespace and under any element
@@ -37,9 +39,8 @@ import toolkit.util.Log;
 /// repair does.
 ///
 /// [#patch] returns `null` — meaning "fall back to the re-marshal" — when the fragment is not
-/// well-formed, contains a CR (whose line-ending normalisation moves the parser's offsets off the
-/// raw text), has a located start tag that does not scan as one, or when any requested patch failed
-/// to land on at least one element.
+/// well-formed, has a located start tag that does not scan as one, or when any requested patch
+/// failed to land on at least one element.
 public final class RefPatcher {
 
     /// A reference as it appears in the stored fragment. `null` = attribute absent.
@@ -52,17 +53,14 @@ public final class RefPatcher {
     private static final String A_VERSION = "version";
     private static final String A_NAME = "nameOfRefClass";
 
-    /// Woodstox: the only StAX implementation here that reports per-event input offsets.
-    private final WstxInputFactory wif = Stax.offsetFactory();
-
-    /// Aalto — `FragmentCodec.decode`'s reader, used by [#scan] (no offsets needed).
-    private final XMLInputFactory scanFactory = Stax.decodeFactory();
+    /// `FragmentCodec.decode`'s reader, shared by [#scan] and [#patch].
+    private final XMLInputFactory xif = Stax.factory();
 
     /// Elements that matched a patch but are not named `*Ref` — expected to stay 0.
     private long oddlyNamed;
 
-    /// Why patches were refused: {CR, not-well-formed, bad offsets, unlanded, tag scan}.
-    private final long[] refusals = new long[5];
+    /// Why patches were refused: {not-well-formed, bad offsets, unlanded, tag scan}.
+    private final long[] refusals = new long[4];
 
     public long[] refusals() {
         return refusals;
@@ -74,10 +72,11 @@ public final class RefPatcher {
     private static final boolean DEBUG = Conf.on(Conf.REF_PATCH_DEBUG);
     private static int debugged;
 
-    private static synchronized void debug(String s, Map<Key, Val> patches, Set<Key> landed) {
+    private static synchronized void debug(byte[] xml, Map<Key, Val> patches, Set<Key> landed) {
         if (debugged++ > 3) return;
         Log.warn("[refpatch] UNLANDED wanted=%s landed=%s", patches.keySet(), landed);
-        Log.warn("[refpatch] fragment head: %s", s.substring(0, Math.min(1500, s.length())));
+        Log.warn("[refpatch] fragment head: %s",
+                new String(xml, 0, Math.min(1500, xml.length), StandardCharsets.UTF_8));
     }
 
     public long oddlyNamedMatches() {
@@ -104,7 +103,7 @@ public final class RefPatcher {
     public List<Occurrence> scan(byte[] xml) {
         List<Occurrence> out = new ArrayList<>();
         try {
-            XMLStreamReader r = scanFactory.createXMLStreamReader(new ByteArrayInputStream(xml));
+            XMLStreamReader r = xif.createXMLStreamReader(new ByteArrayInputStream(xml));
             int depth = -1;
             while (r.hasNext()) {
                 int ev = r.next();
@@ -158,15 +157,12 @@ public final class RefPatcher {
     ///     must then fall back to the re-marshal)
     public byte[] patch(byte[] xml, Map<Key, Val> patches) {
         if (patches.isEmpty()) return null;
-        for (byte b : xml) {
-            if (b == '\r') { refusals[0]++; return null; } // CR moves the offsets off the raw text
-        }
-        String s = new String(xml, StandardCharsets.UTF_8);
         List<int[]> spans = new ArrayList<>();   // {start, end} of each start tag to rewrite
         List<Val> vals = new ArrayList<>();
         Set<Key> landed = new HashSet<>();
         try {
-            XMLStreamReader2 r = (XMLStreamReader2) wif.createXMLStreamReader(new StringReader(s));
+            XMLStreamReader2 r =
+                    (XMLStreamReader2) xif.createXMLStreamReader(new ByteArrayInputStream(xml));
             LocationInfo li = r.getLocationInfo();
             while (r.hasNext()) {
                 if (r.next() != XMLStreamConstants.START_ELEMENT) continue;
@@ -175,12 +171,12 @@ public final class RefPatcher {
                 Key key = new Key(t[0], t[1], t[2]);
                 Val v = patches.get(key);
                 if (v == null) continue;
-                long from = li.getStartingCharOffset();
-                long to = li.getEndingCharOffset();
-                if (from < 0 || to <= from || to > s.length()) { refusals[2]++; return null; }
-                if (s.charAt((int) from) != '<') { refusals[2]++; return null; }
-                int end = tagEnd(s, (int) from, (int) to);
-                if (end < 0) { refusals[2]++; return null; }
+                long from = li.getStartingByteOffset();
+                long to = li.getEndingByteOffset();
+                if (from < 0 || to <= from || to > xml.length) { refusals[1]++; return null; }
+                if (xml[(int) from] != '<') { refusals[1]++; return null; }
+                int end = tagEnd(xml, (int) from, (int) to);
+                if (end < 0) { refusals[1]++; return null; }
                 if (!r.getLocalName().endsWith("Ref")) oddlyNamed++;
                 spans.add(new int[] {(int) from, end});
                 vals.add(v);
@@ -188,39 +184,39 @@ public final class RefPatcher {
             }
             r.close();
         } catch (Exception e) {
-            refusals[1]++;
+            refusals[0]++;
             return null; // not well-formed: the re-marshal is the safe answer
         }
         if (landed.size() != patches.size()) {
-            refusals[3]++;
-            if (DEBUG) debug(s, patches, landed);
+            refusals[2]++;
+            if (DEBUG) debug(xml, patches, landed);
             return null; // a requested repair found no element
         }
         if (spans.isEmpty()) return null;
         // spans/vals are positionally paired and already in document order; the ascending check in
         // the splice loop below enforces that, so never sort them.
-        StringBuilder out = new StringBuilder(s.length() + 64 * spans.size());
+        ByteArrayOutputStream out = new ByteArrayOutputStream(xml.length + 64 * spans.size());
         int copied = 0;
         for (int i = 0; i < spans.size(); i++) {
             int[] sp = spans.get(i);
             if (sp[0] < copied) return null; // nested/overlapping start tags cannot happen
-            String tag = rewriteTag(s, sp[0], sp[1], vals.get(i));
-            if (tag == null) { refusals[4]++; return null; }
-            out.append(s, copied, sp[0]).append(tag);
+            byte[] tag = rewriteTag(xml, sp[0], sp[1], vals.get(i));
+            if (tag == null) { refusals[3]++; return null; }
+            out.write(xml, copied, sp[0] - copied);
+            out.write(tag, 0, tag.length);
             copied = sp[1];
         }
-        out.append(s, copied, s.length());
-        return out.toString().getBytes(StandardCharsets.UTF_8);
+        out.write(xml, copied, xml.length - copied);
+        return out.toByteArray();
     }
 
     /// End (exclusive) of the start tag that begins at `from`: the first `'>'` outside an attribute
-    /// value. `limit` is the parser-reported end of the event, which Woodstox gives as the end of
-    /// the tag for an empty element and as the end of the whole element for a non-empty one.
-    private static int tagEnd(String s, int from, int limit) {
+    /// value. `limit` is the parser-reported end of the event, which is an upper bound on the tag.
+    private static int tagEnd(byte[] b, int from, int limit) {
         boolean inQuote = false;
-        char q = 0;
+        byte q = 0;
         for (int i = from + 1; i < limit; i++) {
-            char c = s.charAt(i);
+            byte c = b[i];
             if (inQuote) {
                 if (c == q) inQuote = false;
             } else if (c == '"' || c == '\'') {
@@ -235,69 +231,73 @@ public final class RefPatcher {
 
     // ------------------------------------------------------------------ start-tag surgery
 
-    /// One attribute of a start tag, as character ranges.
+    /// One attribute of a start tag, as byte ranges.
     private record Attr(int preStart, int nameStart, int nameEnd, int valueStart, int valueEnd,
-                        char quote, int end) {}
+                        byte quote, int end) {}
 
-    /// Rewrite the start tag `s[from,to)` so that `version`/`nameOfRefClass` carry `v`.
+    /// Rewrite the start tag `b[from,to)` so that `version`/`nameOfRefClass` carry `v`.
     /// Present-and-different is replaced in place (attribute order preserved); present-and-equal is
     /// left untouched; absent-and-wanted is appended after the last existing attribute;
     /// present-and-wanted-null is removed together with its leading whitespace.
     ///
-    /// @return the new tag text, or `null` if the tag does not scan as a start tag
-    private static String rewriteTag(String s, int from, int to, Val v) {
-        if (s.charAt(from) != '<' || s.charAt(to - 1) != '>') return null;
+    /// @return the new tag bytes, or `null` if the tag does not scan as a start tag
+    private static byte[] rewriteTag(byte[] b, int from, int to, Val v) {
+        if (b[from] != '<' || b[to - 1] != '>') return null;
         int limit = to - 1;
         int p = from + 1;
-        while (p < limit && !isSpace(s.charAt(p)) && s.charAt(p) != '/') p++; // element qname
+        while (p < limit && !isSpace(b[p]) && b[p] != '/') p++; // element qname
         int afterLast = p;
         List<Attr> attrs = new ArrayList<>();
         while (true) {
             int pre = p;
-            while (p < limit && isSpace(s.charAt(p))) p++;
-            if (p >= limit || s.charAt(p) == '/') break;
+            while (p < limit && isSpace(b[p])) p++;
+            if (p >= limit || b[p] == '/') break;
             int nameStart = p;
-            while (p < limit && !isSpace(s.charAt(p)) && s.charAt(p) != '=') p++;
+            while (p < limit && !isSpace(b[p]) && b[p] != '=') p++;
             int nameEnd = p;
             if (nameEnd == nameStart) return null;
-            while (p < limit && isSpace(s.charAt(p))) p++;
-            if (p >= limit || s.charAt(p) != '=') return null;
+            while (p < limit && isSpace(b[p])) p++;
+            if (p >= limit || b[p] != '=') return null;
             p++;
-            while (p < limit && isSpace(s.charAt(p))) p++;
-            if (p >= limit || (s.charAt(p) != '"' && s.charAt(p) != '\'')) return null;
-            char q = s.charAt(p);
+            while (p < limit && isSpace(b[p])) p++;
+            if (p >= limit || (b[p] != '"' && b[p] != '\'')) return null;
+            byte q = b[p];
             int valueStart = ++p;
-            while (p < limit && s.charAt(p) != q) p++;
+            while (p < limit && b[p] != q) p++;
             if (p >= limit) return null;
             int valueEnd = p++;
             attrs.add(new Attr(pre, nameStart, nameEnd, valueStart, valueEnd, q, p));
             afterLast = p;
         }
         List<Object[]> edits = new ArrayList<>(); // {start, end, replacement}
-        if (!planAttr(s, attrs, A_VERSION, v.version(), afterLast, edits)) return null;
-        if (!planAttr(s, attrs, A_NAME, v.nameOfRefClass(), afterLast, edits)) return null;
-        if (edits.isEmpty()) return s.substring(from, to);
-        edits.sort((a, b) -> Integer.compare((Integer) a[0], (Integer) b[0]));
-        StringBuilder out = new StringBuilder(to - from + 64);
+        if (!planAttr(b, attrs, A_VERSION, v.version(), afterLast, edits)) return null;
+        if (!planAttr(b, attrs, A_NAME, v.nameOfRefClass(), afterLast, edits)) return null;
+        if (edits.isEmpty()) return Arrays.copyOfRange(b, from, to);
+        edits.sort((x, y) -> Integer.compare((Integer) x[0], (Integer) y[0]));
+        ByteArrayOutputStream out = new ByteArrayOutputStream(to - from + 64);
         int copied = from;
         for (Object[] e : edits) {
             int es = (Integer) e[0];
             int ee = (Integer) e[1];
             if (es < copied) return null;
-            out.append(s, copied, es).append((String) e[2]);
+            out.write(b, copied, es - copied);
+            byte[] rep = (byte[]) e[2];
+            out.write(rep, 0, rep.length);
             copied = ee;
         }
-        out.append(s, copied, to);
-        return out.toString();
+        out.write(b, copied, to - copied);
+        return out.toByteArray();
     }
 
     /// Queue the edit for one attribute; false = the tag is not patchable.
-    private static boolean planAttr(String s, List<Attr> attrs, String name, String wanted,
+    private static boolean planAttr(byte[] b, List<Attr> attrs, String name, String wanted,
                                     int afterLast, List<Object[]> edits) {
+        byte[] nameBytes = name.getBytes(StandardCharsets.UTF_8);
         Attr found = null;
         for (Attr a : attrs) {
-            if (s.regionMatches(a.nameStart(), name, 0, name.length())
-                    && a.nameEnd() - a.nameStart() == name.length()) {
+            if (a.nameEnd() - a.nameStart() == nameBytes.length
+                    && Arrays.equals(b, a.nameStart(), a.nameEnd(), nameBytes, 0,
+                            nameBytes.length)) {
                 if (found != null) return false; // duplicate attribute: not well-formed anyway
                 found = a;
             }
@@ -305,23 +305,24 @@ public final class RefPatcher {
         if (found == null) {
             if (wanted == null) return true; // absent, and wanted absent
             edits.add(new Object[] {afterLast, afterLast,
-                    " " + name + "=\"" + escape(wanted, '"') + "\""});
+                    (" " + name + "=\"" + escape(wanted, '"') + "\"")
+                            .getBytes(StandardCharsets.UTF_8)});
             return true;
         }
         if (wanted == null) { // present, wanted absent: drop it, leading whitespace included
-            edits.add(new Object[] {found.preStart(), found.end(), ""});
+            edits.add(new Object[] {found.preStart(), found.end(), new byte[0]});
             return true;
         }
-        String next = escape(wanted, found.quote());
-        if (s.regionMatches(found.valueStart(), next, 0, next.length())
-                && found.valueEnd() - found.valueStart() == next.length()) {
+        byte[] next = escape(wanted, (char) found.quote()).getBytes(StandardCharsets.UTF_8);
+        if (found.valueEnd() - found.valueStart() == next.length
+                && Arrays.equals(b, found.valueStart(), found.valueEnd(), next, 0, next.length)) {
             return true; // present and already correct: leave the bytes alone
         }
         edits.add(new Object[] {found.valueStart(), found.valueEnd(), next});
         return true;
     }
 
-    private static boolean isSpace(char c) {
+    private static boolean isSpace(byte c) {
         return c == ' ' || c == '\t' || c == '\n' || c == '\r';
     }
 

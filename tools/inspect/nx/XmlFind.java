@@ -1,13 +1,12 @@
 package inspect.nx;
 
-import com.ctc.wstx.stax.WstxInputFactory;
-import com.ctc.wstx.stax.WstxOutputFactory;
 import org.codehaus.stax2.XMLStreamReader2;
 import org.codehaus.stax2.XMLStreamWriter2;
 
 import javax.xml.stream.XMLStreamConstants;
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLInputFactory;
+import javax.xml.stream.XMLOutputFactory;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -174,11 +173,11 @@ public final class XmlFind {
 
     private static long scan(InputStream in, Unit u, String id, String version, String localName,
                              List<Found> hits, int maxHits, AtomicBoolean stop) throws Exception {
-        WstxInputFactory xif = new WstxInputFactory();
+        XMLInputFactory xif = new com.fasterxml.aalto.stax.InputFactoryImpl();
         xif.setProperty(XMLInputFactory.SUPPORT_DTD, false);
         xif.setProperty(XMLInputFactory.IS_COALESCING, false);
         xif.setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, true);
-        WstxOutputFactory wof = new WstxOutputFactory();
+        XMLOutputFactory wof = new com.fasterxml.aalto.stax.OutputFactoryImpl();
         XMLStreamReader2 r = (XMLStreamReader2) xif.createXMLStreamReader(in);
 
         ArrayDeque<List<String[]>> nsStack = new ArrayDeque<>();

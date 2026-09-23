@@ -39,7 +39,7 @@ public final class XmlDoc {
     // ------------------------------------------------------------------ parse
 
     public static XmlDoc parse(byte[] xml) throws Exception {
-        XMLInputFactory xif = XMLInputFactory.newInstance();
+        XMLInputFactory xif = new com.fasterxml.aalto.stax.InputFactoryImpl();
         xif.setProperty(XMLInputFactory.SUPPORT_DTD, false);
         xif.setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false);
         xif.setProperty(XMLInputFactory.IS_COALESCING, Boolean.TRUE);

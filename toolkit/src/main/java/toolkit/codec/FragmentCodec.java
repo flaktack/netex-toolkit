@@ -31,7 +31,7 @@ public final class FragmentCodec {
 
     private final LZ4Compressor comp = LZ4.fastCompressor();
     private final LZ4FastDecompressor decomp = LZ4.fastDecompressor();
-    private final XMLInputFactory xif = Stax.decodeFactory();
+    private final XMLInputFactory xif = Stax.factory();
     private Unmarshaller unmarshaller;
     private Marshaller marshaller;
     private BindEvents decodeEvents;

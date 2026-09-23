@@ -123,7 +123,7 @@ final class BlobRepair {
                         + "fallbacks (%d attribute conflicts, %d missing blobs); %d odd-named ref elements",
                 stage, patchStats[0], patchStats[1], patchStats[2], patchStats[3], patchStats[4],
                 refPatcher.oddlyNamedMatches());
-        Log.info("[%s] blob repair refusals {cr, malformed, offsets, unlanded, tagscan} = %s"
+        Log.info("[%s] blob repair refusals {malformed, offsets, unlanded, tagscan} = %s"
                         + " (these two counters are cumulative over the store, not per stage)",
                 stage, Arrays.toString(refPatcher.refusals()));
         Arrays.fill(patchStats, 0);

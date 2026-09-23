@@ -420,7 +420,7 @@ public final class BindProbe {
         Unmarshaller naive = FragmentCodec.packageContext().createUnmarshaller();
         ValidationEventCollector vec = new ValidationEventCollector();
         naive.setEventHandler(vec);
-        XMLInputFactory xif = XMLInputFactory.newInstance();
+        XMLInputFactory xif = new com.fasterxml.aalto.stax.InputFactoryImpl();
         xif.setProperty(XMLInputFactory.SUPPORT_DTD, false);
         xif.setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false);
         try {

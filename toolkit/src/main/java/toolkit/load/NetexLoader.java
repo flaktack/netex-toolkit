@@ -65,7 +65,7 @@ public final class NetexLoader {
     public NetexLoader() {
         try {
             this.sets = NameSets.fromResources();
-            this.xif = new com.ctc.wstx.stax.WstxInputFactory();
+            this.xif = new com.fasterxml.aalto.stax.InputFactoryImpl();
             xif.setProperty(XMLInputFactory.SUPPORT_DTD, false);
             xif.setProperty(XMLInputFactory.IS_COALESCING, false);
             xif.setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, true);
@@ -163,8 +163,7 @@ public final class NetexLoader {
         // Unmarshalling happens on this thread, so JAXB's Coordinator thread-local is pinned here
         // too (see toolkit.codec.JaxbPin).
         toolkit.codec.JaxbPin.pin();
-        // The label is the reader's system id, so a well-formedness error names the stream instead
-        // of Woodstox's `{unknown-source}`.
+        // The label is the reader's system id, so a well-formedness error names the stream.
         CopyingCapture reader = new CopyingCapture(
                 (org.codehaus.stax2.XMLStreamReader2) xif.createXMLStreamReader(label, in), sets);
         // The handler counts bind events and delegates its verdict to the RI's default, so tolerance

@@ -1,6 +1,6 @@
 package toolkit.load;
 
-import com.ctc.wstx.stax.WstxOutputFactory;
+import com.fasterxml.aalto.stax.OutputFactoryImpl;
 import org.codehaus.stax2.XMLStreamReader2;
 import org.codehaus.stax2.XMLStreamWriter2;
 
@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.Set;
 
 /// Fragment capture: a [StreamReaderDelegate] that tees every StAX event of an interesting element
-/// into a Woodstox [XMLStreamWriter2] while JAXB unmarshals through it. The fragment is built from
+/// into an [XMLStreamWriter2] while JAXB unmarshals through it. The fragment is built from
 /// source parse events, not from a post-bind re-marshal.
 ///
 /// Attribute denormalisation lives here (PROV-CAP: denorm-depth) because this is the only
@@ -31,8 +31,9 @@ import java.util.Set;
 /// 2. **Start-tag whitespace.** Attributes keep source order; one space between, double quotes.
 ///    Source newlines and `'` quoting are lost.
 /// 3. **Entity re-escaping.** The parser resolves references and the writer re-escapes
-///    canonically, so `&#65;` becomes `A`. CDATA stays CDATA. Attribute-value whitespace
-///    normalization is the parser's, per spec.
+///    canonically, so `&#65;` becomes `A`. A text node's trailing `]` is escaped as `&#x5d;`.
+///    CDATA stays CDATA, one section per text node. Attribute-value whitespace normalization is
+///    the parser's, per spec.
 /// 4. **Empty-element form.** Always self-closing.
 /// 5. **Attribute synthesis, at any depth.** `id`, `version`, `dataSourceRef`,
 ///    `responsibilitySetRef` appended to every element lacking them for which a value can be
@@ -68,7 +69,7 @@ final class CopyingCapture extends StreamReaderDelegate {
 
     private final XMLStreamReader2 raw;
     private final NetexLoader.NameSets sets;
-    private final WstxOutputFactory wof = new WstxOutputFactory();
+    private final OutputFactoryImpl wof = new OutputFactoryImpl();
     private final ByteArrayOutputStream buf = new ByteArrayOutputStream(16 << 10);
     private XMLStreamWriter2 w;
     private int depth;

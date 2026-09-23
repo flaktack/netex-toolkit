@@ -14,7 +14,7 @@ import java.util.Set;
 /// attributes count here.
 public final class FragmentPeek {
 
-    private final XMLInputFactory xif = Stax.decodeFactory();
+    private final XMLInputFactory xif = Stax.factory();
 
     public FragmentPeek() {
     }

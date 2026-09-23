@@ -16,16 +16,18 @@
   </properties>
 
   <dependencies>
-    <!-- XML parsing -->
-    <dependency>
-      <groupId>com.fasterxml.woodstox</groupId>
-      <artifactId>woodstox-core</artifactId>
-      <version>7.1.1</version>
-    </dependency>
+    <!-- XML parsing. stax2-api is declared because org.codehaus.stax2 types are imported
+         directly by toolkit.codec.RefPatcher, toolkit.load.CopyingCapture, toolkit.load
+         .NetexLoader and the source-launched tools/diff/RoundTrip and tools/inspect/nx/XmlFind. -->
     <dependency>
       <groupId>com.fasterxml</groupId>
       <artifactId>aalto-xml</artifactId>
-      <version>1.3.4</version>
+      <version>1.4.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.codehaus.woodstox</groupId>
+      <artifactId>stax2-api</artifactId>
+      <version>4.3.0</version>
     </dependency>
 
     <!-- JAXB (jakarta) runtime + API -->
@@ -225,17 +227,13 @@
            for consumers, who copy one file instead of a jar plus 31 loose ones.
 
            An uber jar's usual way to fail is a META-INF/services file silently overwritten by
-           another jar's copy of the same name. Here the merge is safe:
-             - jakarta.xml.bind.JAXBContextFactory (jaxb-runtime) and org.slf4j.spi
-               .SLF4JServiceProvider (logback-classic) are single-provider and load-bearing —
-               FragmentCodec's JAXBContext.newInstance and the logging binding resolve through
-               them. ServicesResourceTransformer preserves both.
-             - javax.xml.stream.XMLInputFactory/XMLOutputFactory/XMLEventFactory are declared by
-               BOTH aalto-xml and woodstox-core. Merging concatenates the providers and so changes
-               what XMLInputFactory.newInstance() would return — which is why toolkit.codec.Stax
-               names both implementations directly (`new InputFactoryImpl()`, `new
-               WstxInputFactory()`) and nothing here ever calls newInstance(). The merge is inert.
-               If that ever stops being true, this transformer becomes a live hazard.
+           another jar's copy of the same name. Here every service file has one provider, and
+           ServicesResourceTransformer preserves each: jakarta.xml.bind.JAXBContextFactory
+           (jaxb-runtime) and org.slf4j.spi.SLF4JServiceProvider (logback-classic) are
+           load-bearing — FragmentCodec's JAXBContext.newInstance and the logging binding resolve
+           through them — and javax.xml.stream.XMLInputFactory/XMLOutputFactory/XMLEventFactory
+           come from aalto-xml alone. A second StAX implementation on this classpath would make
+           the merge concatenate providers and change what newInstance() returns.
 
            module-info.class is dropped from all 18 jars that carry one: a single jar cannot carry
            18 module descriptors, and the classpath launch this jar is for does not read them. Of
@@ -441,8 +439,8 @@
                     toolkit/store/Store.class \
                     toolkit/transform/epip/EpipJourneys.class \
                     noi/netex/model/ObjectFactory.class \
-                    com/ctc/wstx/stax/WstxInputFactory.class \
                     com/fasterxml/aalto/stax/InputFactoryImpl.class \
+                    com/fasterxml/aalto/stax/OutputFactoryImpl.class \
                     jakarta/xml/bind/JAXBContext.class \
                     org/glassfish/jaxb/runtime/v2/ContextFactory.class \
                     org/lmdbjava/Env.class \

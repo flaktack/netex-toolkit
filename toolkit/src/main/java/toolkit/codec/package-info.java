@@ -10,8 +10,8 @@
 /// The rest are repairs for defects that are not ours: [toolkit.codec.EnumWhitespace] (a padded
 /// NMTOKEN misses JAXB's enum map and returns null silently), [toolkit.codec.SchemaDefaults]
 /// (omit-if-default on marshal), [toolkit.codec.JaxbPin] (a per-event allocation in the RI), and
-/// [toolkit.codec.Stax] — the single point where the StAX implementation is chosen, Woodstox for
-/// byte offsets, Aalto for decode.
+/// [toolkit.codec.Stax] — the single point where the StAX reader is built, so every reader of a
+/// stored fragment shares one.
 ///
 /// [toolkit.codec.BindEvents] counts what failed to bind. It cannot see a value whose adapter
 /// returned an object, which is what the date/time carriers do with an unparseable lexeme; that

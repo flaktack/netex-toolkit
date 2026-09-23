@@ -49,6 +49,7 @@ import toolkit.store.WithFragment;
 import javax.xml.stream.XMLStreamConstants;
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLInputFactory;
+import javax.xml.stream.XMLOutputFactory;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
@@ -255,11 +256,11 @@ public final class RoundTrip {
 
     static long scanStream(String label, InputStream in, NetexLoader.NameSets sets,
                            Map<String, Boolean> hasClass, Writer w) throws Exception {
-        com.ctc.wstx.stax.WstxInputFactory xif = new com.ctc.wstx.stax.WstxInputFactory();
+        XMLInputFactory xif = new com.fasterxml.aalto.stax.InputFactoryImpl();
         xif.setProperty(XMLInputFactory.SUPPORT_DTD, false);
         xif.setProperty(XMLInputFactory.IS_COALESCING, false);
         xif.setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, true);
-        com.ctc.wstx.stax.WstxOutputFactory wof = new com.ctc.wstx.stax.WstxOutputFactory();
+        XMLOutputFactory wof = new com.fasterxml.aalto.stax.OutputFactoryImpl();
         XMLStreamReader2 r = (XMLStreamReader2) xif.createXMLStreamReader(in);
 
         ArrayDeque<List<String[]>> nsStack = new ArrayDeque<>();

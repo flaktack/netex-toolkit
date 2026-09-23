@@ -169,9 +169,16 @@ public class TestRefPatcher {
         Check.isNull(patched("<A><R ref=\"X\"/>",
                         new RefPatcher.Key("X", null, null), new RefPatcher.Val("1", null)),
                 "a fragment that is not well-formed refuses to patch");
-        Check.isNull(patched("<A>\r\n<R ref=\"X\"/></A>",
+    }
+
+    /// A CR is not line-ending-normalised out of a byte offset, so a fragment carrying one is
+    /// patched in place with its CRs intact.
+    @Test
+    void testCarriageReturnsSurviveThePatch() {
+        Check.equals("<A>\r\n<R ref=\"X\" version=\"1\"/>\r\n</A>",
+                patched("<A>\r\n<R ref=\"X\"/>\r\n</A>",
                         new RefPatcher.Key("X", null, null), new RefPatcher.Val("1", null)),
-                "a fragment containing CR refuses to patch (line-ending normalisation moves offsets)");
+                "the CRs are passed through and the splice still lands");
     }
 
     @Test

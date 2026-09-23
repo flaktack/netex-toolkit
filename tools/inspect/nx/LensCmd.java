@@ -377,7 +377,7 @@ public final class LensCmd {
         Unmarshaller u = FragmentCodec.packageContext().createUnmarshaller();
         ValidationEventCollector vec = new ValidationEventCollector();
         u.setEventHandler(vec);
-        XMLInputFactory xif = XMLInputFactory.newInstance();
+        XMLInputFactory xif = new com.fasterxml.aalto.stax.InputFactoryImpl();
         xif.setProperty(XMLInputFactory.SUPPORT_DTD, false);
         XMLStreamReader r = xif.createXMLStreamReader(new ByteArrayInputStream(xml));
         r.nextTag();
