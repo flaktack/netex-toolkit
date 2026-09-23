@@ -59,6 +59,7 @@ import toolkit.store.UnresolvedRow;
 import toolkit.transform.epip.EpipConfig;
 import toolkit.util.Log;
 import toolkit.util.PeekIterator;
+import toolkit.util.Strictness;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -579,8 +580,11 @@ public final class EpipDbToZip {
         if (sjp == null && sj == null) return;
         int sjpIdx = sjp == null ? -1 : store.classIdxInt(sjp);
         int sjIdx = sj == null ? -1 : store.classIdxInt(sj);
+        // The pattern classes a journey may name that this profile does not emit. ServicePattern is
+        // among them: EPIP permits it beside ServiceJourneyPattern, so a feed built on it would have
+        // every journey land in the silent-drop branch below without being counted.
         Set<Integer> otherPatternIdx = new HashSet<>();
-        for (String n : List.of("JourneyPattern", "DeadRunJourneyPattern")) {
+        for (String n : List.of("JourneyPattern", "DeadRunJourneyPattern", "ServicePattern")) {
             Class<?> c = store.classForName(n);
             if (c != null) otherPatternIdx.add(store.classIdxInt(c));
         }
@@ -617,6 +621,7 @@ public final class EpipDbToZip {
         // Pattern ref -> journey keys, in scan order.
         Map<String, LongArrayList> byPattern = new HashMap<>();
         LongArrayList orphans = new LongArrayList();
+        long droppedByPatternRef = 0;
         for (int i = 0; i < scans.sjKeys.size(); i++) {
             long fk = scans.sjKeys.getLong(i);
             long pat = scans.sjToPattern.get(fk);
@@ -624,9 +629,14 @@ public final class EpipDbToZip {
                 byPattern.computeIfAbsent(scans.patternId.get(pat), k -> new LongArrayList(4)).add(fk);
             } else if (!scans.refDrop.contains(fk)) {
                 orphans.add(fk); // no pattern ref at all -> orphan spill
+            } else {
+                droppedByPatternRef++; // named a pattern this profile does not emit
             }
-            // else: unresolvable pattern ref -> dropped silently
         }
+        // A journey deleted from the output, so it is reported the way every other such deletion is
+        // rather than left to a reader noticing the export is short.
+        Strictness.require(Strictness.DROPPED_OUTPUT, "droppedOutput", droppedByPatternRef, TAG,
+                "ServiceJourneys named a pattern this profile does not emit and were dropped");
 
         // ---- the line partition: one union-find over line full_keys, joined by both relations.
         // An interchange edge is a correctness constraint (see the method doc). An edge from a
@@ -973,7 +983,8 @@ public final class EpipDbToZip {
             if (NulKeyCodec.fullKeyClassIdx(r.referrerFullKey()) != sjIdx) continue;
             Class<?> declared = store.classForIdx(NulKeyCodec.classTrailer(r.encodedTarget()));
             String n = declared == null ? "" : declared.getSimpleName();
-            if (n.equals("ServiceJourneyPattern") || n.equals("JourneyPattern") || n.equals("DeadRunJourneyPattern")) {
+            if (n.equals("ServiceJourneyPattern") || n.equals("JourneyPattern")
+                    || n.equals("DeadRunJourneyPattern") || n.equals("ServicePattern")) {
                 s.refDrop.add(r.referrerFullKey());
             }
         }

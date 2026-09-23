@@ -416,6 +416,64 @@ public class TestDbToZip {
         return out;
     }
 
+    /// One journey on a ServicePattern, one on nothing at all. EPIP permits ServicePattern beside
+    /// ServiceJourneyPattern, and this profile emits only the latter.
+    private static final String SERVICE_PATTERN = """
+        <ServiceFrame id="sf" version="1">
+          <lines>
+            <Line id="l1" version="1"><Name>L</Name><TransportMode>bus</TransportMode></Line>
+          </lines>
+          <servicePatterns>
+            <ServicePattern id="sp1" version="1"><RouteView><LineRef ref="l1" version="1"/></RouteView>
+              <pointsInSequence>
+                <StopPointInJourneyPattern id="sp1-1" version="1" order="1">
+                  <ScheduledStopPointRef ref="ssp1" version="1"/></StopPointInJourneyPattern>
+              </pointsInSequence></ServicePattern>
+          </servicePatterns>
+        </ServiceFrame>
+        <TimetableFrame id="tf" version="1">
+          <vehicleJourneys>
+            <ServiceJourney id="onServicePattern" version="1"><LineRef ref="l1" version="1"/>
+              <ServicePatternRef ref="sp1" version="1"/></ServiceJourney>
+            <ServiceJourney id="onNothing" version="1"><LineRef ref="l1" version="1"/></ServiceJourney>
+          </vehicleJourneys>
+        </TimetableFrame>
+        """;
+
+    /// A journey naming a pattern class this profile does not emit is DROPPED, and counted as a
+    /// deletion from the output. A journey naming no pattern at all still spills to the orphan
+    /// group and is emitted.
+    ///
+    /// The two shared a branch before `ServicePattern` was named: neither reached the drop census,
+    /// so a feed built on ServicePattern had every journey emitted with no pattern for a consumer
+    /// to map it through.
+    @Test
+    void testAJourneyOnAnUnemittedPatternClassIsDroppedNotOrphaned(TestStore ts) throws Exception {
+        Path db = ts.buildDbFile(SERVICE_PATTERN, "sp.lmdb");
+        Path out = ts.tempPath("sp.zip");
+        Path log = ts.tempPath("sp.log");
+        DbToZip.driverMain(EpipDbToZip.TAG, new String[] {db.toString(), out.toString(),
+                        "--log-file", log.toString()},
+                EpipDbToZip.USAGE, EpipDbToZip.flags(), EpipDbToZip::setup);
+
+        // The census, not just the absence: a drop that is counted is one a reader can act on,
+        // where a drop that is merely silent is indistinguishable from a feed that was short.
+        String logged = Files.readString(log);
+        Check.that(logged.contains("1 ServiceJourneys named a pattern this profile does not emit"),
+                "the drop is counted under droppedOutput, not silent: " + logged);
+
+        StringBuilder all = new StringBuilder();
+        try (ZipFile zf = new ZipFile(out.toFile())) {
+            for (ZipEntry e : zf.stream().toList()) {
+                all.append(new String(zf.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8));
+            }
+        }
+        Check.that(all.indexOf("\"onNothing\"") >= 0,
+                "a journey with no pattern ref at all is still emitted as an orphan");
+        Check.that(all.indexOf("\"onServicePattern\"") < 0,
+                "a journey on a ServicePattern is dropped, not emitted pattern-less");
+    }
+
     /// Every `<PublicationTimestamp>` in a zip, deduplicated.
     private static Set<String> timestamps(Path zip) throws Exception {
         Set<String> found = new TreeSet<>();
