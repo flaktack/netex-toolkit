@@ -50,6 +50,7 @@ import noi.netex.model.ServiceJourneyInterchange;
 import noi.netex.model.ServiceJourneyPattern;
 import noi.netex.model.StopPlace;
 import noi.netex.model.StopPointInJourneyPattern;
+import noi.netex.model.TemplateServiceJourney;
 import noi.netex.model.UicOperatingPeriod;
 import noi.netex.model.VehicleType;
 import noi.netex.time.XmlDateTime;
@@ -184,6 +185,19 @@ public class TestEpipTransform {
                 <Call id="c2" version="1" order="2"><ScheduledStopPointRef ref="sspB" version="1"/><Arrival><Time>11:30:00</Time></Arrival></Call>
               </calls>
             </ServiceJourney>
+            <TemplateServiceJourney id="tsj1" version="1">
+              <LineRef ref="line2" version="1"/>
+              <frequencyGroups>
+                <HeadwayJourneyGroup id="hjg1" version="1"><Name>every 20</Name>
+                  <FirstDepartureTime>06:00:00</FirstDepartureTime></HeadwayJourneyGroup>
+                <RhythmicalJourneyGroup id="rjg1" version="1"><Name>past the hour</Name>
+                  <FirstDepartureTime>06:15:00</FirstDepartureTime></RhythmicalJourneyGroup>
+              </frequencyGroups>
+              <calls>
+                <Call id="tc1" version="1" order="1"><ScheduledStopPointRef ref="sspA2" version="1"/><Departure><Time>06:00:00</Time></Departure></Call>
+                <Call id="tc2" version="1" order="2"><ScheduledStopPointRef ref="sspB" version="1"/><Arrival><Time>06:25:00</Time></Arrival></Call>
+              </calls>
+            </TemplateServiceJourney>
           </vehicleJourneys>
           <journeyInterchanges>
             <JourneyMeeting id="jm1" version="1">
@@ -489,6 +503,46 @@ public class TestEpipTransform {
                     "from point resolved on pat1 at the meeting station");
             Check.equals("sspA2", sji.getToPointRef().getRef(),
                     "to point REPAIRED onto sj2's synthesized pattern (same station remap)");
+        }
+    }
+
+    /// A TemplateServiceJourney takes the journey treatment: its calls become a pattern and
+    /// passing times, exactly as a ServiceJourney's do, and the headway that makes it a template
+    /// survives — frequencyGroups is on the subtype alone, so the shared code never touches it.
+    ///
+    /// The pass iterated the ServiceJourney class map, and the two classes are siblings under
+    /// ServiceJourney_VersionStructure rather than one a subclass of the other, so every template
+    /// went through untransformed and reached the export with no pattern to emit it under.
+    @Test
+    void testATemplateServiceJourneyIsTransformedLikeAJourney(TestStore ts) throws Exception {
+        try (Store db = transformed(ts, "epip-tsj.lmdb"); Txn txn = db.roTxn()) {
+            Map<String, TemplateServiceJourney> templates =
+                    byId(db, txn, TemplateServiceJourney.class);
+            TemplateServiceJourney tsj = templates.get("tsj1");
+            Check.that(tsj != null, "the template survives the transform: " + templates.keySet());
+            Check.isNull(tsj.getCalls(), "its calls are stripped, like a journey's");
+
+            String patId = tsj.getJourneyPatternRef().getValue().getRef();
+            Check.that(patId.startsWith("test:ServiceJourneyPattern:"),
+                    "it points at a synthesized pattern, got " + patId);
+            ServiceJourneyPattern pat = byId(db, txn, ServiceJourneyPattern.class).get(patId);
+            Check.that(pat != null, "and that pattern is a row of its own");
+            Check.equals(2, pat.getPointsInSequence()
+                            .getPointInJourneyPatternOrStopPointInJourneyPatternOrTimingPointInJourneyPattern()
+                            .size(),
+                    "with both of the template's stops");
+            Check.equals(2, tsj.getPassingTimes().getTimetabledPassingTime().size(),
+                    "and passing times derived from its calls");
+
+            // The headway group survives; the rhythmical one beside it does not. The profile's
+            // timetable frame lists HeadwayJourneyGroup and no other kind, so a rhythmical group
+            // would be a class the frame has no place for.
+            List<Object> groups = tsj.getFrequencyGroups()
+                    .getHeadwayJourneyGroupRefOrHeadwayJourneyGroupOrRhythmicalJourneyGroupRef();
+            Check.equals(1, groups.size(), "one frequency group survives: " + groups);
+            Object only = groups.get(0) instanceof JAXBElement<?> el ? el.getValue() : groups.get(0);
+            Check.equals("HeadwayJourneyGroup", only.getClass().getSimpleName(),
+                    "and it is the headway one -- the rhythmical group was dropped");
         }
     }
 }

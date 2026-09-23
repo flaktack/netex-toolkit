@@ -10,6 +10,7 @@ import noi.netex.model.JourneyPattern_VersionStructure;
 import noi.netex.model.PointInJourneyPatternRefStructure;
 import noi.netex.model.PointInLinkSequence_VersionedChildStructure;
 import noi.netex.model.ServiceJourney;
+import noi.netex.model.ServiceJourney_VersionStructure;
 import noi.netex.model.StopPointInJourneyPattern_VersionedChildStructure;
 import noi.netex.model.TimetabledPassingTime;
 import noi.netex.model.TimingPointInJourneyPattern_VersionedChildStructure;
@@ -113,7 +114,7 @@ public final class TimetabledPassingTimesProfile {
     /// disagreement logs, COUNTS (see [#reportDropped]) and skips the call. Takes the JourneyPattern
     /// base, so the caller may pass `JourneyPattern` or `ServiceJourneyPattern`.
     public static List<TimetabledPassingTime> getTimetabledPassingtimesFromCalls(
-            ServiceJourney sj, JourneyPattern_VersionStructure journeyPattern) {
+            ServiceJourney_VersionStructure sj, JourneyPattern_VersionStructure journeyPattern) {
         Map<BigInteger, PointInLinkSequence_VersionedChildStructure> pattern = new HashMap<>();
         for (PointInLinkSequence_VersionedChildStructure x : journeyPattern.getPointsInSequence()
                 .getPointInJourneyPatternOrStopPointInJourneyPatternOrTimingPointInJourneyPattern()) {

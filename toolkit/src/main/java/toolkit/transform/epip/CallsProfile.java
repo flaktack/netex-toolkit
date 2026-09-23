@@ -28,6 +28,7 @@ import noi.netex.model.PointInJourneyPatternRefStructure;
 import noi.netex.model.PointInLinkSequence_VersionedChildStructure;
 import noi.netex.model.ScheduledStopPointRefStructure;
 import noi.netex.model.ServiceJourney;
+import noi.netex.model.ServiceJourney_VersionStructure;
 import noi.netex.model.ServiceJourneyPattern;
 import noi.netex.time.XmlDuration;
 import noi.netex.time.XmlTime;
@@ -98,7 +99,7 @@ public final class CallsProfile {
     ///
     /// KNOWN DEFECT: for a value the parser rejects, the field holds no time at all and this
     /// unguarded access throws.
-    public static int getDepartureTime(ServiceJourney serviceJourney) {
+    public static int getDepartureTime(ServiceJourney_VersionStructure serviceJourney) {
         XmlTime departure = serviceJourney.getDepartureTime();
         if (departure == null) throw new IllegalStateException("serviceJourney.departureTime is absent");
         if (!departure.isXsdValid()) {
@@ -143,7 +144,7 @@ public final class CallsProfile {
     /// getPassingTimesFromTimeDemandType: expand a (ServiceJourneyPattern, TimeDemandType) pair
     /// into the journey's TimetabledPassingTimes, IN PLACE on `serviceJourney`. No-op when passing
     /// times already exist or either provided object does not match the journey's refs.
-    public static void getPassingTimesFromTimeDemandType(ServiceJourney serviceJourney,
+    public static void getPassingTimesFromTimeDemandType(ServiceJourney_VersionStructure serviceJourney,
             ServiceJourneyPattern serviceJourneyPattern, TimeDemandType timeDemandType) {
         if (serviceJourney.getPassingTimes() != null) return;
 

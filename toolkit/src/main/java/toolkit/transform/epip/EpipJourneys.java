@@ -31,6 +31,7 @@ import noi.netex.model.DayTypeRefs_RelStructure;
 import noi.netex.model.DestinationDisplayRefStructure;
 import noi.netex.model.DestinationDisplayView;
 import noi.netex.model.EntityStructure;
+import noi.netex.model.HeadwayJourneyGroup;
 import noi.netex.model.JourneyPattern_VersionStructure;
 import noi.netex.model.LineRefStructure;
 import noi.netex.text.Mls;
@@ -49,9 +50,11 @@ import noi.netex.model.ServiceJourney;
 import noi.netex.model.ServiceJourneyPattern;
 import noi.netex.model.ServiceJourneyPatternRefStructure;
 import noi.netex.model.ServiceJourneyRefStructure;
+import noi.netex.model.ServiceJourney_VersionStructure;
 import noi.netex.model.ServiceLink;
 import noi.netex.model.StopPointInJourneyPattern;
 import noi.netex.model.TimeDemandType;
+import noi.netex.model.TemplateServiceJourney;
 import noi.netex.model.TimetabledPassingTimes_RelStructure;
 import noi.netex.model.UicOperatingPeriod;
 import noi.netex.model.ValidityConditions_RelStructure;
@@ -130,6 +133,9 @@ public final class EpipJourneys {
         public long operatingPeriodWithoutDays;
         /// A RouteView with no line to recover, so the pattern is emitted without a LineRef.
         public long routeViewWithoutLine;
+        /// A TemplateServiceJourney frequency group of a kind the profile's timetable frame does
+        /// not list; the template is emitted without it.
+        public long nonHeadwayFrequencyGroup;
 
         /// Journeys this pass deleted from the output.
         public long droppedJourneys() {
@@ -139,7 +145,8 @@ public final class EpipJourneys {
         /// Journeys this pass emitted with something missing.
         public long incompleteJourneys() {
             return unhandledValidityCondition + journeyWithoutDayType
-                    + operatingPeriodWithoutDays + routeViewWithoutLine;
+                    + operatingPeriodWithoutDays + routeViewWithoutLine
+                    + nonHeadwayFrequencyGroup;
         }
 
         /// One line per non-zero counter, naming the opt-in.
@@ -152,6 +159,9 @@ public final class EpipJourneys {
                     "ServiceJourneys were dropped because no timing transformation matched them");
             Strictness.require(Strictness.DROPPED_OUTPUT, "droppedOutput", patternWithoutPoints, tag,
                     "ServiceJourneys were dropped because their pattern has no points_in_sequence");
+            Strictness.require(Strictness.DROPPED_OUTPUT, "droppedOutput", nonHeadwayFrequencyGroup,
+                    tag, "TemplateServiceJourney frequency groups were dropped for not being a "
+                            + "HeadwayJourneyGroup, the only kind this profile's timetable frame lists");
             Strictness.require(Strictness.DROPPED_OUTPUT, "droppedOutput", unhandledValidityCondition, tag,
                     "ValidityConditions were dropped from a journey's calendar (no branch handles "
                     + "their type, so the days they carried are not in the export)");
@@ -239,7 +249,7 @@ public final class EpipJourneys {
     /// assignments are numbered from that identity, and the notices' journey-level validity
     /// conditions are cleared. The journey's own pattern ref is not set here; the caller wires it.
     public static ServiceJourneyPattern serviceJourneyPatternFromCalls(
-            ServiceJourney sj, GeneratorDefaults generatorDefaults) {
+            ServiceJourney_VersionStructure sj, GeneratorDefaults generatorDefaults) {
         return serviceJourneyPatternFromCalls(sj, generatorDefaults, null);
     }
 
@@ -248,7 +258,8 @@ public final class EpipJourneys {
     /// pattern to the full digest rather than colliding; passing null skips the check, which is
     /// what a caller synthesizing a single pattern in isolation wants.
     static ServiceJourneyPattern serviceJourneyPatternFromCalls(
-            ServiceJourney sj, GeneratorDefaults generatorDefaults, Map<String, String> fullById) {
+            ServiceJourney_VersionStructure sj, GeneratorDefaults generatorDefaults,
+            Map<String, String> fullById) {
         List<StopPointInJourneyPattern> piss = new ArrayList<>();
 
         // Because NeTEx only supports LineRef from a Route, and a ServiceJourneyPattern can
@@ -330,7 +341,7 @@ public final class EpipJourneys {
     /// conditions, and point the journey at the — possibly already emitted — DayType. The caller
     /// drains this fully before emitting the journey, since the last of it mutates the journey.
     static List<Object> serviceJourneyAcToDayType(
-            Store dbRead, Txn txn, ServiceJourney serviceJourney,
+            Store dbRead, Txn txn, ServiceJourney_VersionStructure serviceJourney,
             Map<String, AvailabilityCondition> availabilityConditions,
             Set<String> availabilityConditionsIds,
             Set<String> dayTypesIds,
@@ -541,8 +552,27 @@ public final class EpipJourneys {
 
         // The source scan. Only the JAXB decode moves onto the parallel threads; the cursor stays
         // here, because it belongs to the write txn and a write txn is thread-bound.
-        Iterator<Object> journeys =
+        //
+        // TemplateServiceJourney is a ServiceJourney with frequencyGroups added -- the two are
+        // siblings under ServiceJourney_VersionStructure -- so it carries the calls this pass turns
+        // into a pattern and the availability conditions it turns into a calendar, and wants the
+        // same treatment. frequencyGroups is on the subtype alone, so the shared code leaves the
+        // headway intact. Iterating ServiceJourney only dropped every template.
+        Iterator<Object> plain =
                 GenParallel.decodeAhead(dbRead, txn, ServiceJourney.class, "journeys");
+        Iterator<Object> templates =
+                GenParallel.decodeAhead(dbRead, txn, TemplateServiceJourney.class, "templates");
+        Iterator<Object> journeys = new Iterator<>() {
+            @Override
+            public boolean hasNext() {
+                return plain.hasNext() || templates.hasNext();
+            }
+
+            @Override
+            public Object next() {
+                return plain.hasNext() ? plain.next() : templates.next();
+            }
+        };
         Deque<Object> pending = new ArrayDeque<>();
         Iterator<Object> emitted = new Iterator<>() {
             private boolean reported;
@@ -550,7 +580,7 @@ public final class EpipJourneys {
             @Override
             public boolean hasNext() {
                 while (pending.isEmpty() && journeys.hasNext()) {
-                    process(ctx, (ServiceJourney) journeys.next(), pending);
+                    process(ctx, (ServiceJourney_VersionStructure) journeys.next(), pending);
                 }
                 if (pending.isEmpty() && !reported) {
                     // End of the pass, and the only boundary the generator can see: it hands
@@ -574,7 +604,13 @@ public final class EpipJourneys {
         return emitted;
     }
 
-    private static void process(Ctx ctx, ServiceJourney sj, Deque<Object> out) {
+    /// The value inside a JAXBElement, or the object itself — a frequency-group list is a union and
+    /// binds its members either way depending on the element name.
+    private static Object unwrap(Object o) {
+        return o instanceof JAXBElement<?> el ? el.getValue() : o;
+    }
+
+    private static void process(Ctx ctx, ServiceJourney_VersionStructure sj, Deque<Object> out) {
         JourneyPattern_VersionStructure serviceJourneyPattern = null;
 
         if (sj.getPassingTimes() != null) {
@@ -686,6 +722,19 @@ public final class EpipJourneys {
                 ctx.dayTypesIds(), ctx.uicOperatingPeriodsIds(), ctx.dayTypeAssignmentsIds(),
                 ctx.dropped()));
 
+        // A template's frequency groups are what make it one, and the profile's timetable frame
+        // lists exactly one kind. Anything else -- a rhythmical group, a bare ref -- is a class the
+        // frame does not carry, so it is dropped here and counted rather than emitted into a frame
+        // with no place for it.
+        if (sj instanceof TemplateServiceJourney tsj && tsj.getFrequencyGroups() != null) {
+            List<Object> groups = tsj.getFrequencyGroups()
+                    .getHeadwayJourneyGroupRefOrHeadwayJourneyGroupOrRhythmicalJourneyGroupRef();
+            int before = groups.size();
+            groups.removeIf(g -> !(unwrap(g) instanceof HeadwayJourneyGroup));
+            ctx.dropped().nonHeadwayFrequencyGroup += before - groups.size();
+            if (groups.isEmpty()) tsj.setFrequencyGroups(null);
+        }
+
         sj.setValidityConditions(null);
         sj.getValidBetween().clear();
         sj.setTimeDemandTypeRef(null);
@@ -706,7 +755,7 @@ public final class EpipJourneys {
         out.add(sj);
     }
 
-    private static void recoverLineRef(Ctx ctx, ServiceJourney serviceJourney,
+    private static void recoverLineRef(Ctx ctx, ServiceJourney_VersionStructure serviceJourney,
                                        JourneyPattern_VersionStructure serviceJourneyPattern) {
         // A FlexibleLineRef and a LineRef both substitute into getLineRef(); a
         // LineView/FlexibleLineView lives in its own slot and contributes nothing.

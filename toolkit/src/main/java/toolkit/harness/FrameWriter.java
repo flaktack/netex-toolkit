@@ -120,6 +120,18 @@ public final class FrameWriter {
         }
     }
 
+    /// [#byFullKey] over a list that spans several classes, each row's class read off its own key.
+    ///
+    /// A full_key carries its class index, so a caller that partitioned a mixed set — the two
+    /// journey classes of one container, say — does not have to re-group it by class to emit it.
+    public void byFullKey(LongArrayList fullKeys) throws IOException {
+        for (long fk : fullKeys) {
+            Class<?> c = db.classForIdx(NulKeyCodec.fullKeyClassIdx(fk));
+            if (c == null) continue; // a key whose class map this store lost: nothing to load
+            write(c, db.loadRawObject(tx, c, NulKeyCodec.u32le(NulKeyCodec.fullKeyLocal(fk))));
+        }
+    }
+
     /// A container-element plan: `containerTag -> the class names that go in it`, in iteration
     /// order (pass a `LinkedHashMap` — the XSD sequence is an order, not a set).
     ///

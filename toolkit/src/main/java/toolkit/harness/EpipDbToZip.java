@@ -623,10 +623,18 @@ public final class EpipDbToZip {
     /// ref drops.
     private void journeyGroups(int shards, int journeysPerFile) throws IOException {
         Class<?> sjp = store.classForName("ServiceJourneyPattern");
-        Class<?> sj = store.classForName("ServiceJourney");
-        if (sjp == null && sj == null) return;
+        // Both concrete journey classes. TemplateServiceJourney is a ServiceJourney with
+        // frequencyGroups added, and the profile's timetable frame carries it in the same
+        // vehicleJourneys container, so it partitions, colocates and emits like any other journey.
+        List<Class<?>> journeyClasses = new ArrayList<>();
+        for (String n : List.of("ServiceJourney", "TemplateServiceJourney")) {
+            Class<?> c = store.classForName(n);
+            if (c != null) journeyClasses.add(c);
+        }
+        if (sjp == null && journeyClasses.isEmpty()) return;
         int sjpIdx = sjp == null ? -1 : store.classIdxInt(sjp);
-        int sjIdx = sj == null ? -1 : store.classIdxInt(sj);
+        Set<Integer> sjIdx = new HashSet<>();
+        for (Class<?> c : journeyClasses) sjIdx.add(store.classIdxInt(c));
         // The pattern classes a journey may name that this profile does not emit. ServicePattern is
         // among them: EPIP permits it beside ServiceJourneyPattern, so a feed built on it would have
         // every journey land in the silent-drop branch below without being counted.
@@ -648,7 +656,8 @@ public final class EpipDbToZip {
         }
 
         // The four independent indexes are read one per thread; the joins below run on this one.
-        Scans scans = readParallel(sjp, sj, sjpIdx, sjIdx, otherPatternIdx, lineIdx, slIdx, sjiIdx);
+        Scans scans = readParallel(sjp, journeyClasses, sjpIdx, sjIdx, otherPatternIdx,
+                lineIdx, slIdx, sjiIdx);
         Log.info("[%s] prologue (4 readers): id-index %d rows, SJP %d, edges %d, "
                         + "unresolved %d, SJ %d, %.2f s",
                 TAG, scans.idRows, scans.sjpRows, scans.edgeRows, scans.unresRows, scans.sjRows,
@@ -775,6 +784,7 @@ public final class EpipDbToZip {
         for (int s = 0; s < shards; s++) shardOrder.add(s);
         shardOrder.sort(java.util.Comparator.comparing(s -> String.format("g%02d-", s)));
         long emittedInterchanges = 0;
+        long emittedJourneys = 0;
         for (int s : shardOrder) {
             // The sort keys are resolved once per pattern, outside the comparator: `find` walks and
             // rewrites the union-find, and the id -> key lookup is a string hash.
@@ -842,7 +852,8 @@ public final class EpipDbToZip {
                 }
             }
             for (LongArrayList[] chunk : chunks) {
-                emitGroup(s, ++seq, chunk[0], chunk[1], sjp, sj);
+                emittedJourneys += chunk[1].size();
+                emitGroup(s, ++seq, chunk[0], chunk[1], sjp);
             }
             // Last for the shard: 'g07-0011.xml' < 'g07-shared.xml' < 'g08-0001.xml', so
             // generation order is still the name sort and nothing is buffered.
@@ -859,6 +870,14 @@ public final class EpipDbToZip {
         if (emittedInterchanges != interchangeRows) {
             throw new IOException("journey groups emitted " + emittedInterchanges + " of "
                     + interchangeRows + " ServiceJourneyInterchanges");
+        }
+        // Same for journeys, against the scan that fed the partition: a journey is emitted, or it
+        // is one of the droppedByPatternRef the census above counted. Anything else is a timetable
+        // entry that stopped existing between the scan and the emission, which no log line would
+        // show -- the shard totals would simply add up to less.
+        if (emittedJourneys + droppedByPatternRef != scans.sjRows) {
+            throw new IOException("journey groups emitted " + emittedJourneys + " and dropped "
+                    + droppedByPatternRef + " of " + scans.sjRows + " journeys");
         }
     }
 
@@ -1004,14 +1023,15 @@ public final class EpipDbToZip {
     /// This one takes the txn rather than a ready-made `Iterable`: `iterEdges` calls
     /// `ensureEdgeState()` eagerly, so building the iterable would run `V2Store.loadEdgeState` on
     /// the caller's thread.
-    private void readEdgeState(Txn txn, int sjIdx, int sjpIdx, Set<Integer> otherPatternIdx,
+    private void readEdgeState(Txn txn, Set<Integer> sjIdx, int sjpIdx,
+                               Set<Integer> otherPatternIdx,
                                Set<Integer> lineIdx, int slIdx, int sjiIdx, Scans s) {
         long edges = 0, unres = 0;
         for (long[] e : store.iterEdges(txn)) {
             edges++;
             int sc = NulKeyCodec.fullKeyClassIdx(e[0]);
             int tc = NulKeyCodec.fullKeyClassIdx(e[1]);
-            if (sc == sjIdx) {
+            if (sjIdx.contains(sc)) {
                 if (tc == sjpIdx) s.sjToPattern.putIfAbsent(e[0], e[1]);
                 else if (otherPatternIdx.contains(tc)) s.refDrop.add(e[0]); // ref present, not an SJP id
             } else if (sc == sjpIdx) {
@@ -1021,13 +1041,13 @@ public final class EpipDbToZip {
                     s.patternLinks.computeIfAbsent(e[0], (long k) -> new LongArrayList(4)).add(e[1]);
                     s.linkEdges++;
                 }
-            } else if (sc == sjiIdx && tc == sjIdx) {
+            } else if (sc == sjiIdx && sjIdx.contains(tc)) {
                 s.interchangeJourneys.computeIfAbsent(e[0], (long k) -> new LongArrayList(2)).add(e[1]);
             }
         }
         for (UnresolvedRow r : store.iterUnresolved(txn)) {
             unres++;
-            if (NulKeyCodec.fullKeyClassIdx(r.referrerFullKey()) != sjIdx) continue;
+            if (!sjIdx.contains(NulKeyCodec.fullKeyClassIdx(r.referrerFullKey()))) continue;
             Class<?> declared = store.classForIdx(NulKeyCodec.classTrailer(r.encodedTarget()));
             String n = declared == null ? "" : declared.getSimpleName();
             if (n.equals("ServiceJourneyPattern") || n.equals("JourneyPattern")
@@ -1048,21 +1068,30 @@ public final class EpipDbToZip {
     /// capture it in the returned `Iterable`, so constructing the three iterables below is what
     /// opens the handles and the threads only step cursors. Reader C opens no handle at all
     /// (`_edge_blocks`/`_unres_keys` are opened in `V2Store`'s constructor).
-    private Scans readParallel(Class<?> sjp, Class<?> sj, int sjpIdx, int sjIdx,
-                               Set<Integer> otherPatternIdx, Set<Integer> lineIdx, int slIdx,
-                               int sjiIdx) throws IOException {
+    private Scans readParallel(Class<?> sjp, List<Class<?>> journeyClasses, int sjpIdx,
+                               Set<Integer> sjIdx, Set<Integer> otherPatternIdx,
+                               Set<Integer> lineIdx, int slIdx, int sjiIdx) throws IOException {
         long t0 = System.nanoTime();
         Scans s = new Scans();
         try (Txn ta = store.roTxn(); Txn tb = store.roTxn();
              Txn tc = store.roTxn(); Txn td = store.roTxn()) {
             Iterable<IdRow> idRows = sjpIdx == -1 ? List.of() : store.iterIdIndex(ta);
             Iterable<byte[]> sjpRows = sjp == null ? List.of() : store.scanObjects(tb, sjp);
-            Iterable<byte[]> sjRows = sj == null ? List.of() : store.scanObjects(td, sj);
+            // Both journey class maps on ONE reader, their cursors opened here like every other:
+            // the fan-out's safety rests on each task writing a disjoint set of Scans fields, and
+            // two tasks appending to sjKeys would break that. Sequential within the task, so the
+            // key order stays deterministic -- every ServiceJourney, then every template.
+            List<Iterable<byte[]>> journeyRows = new ArrayList<>();
+            for (Class<?> c : journeyClasses) journeyRows.add(store.scanObjects(td, c));
             runAll(List.of(
                     () -> readIdIndex(idRows, sjpIdx, s),
                     () -> readClassKeys(sjpRows, sjp, s.sjpKeys),
                     () -> readEdgeState(tc, sjIdx, sjpIdx, otherPatternIdx, lineIdx, slIdx, sjiIdx, s),
-                    () -> readClassKeys(sjRows, sj, s.sjKeys)));
+                    () -> {
+                        for (int i = 0; i < journeyClasses.size(); i++) {
+                            readClassKeys(journeyRows.get(i), journeyClasses.get(i), s.sjKeys);
+                        }
+                    }));
         }
         s.sjpRows = s.sjpKeys.size();
         s.sjRows = s.sjKeys.size();
@@ -1121,7 +1150,7 @@ public final class EpipDbToZip {
     /// One numbered group file: the patterns and their journeys, nothing else. Its shard's
     /// ServiceLinks resolve out of gSS-shared.xml, one index level up.
     private void emitGroup(int shard, int seq, LongArrayList patterns, LongArrayList journeys,
-                           Class<?> sjp, Class<?> sj) throws IOException {
+                           Class<?> sjp) throws IOException {
         String name = String.format("g%02d-%04d.xml", shard, seq);
         String suffix = String.format("%02d_%04d", shard, seq);
         fw.entry(name);
@@ -1137,7 +1166,7 @@ public final class EpipDbToZip {
             env.frameOpen(out, "TimetableFrame", frameId("TimetableFrame", "EU_PI_TIMETABLE", suffix),
                     "epip:EU_PI_TIMETABLE");
             out.write("<vehicleJourneys>");
-            fw.byFullKey(journeys, sj);
+            fw.byFullKey(journeys);
             out.write("</vehicleJourneys>");
             out.write("</TimetableFrame>");
         }
