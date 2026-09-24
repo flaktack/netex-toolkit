@@ -162,6 +162,7 @@ public final class EpipDbToZip {
     private static final Map<String, List<String>> NETWORK = orderedMap(
             "directions", "Direction",
             "lines", "Line,FlexibleLine",
+            "groupsOfLines", "GroupOfLines",
             "destinationDisplays", "DestinationDisplay",
             "scheduledStopPoints", "ScheduledStopPoint",
             "connections", "Connection,SiteConnection,DefaultConnection",
@@ -246,9 +247,10 @@ public final class EpipDbToZip {
     ///
     /// The profile's data-relevance rule asks that a document carry no unused instance, and a
     /// class map has no opinion on which of its rows the data uses. A publisher declares a whole
-    /// code list where its data names part of it.
+    /// code list where its data names part of it, and a GroupOfLines exists to group Lines, so
+    /// one no Line points at groups nothing.
     private static final Set<String> ONLY_WHEN_REFERENCED =
-            Set.of("TypeOfService", "TypeOfProductCategory");
+            Set.of("TypeOfService", "TypeOfProductCategory", "GroupOfLines");
 
     /// Whether a row is worth emitting — true for everything but an unreferenced instance of a
     /// class listed in [#ONLY_WHEN_REFERENCED].
@@ -456,7 +458,7 @@ public final class EpipDbToZip {
         }
         Log.info("[%s] %,d of %,d Networks emitted; the rest are named by no Line's "
                 + "representedByGroupRef", TAG, networks.size(), networkRows);
-        fw.containers(NETWORK);
+        fw.containers(NETWORK, this::keepRow);
         out.write("</ServiceFrame>");
         fw.end();
 

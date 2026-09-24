@@ -170,7 +170,10 @@ public final class LineAuthorities {
                 authId = authorityForOperator.apply(line.getOperatorRef().getRef());
             }
             if (authId == null) continue;
-            if (grp != null) line.setRepresentedByGroupRef(null); // dead end -> authorityRef wins
+            // The group ref is left in place. The profile lists it as a Line field of its own,
+            // outside the operator/authority choice, and it says which group of lines represents
+            // this one, which is grouping rather than agency. Clearing it where the agency came
+            // from elsewhere leaves the groups referenced by nothing.
             line.setAuthorityRef(authorityRef(authId, authorityVersion));
             out.add(line);
             lineFixed++;

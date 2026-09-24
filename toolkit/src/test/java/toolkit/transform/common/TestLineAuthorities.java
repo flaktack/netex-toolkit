@@ -169,6 +169,46 @@ public class TestLineAuthorities {
                 "both share the one Authority minted for their common Operator");
     }
 
+    /// A Line grouped by a frame-level GroupOfLines -- a sibling of the Network, not nested in it --
+    /// and no Authority in scope, so the pass has to mint one and attribute the Line.
+    private static final String GROUPED_LINE = """
+        <ServiceFrame id="sf" version="1">
+          <Network id="it:1:Network:RETE" version="1"><Name>Rete</Name></Network>
+          <groupsOfLines>
+            <GroupOfLines id="it:1:GroupOfLines:EXTRAURBANO" version="1"><Name>Extraurbano</Name></GroupOfLines>
+          </groupsOfLines>
+          <lines>
+            <Line id="it:1:Line:01" version="1"><Name>L</Name><TransportMode>bus</TransportMode>
+              <OperatorRef ref="it:1:Operator:9" version="1"/>
+              <RepresentedByGroupRef ref="it:1:GroupOfLines:EXTRAURBANO" version="1"/></Line>
+          </lines>
+        </ServiceFrame>
+        <ResourceFrame id="rf" version="1"><organisations>
+          <Operator id="it:1:Operator:9" version="1"><Name>Operatore</Name></Operator>
+        </organisations></ResourceFrame>
+        """;
+
+    /// Attributing a Line does not cost it its group.
+    ///
+    /// representedByGroupRef is a Line field of its own in the profile, outside the
+    /// operator/authority choice, and it carries grouping rather than agency. The pass used to
+    /// clear it whenever it supplied an authorityRef and the group was not one it could resolve an
+    /// authority through -- which is every frame-level GroupOfLines, since the pass only learns the
+    /// relationship from a Network that nests one. The groups then looked like orphans nothing
+    /// referenced, and the export dropped them on that basis.
+    @Test
+    void testAttributingALineKeepsItsGroupRef(TestStore db) throws Exception {
+        TestStore target = run(db, GROUPED_LINE);
+        Line line = linesOf(target).get("it:1:Line:01");
+        Check.that(line != null, "the line survives");
+        Check.equals("it:1:Authority:9", line.getAuthorityRef().getRef(),
+                "it is attributed from its Operator");
+        Check.that(line.getRepresentedByGroupRef() != null,
+                "and KEEPS the group that represents it");
+        Check.equals("it:1:GroupOfLines:EXTRAURBANO", line.getRepresentedByGroupRef().getRef(),
+                "naming the same group the feed gave it");
+    }
+
     @Test
     void testCodespaceResolvesEachAuthoritySeparately(TestStore db) throws Exception {
         TestStore target = run(db, TWO_CODESPACES);
