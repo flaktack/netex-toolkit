@@ -14,7 +14,7 @@ package toolkit.harness;
 //                            empty.
 //   shared-05-calendar.xml   ServiceCalendarFrame EU_PI_CALENDAR, UicOperatingPeriods only
 //   shared-06-other.xml      GeneralFrame OTHER_REFERENCED — the reference-graph closure over the
-//                            30 listed classes; TrainNumbers excluded; omitted when empty
+//                            31 listed classes; TrainNumbers excluded; omitted when empty
 //   gSS-shared.xml           ServiceFrame(serviceLinks) + TimetableFrame(journeyInterchanges) —
 //                            the SHARD's shared group file; omitted when the shard has neither
 //   gSS-NNNN.xml             ServiceFrame(journeyPatterns) + TimetableFrame(their journeys)
@@ -144,7 +144,7 @@ public final class EpipDbToZip {
             // typesOfValueInFrame_RelStructure is a repeated CHOICE of ValueSet and TypeOfValue, so
             // a TypeOfValue subclass goes in directly and in any order. TypeOfService reaches it
             // through the substitution group TypeOfService < TypeOfEntity < TypeOfValue.
-            "typesOfValue", "ValueSet,TypeOfService",
+            "typesOfValue", "ValueSet,TypeOfService,TypeOfProductCategory",
             "organisations", "Authority,Operator",
             "vehicleTypes", "VehicleType",
             "zones", "TransportAdministrativeZone");
@@ -186,7 +186,8 @@ public final class EpipDbToZip {
     ///
     /// So the list doubles as the exclusion set, and that is why a class another frame emits is
     /// named here too: naming it is how the closure is told not to emit it a second time. That is
-    /// what puts TypeOfService and ValueSet here, both of which the ResourceFrame emits.
+    /// what puts TypeOfService, TypeOfProductCategory and ValueSet here, all of which the
+    /// ResourceFrame emits.
     private static final List<String> OTHER_REFERENCED_CLASSES = List.of(
             "Authority",
             "Connection",
@@ -214,6 +215,7 @@ public final class EpipDbToZip {
             "TariffZone",
             "TopographicPlace",
             "TransportAdministrativeZone",
+            "TypeOfProductCategory",
             "TypeOfService",
             "UicOperatingPeriod",
             "ValueSet",
@@ -246,7 +248,8 @@ public final class EpipDbToZip {
     /// The profile's data-relevance rule asks that a document carry no unused ancillary
     /// definition, and a class map has no opinion on which of its rows the data uses. A publisher
     /// declares a whole code list where its data names part of it.
-    private static final Set<String> RESOURCE_ONLY_WHEN_REFERENCED = Set.of("TypeOfService");
+    private static final Set<String> RESOURCE_ONLY_WHEN_REFERENCED =
+            Set.of("TypeOfService", "TypeOfProductCategory");
 
     /// Whether a ResourceFrame row is worth emitting — true for everything but an unreferenced
     /// instance of a vocabulary class.
