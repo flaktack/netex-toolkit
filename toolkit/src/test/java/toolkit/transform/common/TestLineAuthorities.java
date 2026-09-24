@@ -209,6 +209,48 @@ public class TestLineAuthorities {
                 "naming the same group the feed gave it");
     }
 
+    /// Two Operators in a codespace the one published Authority does not share, so neither the
+    /// codespace index nor the derived id can answer.
+    private static final String ONE_AUTHORITY_OTHER_CODESPACE = """
+        <ServiceFrame id="sf" version="1">
+          <lines>
+            <Line id="it:i4:Line:1" version="1"><Name>A</Name><TransportMode>bus</TransportMode>
+              <OperatorRef ref="it:14:Operator:9"/></Line>
+            <Line id="it:i4:Line:2" version="1"><Name>B</Name><TransportMode>bus</TransportMode>
+              <OperatorRef ref="it:14:Operator:8"/></Line>
+          </lines>
+        </ServiceFrame>
+        <ResourceFrame id="rf" version="1"><organisations>
+          <Authority id="it:i4:Authority:REGION" version="1"><Name>Regione</Name></Authority>
+          <Operator id="it:14:Operator:9" version="1"><Name>Nove</Name></Operator>
+          <Operator id="it:14:Operator:8" version="1"><Name>Otto</Name></Operator>
+        </organisations></ResourceFrame>
+        """;
+
+    /// One published Authority and nothing matching it: reuse it rather than mint a rival.
+    ///
+    /// A feed scoped to one authority that spells its own codespace two ways -- the Lines under
+    /// one, the Operators under another -- would otherwise have an Authority synthesised from each
+    /// Operator, and the Lines attributed to organisations the document never mentions while the
+    /// one it does publish goes unused.
+    ///
+    /// Self limiting: a store with several Authorities has no sole one and mints as before, which
+    /// is what a merged corpus is. [#testMintsOneAuthorityPerOperatorWhereTheCodespaceHasNone]
+    /// covers that, over a feed publishing none at all.
+    @Test
+    void testReusesTheOnePublishedAuthorityRatherThanMintingARival(TestStore db) throws Exception {
+        TestStore target = run(db, ONE_AUTHORITY_OTHER_CODESPACE);
+
+        Check.equals("it:i4:Authority:REGION",
+                linesOf(target).get("it:i4:Line:1").getAuthorityRef().getRef(),
+                "the Line takes the published Authority");
+        Check.equals("it:i4:Authority:REGION",
+                linesOf(target).get("it:i4:Line:2").getAuthorityRef().getRef(),
+                "and so does one of a different Operator");
+        Check.equals(1, authoritiesOf(target).size(),
+                "nothing was minted: " + authoritiesOf(target).keySet());
+    }
+
     @Test
     void testCodespaceResolvesEachAuthoritySeparately(TestStore db) throws Exception {
         TestStore target = run(db, TWO_CODESPACES);

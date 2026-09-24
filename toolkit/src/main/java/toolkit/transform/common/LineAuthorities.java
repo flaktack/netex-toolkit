@@ -105,6 +105,13 @@ public final class LineAuthorities {
             // organisation holds both roles. Minting there would write a second object over a
             // published one, so the derived id is a lookup before it is a name.
             if (published.contains(authId)) return authId;
+            // One published Authority and nothing matched it: reuse it rather than mint a second.
+            // A feed scoped to one operator that publishes a single Authority is saying that is the
+            // authority, and an Operator whose codespace differs from it -- a publisher using two
+            // spellings of its own prefix, say -- must not turn into a synthesised rival. Self
+            // limiting: a store with several Authorities has no sole one and mints as before, which
+            // is what a merged corpus is.
+            if (published.size() == 1) return published.iterator().next();
             if (!synthAuthority.containsKey(authId)) {
                 Operator op = operators.get(opId);
                 MultilingualString name = op != null
@@ -129,7 +136,9 @@ public final class LineAuthorities {
         };
 
         long netFixed = 0;
-        Set<String> resolvableGroups = new HashSet<>();
+        // Group of lines -> the authority its Network names. A Network is the one place a feed
+        // states a group's authority, so this answers ahead of the inferences below.
+        Map<String, String> groupAuthority = new LinkedHashMap<>();
         for (Object o : db.iterOnlyObjects(txn, Network.class)) {
             Network net = (Network) o;
             JAXBElement<? extends TransportOrganisationRefStructure> orgEl = net.getTransportOrganisationRef();
@@ -148,7 +157,13 @@ public final class LineAuthorities {
                     && org.getRef() != null && !org.getRef().isEmpty();
             if (hasAuth && net.getGroupsOfLines() != null) {
                 for (GroupOfLines g : net.getGroupsOfLines().getGroupOfLines()) {
-                    if (g.getId() != null && !g.getId().isEmpty()) resolvableGroups.add(g.getId());
+                    if (g.getId() != null && !g.getId().isEmpty()) {
+                        groupAuthority.putIfAbsent(g.getId(), org.getRef());
+                    }
+                }
+                // A Network is itself a GroupOfLines, so a Line may name the Network directly.
+                if (net.getId() != null && !net.getId().isEmpty()) {
+                    groupAuthority.putIfAbsent(net.getId(), org.getRef());
                 }
             }
         }
@@ -159,13 +174,16 @@ public final class LineAuthorities {
         long lineFixed = 0;
         for (Object o : lines(db, txn)) {
             Line_VersionStructure line = (Line_VersionStructure) o;
+            if (line.getAuthorityRef() != null) continue; // the feed said it already
             var grp = line.getRepresentedByGroupRef();
-            if (line.getAuthorityRef() != null
-                    || (grp != null && resolvableGroups.contains(grp.getRef()))) {
-                continue; // already resolvable
-            }
-            // The Line's own codespace first: it is the only source a Line with no operatorRef has.
-            String authId = authByPrefix.get(NetexUtils.codespacePrefix(line.getId()));
+            // The group's Network first. Where a Line belongs to a group whose Network names an
+            // authority, that is the authority stated for it rather than inferred, so it wins over
+            // the two guesses below -- and COPIED onto the Line, not left implicit. A consumer that
+            // follows the group chain and one that reads the field then agree, where leaving the
+            // Line bare made a document in which some Lines carry the field and some do not.
+            String authId = grp == null ? null : groupAuthority.get(grp.getRef());
+            // Then the Line's own codespace: the only source a Line with no operatorRef has.
+            if (authId == null) authId = authByPrefix.get(NetexUtils.codespacePrefix(line.getId()));
             if (authId == null && line.getOperatorRef() != null) {
                 authId = authorityForOperator.apply(line.getOperatorRef().getRef());
             }

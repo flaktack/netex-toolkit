@@ -461,13 +461,16 @@ public class TestEpipTransform {
             Check.equals("op1", additional.get(0).getValue().getRef(), "the demoted ref is op1");
 
             // line2 arrived with an operatorRef and NO authorityRef, and op2's id carries no class
-            // token to derive an Authority from. The backfill mints one over the fallback codespace
-            // rather than declining, so line2 is attributed and its operator demoted like line1's.
-            // Declining is what left 8,318 Lines with no agency for a consumer to use.
+            // token to derive an Authority from. It is attributed anyway -- declining is what left
+            // Lines with no agency for a consumer to use -- and its operator is demoted like
+            // line1's. The value is auth1, the one Authority this frame publishes: a feed naming a
+            // single Authority is saying that is the authority, and minting a rival from op2 would
+            // invent an organisation the document never mentions. Minting still happens where
+            // there is no such answer -- see TestLineAuthorities.
             Line line2 = lines.get("line2");
             Check.isNull(line2.getOperatorRef(), "line2 OperatorRef demoted");
-            Check.equals("test:Authority:op2", line2.getAuthorityRef().getRef(),
-                    "line2 gets an Authority minted over the fallback codespace");
+            Check.equals("auth1", line2.getAuthorityRef().getRef(),
+                    "line2 takes the one Authority the frame publishes, rather than a minted one");
             Check.equals("op2",
                     line2.getAdditionalOperators().getTransportOrganisationRef().get(0)
                             .getValue().getRef(),
