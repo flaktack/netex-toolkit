@@ -219,6 +219,77 @@ public class TestEpipTransform {
         return Stores.open(db, true);
     }
 
+    /// Two levels of StopPlace: spP holds spN, and spQ stands alone. The profile bounds the
+    /// hierarchy at two levels and gives each a meaning, which is what decides the category.
+    private static final String NESTED_STOPS = """
+        <SiteFrame id="site" version="1">
+          <stopPlaces>
+            <StopPlace id="spP" version="1"><Name>Parent</Name>
+              <Centroid><Location><Latitude>46.1</Latitude><Longitude>11.1</Longitude></Location></Centroid>
+              <quays><Quay id="qP" version="1"><Name>P1</Name>
+                <Centroid><Location><Latitude>46.1</Latitude><Longitude>11.1</Longitude></Location></Centroid></Quay></quays>
+            </StopPlace>
+            <StopPlace id="spN" version="1"><Name>Nested</Name>
+              <ParentSiteRef ref="spP" version="1"/>
+              <Centroid><Location><Latitude>46.2</Latitude><Longitude>11.2</Longitude></Location></Centroid>
+              <quays><Quay id="qN" version="1"><Name>N1</Name>
+                <Centroid><Location><Latitude>46.2</Latitude><Longitude>11.2</Longitude></Location></Centroid></Quay></quays>
+            </StopPlace>
+            <StopPlace id="spQ" version="1"><Name>Standalone</Name>
+              <placeTypes><TypeOfPlaceRef ref="vendor:TypeOfPlace:regularStop" version="1"/></placeTypes>
+              <Centroid><Location><Latitude>46.3</Latitude><Longitude>11.3</Longitude></Location></Centroid>
+              <quays><Quay id="qQ" version="1"><Name>Q1</Name>
+                <Centroid><Location><Latitude>46.3</Latitude><Longitude>11.3</Longitude></Location></Centroid></Quay></quays>
+            </StopPlace>
+          </stopPlaces>
+        </SiteFrame>
+        """;
+
+    /// The categories the profile's data-relevance and hierarchy rules require on every StopPlace.
+    ///
+    /// A contained StopPlace can only be monomodal, because general is DEFINED as not contained;
+    /// one that contains another is general; a standalone one is general too, which the definition
+    /// permits with or without quays. Same-mode is not asserted for monomodal -- no StopPlace and
+    /// no Quay in a site frame carries a transport mode to check it against.
+    ///
+    /// A publisher's own classification survives beside the profile's: placeTypes is a list, and
+    /// the rule asks for the profile category to be present, not for theirs to go.
+    @Test
+    void testEveryStopPlaceIsCategorisedGeneralOrMonomodal(TestStore ts) throws Exception {
+        Path file = ts.buildDbFile(NESTED_STOPS, "epip-top.lmdb");
+        EpipToDb.inPlace(file, GeneratorDefaults.TEST);
+        try (Store db = Stores.open(file, true); Txn txn = db.roTxn()) {
+            Map<String, StopPlace> stops = byId(db, txn, StopPlace.class);
+            Check.equals(3, stops.size(), "all three stops survive: " + stops.keySet());
+
+            Check.equals(List.of("epip:general"), categories(stops.get("spP")),
+                    "a StopPlace that CONTAINS another is general");
+            Check.equals(List.of("epip:monomodal"), categories(stops.get("spN")),
+                    "a CONTAINED StopPlace can only be monomodal");
+            Check.equals(List.of("vendor:TypeOfPlace:regularStop", "epip:general"),
+                    categories(stops.get("spQ")),
+                    "a standalone one is general, and the publisher's own category is kept");
+
+            for (StopPlace sp : stops.values()) {
+                for (var r : sp.getPlaceTypes().getTypeOfPlaceRef()) {
+                    if (r.getRef().startsWith("epip:")) {
+                        Check.equals("1.0", r.getVersionRef(),
+                                "the profile's own instances are referenced externally, so the "
+                                + "version goes in versionRef: " + sp.getId());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every TypeOfPlaceRef on a StopPlace, in order.
+    private static List<String> categories(StopPlace sp) {
+        List<String> out = new java.util.ArrayList<>();
+        if (sp.getPlaceTypes() == null) return out;
+        for (var r : sp.getPlaceTypes().getTypeOfPlaceRef()) out.add(r.getRef());
+        return out;
+    }
+
     private static <T> Map<String, T> byId(Store store, Txn txn, Class<T> clazz) {
         Map<String, T> out = new LinkedHashMap<>();
         if (!store.dbNames(txn).contains(clazz)) return out;

@@ -242,6 +242,8 @@ public final class EpipToDb {
                 .add(Backfills.serviceJourneyOperatorOp(db, txn));
         ops.computeIfAbsent(VehicleType.class, k -> new ArrayList<>()).add(Backfills::vehicleTypeShortNameOp);
         ops.computeIfAbsent(StopPlace.class, k -> new ArrayList<>()).add(Backfills::quayNameOp);
+        ops.computeIfAbsent(StopPlace.class, k -> new ArrayList<>())
+                .add(Backfills.stopPlaceTypeOfPlaceOp(db, txn));
 
         if (DayOffsetRewrite.ENABLED) {
             DayOffsetRewrite.Stats stats = new DayOffsetRewrite.Stats();

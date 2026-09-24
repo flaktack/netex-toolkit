@@ -28,14 +28,18 @@ import noi.netex.model.ServiceJourneyPattern;
 import noi.netex.model.ServiceJourneyPatternRefStructure;
 import noi.netex.model.StopPlace;
 import noi.netex.model.TransportOrganisationRefs_RelStructure;
+import noi.netex.model.TypeOfPlaceRefStructure;
+import noi.netex.model.TypeOfPlaceRefs_RelStructure;
 import noi.netex.model.VehicleType;
 import toolkit.harness.Ensemble;
 import toolkit.store.Store;
 import toolkit.store.Txn;
 
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -192,6 +196,72 @@ public final class Backfills {
             return true;
         }
         return false;
+    }
+
+    // ------------------------------------------------- stopPlaceTypeOfPlaceOp
+
+    /// The two TypeOfPlace values the profile reserves for the stop hierarchy, in the `epip`
+    /// codespace it keeps for its own metadata.
+    private static final String EPIP_GENERAL = "epip:general";
+    private static final String EPIP_MONOMODAL = "epip:monomodal";
+
+    /// Query phase: collect the StopPlaces that are somebody's parent, and return the per-object
+    /// operation that categorises each one.
+    ///
+    /// The profile requires every StopPlace to be categorised `epip:general` or `epip:monomodal`,
+    /// and bounds the hierarchy at two levels with a meaning for each:
+    ///
+    ///   - GENERAL may hold quays or contain monomodal StopPlaces, and shall NOT itself be
+    ///     contained in one.
+    ///   - MONOMODAL shall hold at least one quay, shall contain no StopPlace, and all its quays
+    ///     shall serve the same transport mode.
+    ///
+    /// So a contained StopPlace can only be monomodal -- general is defined as not contained -- and
+    /// anything else is general, which the definition permits whether or not it has quays.
+    ///
+    /// Same-mode is not checked. Nothing in a site frame carries a transport mode: no StopPlace and
+    /// no Quay declares one, and the mode is only reachable by joining a quay through its stop
+    /// assignment to a scheduled stop point, then to the patterns that call there and the lines
+    /// those belong to. For a contained StopPlace the label is forced regardless, since the profile
+    /// offers no other value for one; for the rest the general label asserts nothing about mode.
+    ///
+    /// The category is ADDED to placeTypes, which is a list: a publisher's own classifications are
+    /// data, and the profile asks for its category to be present, not for theirs to be removed.
+    /// Idempotent -- a StopPlace already carrying an `epip:` category is left alone, so a second run
+    /// over the same store writes nothing.
+    public static Ensemble.Operation stopPlaceTypeOfPlaceOp(Store dbRead, Txn txn) {
+        Set<String> parents = new HashSet<>();
+        for (Object o : dbRead.iterOnlyObjects(txn, StopPlace.class)) {
+            StopPlace sp = (StopPlace) o;
+            if (sp.getParentSiteRef() != null && sp.getParentSiteRef().getRef() != null) {
+                parents.add(sp.getParentSiteRef().getRef());
+            }
+        }
+        return obj -> {
+            StopPlace sp = (StopPlace) obj;
+            TypeOfPlaceRefs_RelStructure types = sp.getPlaceTypes();
+            if (types != null) {
+                for (TypeOfPlaceRefStructure r : types.getTypeOfPlaceRef()) {
+                    if (r.getRef() != null && r.getRef().startsWith("epip:")) return false;
+                }
+            }
+            boolean contained = sp.getParentSiteRef() != null
+                    && sp.getParentSiteRef().getRef() != null;
+            boolean isParent = parents.contains(sp.getId());
+            String category = contained && !isParent ? EPIP_MONOMODAL : EPIP_GENERAL;
+
+            TypeOfPlaceRefStructure ref = new TypeOfPlaceRefStructure();
+            ref.setRef(category);
+            // An external reference: the profile's own instances are not in this document unless a
+            // metadata frame carries them, and it requires the version on a versionRef there.
+            ref.setVersionRef("1.0");
+            if (types == null) {
+                types = new TypeOfPlaceRefs_RelStructure();
+                sp.setPlaceTypes(types);
+            }
+            types.getTypeOfPlaceRef().add(ref);
+            return true;
+        };
     }
 
     /// Per-object operation: backfill missing quay names from the StopPlace name.
