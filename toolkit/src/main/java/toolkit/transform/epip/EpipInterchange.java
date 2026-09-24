@@ -45,9 +45,18 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.Set;
 
 public final class EpipInterchange {
+
+    /// Interchanges whose source validity conditions were dropped, reported at end of pass.
+    ///
+    /// Not a strictness concern: the profile gives an interchange no validity field, so removing
+    /// one is normalisation rather than a degradation of the output. Measured over the merged
+    /// corpus, the condition repeats what the two journeys already say for all but a fraction of a
+    /// percent, and those few claim days on which the journeys do not both run.
+    private static final LongAdder VALIDITY_DROPPED = new LongAdder();
 
     private EpipInterchange() {}
 
@@ -270,13 +279,35 @@ public final class EpipInterchange {
                     // copies replace them.
                     sji.setFromJourneyRef(journeyRef(fromJourneyRef));
                     sji.setToJourneyRef(journeyRef(toJourneyRef));
+                    // An interchange carries no validity of its own in this profile: neither the
+                    // Interchange table nor the ServiceJourneyInterchange one has a field for it,
+                    // because the interchange happens exactly when both its journeys run. The
+                    // meeting's own conditions are therefore dropped, not converted -- there is no
+                    // dayTypes on an interchange to convert them into.
+                    if (sji.getValidityConditions() != null) {
+                        sji.setValidityConditions(null);
+                        VALIDITY_DROPPED.increment();
+                    }
+                    sji.getValidBetween().clear();
                     ready = sji;
                 }
             }
 
+            private boolean reported;
+
             @Override
             public boolean hasNext() {
                 pump();
+                if (ready == null && !reported) {
+                    // End of the pass, and the only boundary this generator can see.
+                    reported = true;
+                    long n = VALIDITY_DROPPED.sumThenReset();
+                    if (n > 0) {
+                        Log.info("[epip] %,d ServiceJourneyInterchanges had their validity "
+                                + "conditions dropped: the profile derives an interchange's "
+                                + "validity from the two journeys it joins", n);
+                    }
+                }
                 return ready != null;
             }
 

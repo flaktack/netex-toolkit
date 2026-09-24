@@ -201,6 +201,9 @@ public class TestEpipTransform {
           </vehicleJourneys>
           <journeyInterchanges>
             <JourneyMeeting id="jm1" version="1">
+              <validityConditions>
+                <AvailabilityConditionRef ref="e1:AvailabilityCondition:1" version="1"/>
+              </validityConditions>
               <AtStopPointRef ref="sspA" version="1"/>
               <FromJourneyRef ref="sj1" version="1"/>
               <ToJourneyRef ref="sj2" version="1"/>
@@ -503,6 +506,15 @@ public class TestEpipTransform {
                     "from point resolved on pat1 at the meeting station");
             Check.equals("sspA2", sji.getToPointRef().getRef(),
                     "to point REPAIRED onto sj2's synthesized pattern (same station remap)");
+
+            // The meeting's own validity does not survive onto the interchange. The profile gives
+            // an interchange no field for it -- neither Interchange nor ServiceJourneyInterchange
+            // has one -- because an interchange happens exactly when both its journeys run, and
+            // those carry their own DayTypes. There is no dayTypes on an interchange to convert
+            // the condition into, so it is dropped rather than moved.
+            Check.isNull(sji.getValidityConditions(),
+                    "the interchange carries no validity of its own");
+            Check.that(sji.getValidBetween().isEmpty(), "and no ValidBetween either");
         }
     }
 
