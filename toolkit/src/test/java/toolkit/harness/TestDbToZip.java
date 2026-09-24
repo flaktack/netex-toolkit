@@ -416,6 +416,102 @@ public class TestDbToZip {
         return out;
     }
 
+    /// Three Networks, two of them named by a Line and one named by nothing. The frame takes one
+    /// Network as a direct child and the rest in a container.
+    private static final String THREE_NETWORKS = """
+        <ServiceFrame id="sf" version="1">
+          <Network id="net1" version="1"><Name>First</Name></Network>
+          <additionalNetworks>
+            <Network id="net2" version="1"><Name>Second</Name></Network>
+            <Network id="net3" version="1"><Name>Orphan</Name></Network>
+          </additionalNetworks>
+          <lines>
+            <Line id="l1" version="1"><Name>L1</Name><TransportMode>bus</TransportMode>
+              <RepresentedByGroupRef ref="net1" version="1"/></Line>
+            <Line id="l2" version="1"><Name>L2</Name><TransportMode>bus</TransportMode>
+              <RepresentedByGroupRef ref="net2" version="1"/></Line>
+          </lines>
+        </ServiceFrame>
+        """;
+
+    /// Every REFERENCED Network reaches the export: one as the frame's direct child, the rest in
+    /// additionalNetworks. NetworkInFrameGroup is that pair, and the profile's class table for the
+    /// network frame bounds neither.
+    ///
+    /// Emitting only the direct child silently dropped the other Networks a merged corpus carried.
+    /// Emitting all of them published orphans instead: a Network is reachable from one place only,
+    /// a Line's representedByGroupRef, and one no Line names groups nothing a consumer can act on,
+    /// which the profile's data-relevance rule asks a document not to carry.
+    @Test
+    void testOnlyTheReferencedNetworksAreEmitted(TestStore ts) throws Exception {
+        Path db = ts.buildDbFile(THREE_NETWORKS, "networks.lmdb");
+        Path out = ts.tempPath("networks.zip");
+        DbToZip.driverMain(EpipDbToZip.TAG, new String[] {db.toString(), out.toString()},
+                EpipDbToZip.USAGE, EpipDbToZip.flags(), EpipDbToZip::setup);
+
+        String network = null;
+        try (ZipFile zf = new ZipFile(out.toFile())) {
+            for (ZipEntry e : zf.stream().toList()) {
+                if (e.getName().equals("shared-03-network.xml")) {
+                    network = new String(zf.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8);
+                }
+            }
+        }
+        Check.that(network != null, "the network frame entry exists");
+        Set<String> ids = new TreeSet<>();
+        Matcher m = Pattern.compile("<Network\\b[^>]*\\bid=\"([^\"]*)\"").matcher(network);
+        while (m.find()) ids.add(m.group(1));
+        Check.equals(Set.of("net1", "net2"), ids,
+                "the two Networks a Line names are emitted, the orphan is not: " + ids);
+        Check.that(network.contains("<additionalNetworks>"),
+                "they go in additionalNetworks");
+        // No direct-child Network: nominating one of several as the frame's principal network is
+        // an assertion a merged corpus cannot make, and both halves of the pair are optional.
+        Check.that(!network.contains("<Network ") || network.indexOf("<Network ")
+                        > network.indexOf("<additionalNetworks>"),
+                "no Network precedes the container: none is promoted above the others");
+        Check.that(network.indexOf("<lines>") > network.indexOf("</additionalNetworks>"),
+                "and the container precedes lines, per the frame sequence");
+    }
+
+    /// A Network that NESTS its group of lines, and no Line naming the Network at all.
+    private static final String NESTING_NETWORK = """
+        <ServiceFrame id="sf" version="1">
+          <Network id="net1" version="1"><Name>Nesting</Name>
+            <groupsOfLines>
+              <GroupOfLines id="gol1" version="1"><Name>Grouped</Name></GroupOfLines>
+            </groupsOfLines>
+          </Network>
+          <lines>
+            <Line id="l1" version="1"><Name>L</Name><TransportMode>bus</TransportMode>
+              <RepresentedByGroupRef ref="gol1" version="1"/></Line>
+          </lines>
+        </ServiceFrame>
+        """;
+
+    /// A Network nobody names is still emitted when it CONTAINS something, because containment is
+    /// not a reference and dropping the Network would drop what it nested.
+    @Test
+    void testANetworkThatNestsContentIsEmittedThoughUnreferenced(TestStore ts) throws Exception {
+        Path db = ts.buildDbFile(NESTING_NETWORK, "nesting.lmdb");
+        Path out = ts.tempPath("nesting.zip");
+        DbToZip.driverMain(EpipDbToZip.TAG, new String[] {db.toString(), out.toString()},
+                EpipDbToZip.USAGE, EpipDbToZip.flags(), EpipDbToZip::setup);
+        String network = null;
+        try (ZipFile zf = new ZipFile(out.toFile())) {
+            for (ZipEntry e : zf.stream().toList()) {
+                if (e.getName().equals("shared-03-network.xml")) {
+                    network = new String(zf.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8);
+                }
+            }
+        }
+        Check.that(network != null, "the network frame entry exists");
+        Check.that(network.contains("id=\"net1\""),
+                "the nesting Network survives: " + network);
+        Check.that(network.contains("id=\"gol1\""),
+                "and so does the group it nests");
+    }
+
     /// A journey categorised by a TypeOfService the feed defines, beside a second definition the
     /// feed declares and nothing uses — the shape of a published code list.
     private static final String TYPE_OF_SERVICE = """

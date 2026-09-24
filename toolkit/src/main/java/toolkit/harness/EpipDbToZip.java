@@ -242,24 +242,76 @@ public final class EpipDbToZip {
                 + "</Codespace>").getBytes(StandardCharsets.UTF_8);
     }
 
-    /// The ResourceFrame classes whose instances belong in the document only once something
-    /// names them.
+    /// The classes whose instances belong in the document only once something names them.
     ///
-    /// The profile's data-relevance rule asks that a document carry no unused ancillary
-    /// definition, and a class map has no opinion on which of its rows the data uses. A publisher
-    /// declares a whole code list where its data names part of it.
-    private static final Set<String> RESOURCE_ONLY_WHEN_REFERENCED =
+    /// The profile's data-relevance rule asks that a document carry no unused instance, and a
+    /// class map has no opinion on which of its rows the data uses. A publisher declares a whole
+    /// code list where its data names part of it.
+    private static final Set<String> ONLY_WHEN_REFERENCED =
             Set.of("TypeOfService", "TypeOfProductCategory");
 
-    /// Whether a ResourceFrame row is worth emitting — true for everything but an unreferenced
-    /// instance of a vocabulary class.
+    /// Whether a row is worth emitting — true for everything but an unreferenced instance of a
+    /// class listed in [#ONLY_WHEN_REFERENCED].
     ///
     /// The inverse CSR answers "does anything reference this". The store caches it and the
     /// OTHER_REFERENCED closure builds it either way, so asking here only moves the build
     /// earlier.
-    private boolean keepResourceRow(long fullKey) {
+    private boolean keepRow(long fullKey) {
         if (!vocabularyIdx.contains(NulKeyCodec.fullKeyClassIdx(fullKey))) return true;
+        return referenced(fullKey);
+    }
+
+    /// Whether anything in the store references this row.
+    ///
+    /// The inverse CSR answers it. The store caches the graph and the OTHER_REFERENCED closure
+    /// builds it either way, so asking here only moves the build earlier.
+    private boolean referenced(long fullKey) {
         return store.csr(tx).in(fullKey).length > 0;
+    }
+
+    /// How many rows the class has, for a log line that compares it against what was emitted.
+    private long countRows(String className) {
+        Class<?> c = store.classForName(className);
+        if (c == null) return 0;
+        long n = 0;
+        for (byte[] ignored : store.scanObjects(tx, c)) n++;
+        return n;
+    }
+
+    /// The Networks the frame carries: those a Line names, plus any nesting content of their own.
+    ///
+    /// A Network is referenced from one place, a Line's representedByGroupRef. It may also
+    /// CONTAIN groups of lines, and containment is not a reference, so the second arm is the
+    /// standing condition here: dropping an unreferenced Network drops whatever it nested.
+    private LongArrayList networksToEmit() {
+        LongArrayList out = new LongArrayList();
+        Class<?> c = store.classForName("Network");
+        if (c == null) return out;
+        for (RawRow r : store.iterRawObjects(tx, c)) {
+            long fk = store.fullKeyOf(c, r.localKey());
+            if (referenced(fk)) {
+                out.add(fk);
+                continue;
+            }
+            Object o = store.loadObjectByFullKey(tx, fk);
+            if (o instanceof noi.netex.model.Network n && n.getGroupsOfLines() != null
+                    && !n.getGroupsOfLines().getGroupOfLines().isEmpty()) {
+                out.add(fk);
+            }
+        }
+        return out;
+    }
+
+    /// The full keys of a class's referenced rows, in store scan order.
+    private LongArrayList referencedRows(String className) {
+        LongArrayList out = new LongArrayList();
+        Class<?> c = store.classForName(className);
+        if (c == null) return out;
+        for (RawRow r : store.iterRawObjects(tx, c)) {
+            long fk = store.fullKeyOf(c, r.localKey());
+            if (referenced(fk)) out.add(fk);
+        }
+        return out;
     }
 
     /// A VERSION FRAME identifier, per the profile's frame-id structure:
@@ -306,7 +358,7 @@ public final class EpipDbToZip {
     /// The frame-id country and local codes, empty unless a single-country export names them.
     private final String country;
     private final String local;
-    /// The class indices of [#RESOURCE_ONLY_WHEN_REFERENCED] this store has a class map for.
+    /// The class indices of [#ONLY_WHEN_REFERENCED] this store has a class map for.
     private final Set<Integer> vocabularyIdx = new HashSet<>();
     private NetexEnvelope env; // built in export(), once the codespaces and the locale are known
     private FrameWriter fw;    // built with env in export(); it repeats the envelope per entry
@@ -326,7 +378,7 @@ public final class EpipDbToZip {
         this.country = country;
         this.local = local;
         this.generatedCodespace = generatedCodespace;
-        for (String n : RESOURCE_ONLY_WHEN_REFERENCED) {
+        for (String n : ONLY_WHEN_REFERENCED) {
             Class<?> c = store.classForName(n);
             if (c != null) vocabularyIdx.add(store.classIdxInt(c));
         }
@@ -372,7 +424,7 @@ public final class EpipDbToZip {
         fw.entry("shared-01-resource.xml");
         env.frameOpen(out, "ResourceFrame", frameId("ResourceFrame", "EU_PI_COMMON", "common"),
                 "epip:EU_PI_COMMON");
-        fw.containers(RESOURCE, this::keepResourceRow);
+        fw.containers(RESOURCE, this::keepRow);
         out.write("</ResourceFrame>");
         fw.end();
 
@@ -386,10 +438,24 @@ public final class EpipDbToZip {
         fw.entry("shared-03-network.xml");
         env.frameOpen(out, "ServiceFrame", frameId("ServiceFrame", "EU_PI_NETWORK", "network"),
                 "epip:EU_PI_NETWORK");
-        // Exactly ONE Network, a direct child with no container element — every extra
-        // Network row is dropped. Deterministic "first" = the store's scan (key) order, which is
-        // insertion order for the toolkit's local keys.
-        fw.first("Network");
+        // Every referenced Network goes in additionalNetworks, and the frame's direct-child
+        // Network slot is left empty. NetworkInFrameGroup is that pair and both halves are
+        // optional, so this is the arrangement that nominates none of them: a merged corpus has no
+        // principal network, and promoting whichever the scan reached first would assert one.
+        //
+        // A Network is reachable from one place, a Line's representedByGroupRef, where NetworkRef
+        // substitutes for the GroupOfLinesRef the field is typed on. One no Line names groups
+        // nothing a consumer can act on, and the data-relevance rule asks that a document not
+        // carry it.
+        LongArrayList networks = networksToEmit();
+        long networkRows = countRows("Network");
+        if (!networks.isEmpty()) {
+            out.write("<additionalNetworks>");
+            fw.byFullKey(networks);
+            out.write("</additionalNetworks>");
+        }
+        Log.info("[%s] %,d of %,d Networks emitted; the rest are named by no Line's "
+                + "representedByGroupRef", TAG, networks.size(), networkRows);
         fw.containers(NETWORK);
         out.write("</ServiceFrame>");
         fw.end();
