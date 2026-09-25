@@ -240,6 +240,84 @@ public class TestEpipInterchangePoints {
         Xml.assertXmlEqual(forced, EXPECTED_FALLBACK);      // and it changes it to the fallback
     }
 
+    // -------------------------------------------------------------------------------
+    //
+    // A circular route: sj_c opens at platform 1 and closes at platform 2 of the same station, so
+    // StopPlace ST matches twice on one pattern and the two sides must not pick the same call.
+    // sj_d starts there. jm_turn couples them.
+    static final String NETEX_TURNBACK = """
+<ServiceFrame id="sf" version="1">
+  <scheduledStopPoints>
+    <ScheduledStopPoint id="ssp_st_gen" version="1"><Name>ST</Name></ScheduledStopPoint>
+    <ScheduledStopPoint id="ssp_st_1" version="1"><Name>ST pf1</Name></ScheduledStopPoint>
+    <ScheduledStopPoint id="ssp_st_2" version="1"><Name>ST pf2</Name></ScheduledStopPoint>
+    <ScheduledStopPoint id="ssp_far" version="1"><Name>FAR</Name></ScheduledStopPoint>
+  </scheduledStopPoints>
+  <stopAssignments>
+    <PassengerStopAssignment id="psa0" version="1" order="1">
+      <ScheduledStopPointRef ref="ssp_st_gen" version="1"/><StopPlaceRef ref="ST" version="1"/>
+    </PassengerStopAssignment>
+    <PassengerStopAssignment id="psa1" version="1" order="1">
+      <ScheduledStopPointRef ref="ssp_st_1" version="1"/><StopPlaceRef ref="ST" version="1"/>
+    </PassengerStopAssignment>
+    <PassengerStopAssignment id="psa2" version="1" order="1">
+      <ScheduledStopPointRef ref="ssp_st_2" version="1"/><StopPlaceRef ref="ST" version="1"/>
+    </PassengerStopAssignment>
+    <PassengerStopAssignment id="psa3" version="1" order="1">
+      <ScheduledStopPointRef ref="ssp_far" version="1"/><StopPlaceRef ref="FAR" version="1"/>
+    </PassengerStopAssignment>
+  </stopAssignments>
+  <journeyPatterns>
+    <ServiceJourneyPattern id="pat_c" version="1"><pointsInSequence>
+      <StopPointInJourneyPattern id="sp_c1" version="1" order="1"><ScheduledStopPointRef ref="ssp_st_1" version="1"/></StopPointInJourneyPattern>
+      <StopPointInJourneyPattern id="sp_c2" version="1" order="2"><ScheduledStopPointRef ref="ssp_far" version="1"/></StopPointInJourneyPattern>
+      <StopPointInJourneyPattern id="sp_c3" version="1" order="3"><ScheduledStopPointRef ref="ssp_st_2" version="1"/></StopPointInJourneyPattern>
+    </pointsInSequence></ServiceJourneyPattern>
+    <ServiceJourneyPattern id="pat_d" version="1"><pointsInSequence>
+      <StopPointInJourneyPattern id="sp_d1" version="1" order="1"><ScheduledStopPointRef ref="ssp_st_1" version="1"/></StopPointInJourneyPattern>
+      <StopPointInJourneyPattern id="sp_d2" version="1" order="2"><ScheduledStopPointRef ref="ssp_far" version="1"/></StopPointInJourneyPattern>
+    </pointsInSequence></ServiceJourneyPattern>
+  </journeyPatterns>
+</ServiceFrame>
+<TimetableFrame id="tf" version="1">
+  <vehicleJourneys>
+    <ServiceJourney id="sj_c" version="1"><ServiceJourneyPatternRef ref="pat_c" version="1"/></ServiceJourney>
+    <ServiceJourney id="sj_d" version="1"><ServiceJourneyPatternRef ref="pat_d" version="1"/></ServiceJourney>
+  </vehicleJourneys>
+  <journeyInterchanges>
+    <JourneyMeeting id="jm_turn" version="1">
+      <AtStopPointRef ref="ssp_st_gen" versionRef="1"/>
+      <FromJourneyRef ref="sj_c" version="1"/><ToJourneyRef ref="sj_d" version="1"/>
+    </JourneyMeeting>
+  </journeyInterchanges>
+</TimetableFrame>
+""";
+
+    /// The feeder hands over at `ssp_st_2`, its last call at ST; the distributor takes over at
+    /// `ssp_st_1`, its first. Either platform resolves to a call the journey makes, so a side taken
+    /// from the wrong end reaches a consumer as a valid ref — which is what this fixture pins.
+    ///
+    static final String EXPECTED_TURNBACK = """
+<ServiceJourneyInterchange xmlns="http://www.netex.org.uk/netex" xmlns:gml="http://www.opengis.net/gml/3.2" id="jm_turn" version="1">
+  <StaySeated>true</StaySeated>
+  <Planned>true</Planned>
+  <Advertised>true</Advertised>
+  <FromPointRef version="1" ref="ssp_st_2"/>
+  <ToPointRef version="1" ref="ssp_st_1"/>
+  <FromJourneyRef nameOfRefClass="ServiceJourney" version="1" ref="sj_c"/>
+  <ToJourneyRef nameOfRefClass="ServiceJourney" version="1" ref="sj_d"/>
+</ServiceJourneyInterchange>""";
+
+    @Test
+    void testFeederTakesItsLastCallAndDistributorItsFirst(TestStore db) throws Exception {
+        db.loadNetex(NETEX_TURNBACK);
+
+        List<Object> result = Gen.run(db, (store, txn) ->
+                EpipInterchange.epipServiceJourneyInterchange(store, txn, GeneratorDefaults.TEST));
+
+        Xml.assertXmlEqual(Xml.toXmlAll(result), EXPECTED_TURNBACK);
+    }
+
     /// The generator's output as XML with the two index knobs set for that run only; `null`
     /// means "unset", i.e. the shipped default.
     private static String runWith(TestStore db, String peek, String idIndex) throws Exception {

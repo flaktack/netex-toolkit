@@ -105,13 +105,17 @@ public final class EpipInterchange {
 
     // ---------------------------------------------------- the service-journey interchanges
 
-    /// Project every JourneyMeeting whose two journeys are both present into a stay-seated
-    /// interchange, resolving each side's point to the ScheduledStopPoint that journey actually
-    /// passes at the meeting station — matched through the stop assignments, NOT by parsing ids —
-    /// and falling back to the meeting's shared stop-point ref when it cannot be resolved.
+    /// Project every JourneyMeeting whose two journeys are both present into an interchange,
+    /// resolving each side's point to the ScheduledStopPoint that journey actually passes at the
+    /// meeting station — matched through the stop assignments, NOT by parsing ids — and falling
+    /// back to the meeting's shared stop-point ref when it cannot be resolved.
+    ///
+    /// The resolution is directional: a journey may call the meeting station more than once, and
+    /// the feeder hands over at its last call there while the distributor takes over at its first.
+    /// The repair below splits the sides it relocates the same way.
     ///
     /// Lazy: the index passes run on the first pull, each cursor fully drained before the next
-    /// opens, and then the meetings stream.
+    /// opens, and then the meetings stream. The summary log line fires on exhaustion.
     public static Iterator<Object> epipServiceJourneyInterchange(
             Store dbRead, Txn txn, GeneratorDefaults generatorDefaults) {
         return new Iterator<>() {
@@ -121,6 +125,7 @@ public final class EpipInterchange {
             Map<String, String> journeyToPattern;
             Iterator<Object> meetings;
             Object ready;
+            long read, absent, emitted, unresolved, movedFrom;
 
             private void init() {
                 Log.info("[epip] epip_service_journey_interchange");
@@ -227,22 +232,31 @@ public final class EpipInterchange {
                 meetings = dbRead.iterOnlyObjects(txn, JourneyMeeting.class).iterator();
             }
 
-            /// The stop point this journey passes at the meeting station, matched by StopPlace.
-            private ScheduledStopPointRefStructure pointFor(String journeyRef, String meetingStopPlace) {
-                if (journeyRef == null || meetingStopPlace == null) return null;
-                for (ScheduledStopPointRefStructure sspRef
-                        : patternPoints.getOrDefault(journeyToPattern.getOrDefault(journeyRef, ""), List.of())) {
-                    if (meetingStopPlace.equals(sspToStopPlace.get(sspRef.getRef()))) {
-                        return pointRef(sspRef);
-                    }
+            /// The journey's pattern stops in order; empty when the journey or its pattern is
+            /// unknown, which is how a side goes unresolved.
+            private List<ScheduledStopPointRefStructure> pointsOf(String journeyRef) {
+                if (journeyRef == null) return List.of();
+                return patternPoints.getOrDefault(journeyToPattern.getOrDefault(journeyRef, ""), List.of());
+            }
+
+            /// The index of the call this journey makes at the meeting station, or -1. A circular
+            /// route opens and closes at one station under two different stop points, so the scan
+            /// runs from the end for a feeder and from the start for a distributor.
+            private int callAt(List<ScheduledStopPointRefStructure> points, String meetingStopPlace,
+                    boolean fromEnd) {
+                if (meetingStopPlace == null) return -1;
+                for (int i = 0; i < points.size(); i++) {
+                    int at = fromEnd ? points.size() - 1 - i : i;
+                    if (meetingStopPlace.equals(sspToStopPlace.get(points.get(at).getRef()))) return at;
                 }
-                return null;
+                return -1;
             }
 
             private void pump() {
                 if (meetings == null) init();
                 while (ready == null && meetings.hasNext()) {
                     JourneyMeeting jm = (JourneyMeeting) meetings.next();
+                    read++;
                     // Typed on the base ref structure: the newer schema widens these two elements
                     // to the base and deprecates them, and only getRef() is read, which lives on
                     // the base at both versions.
@@ -254,15 +268,23 @@ public final class EpipInterchange {
                     if (fromJourneyRef == null || toJourneyRef == null
                             || !presentJourneys.contains(fromJourneyRef.getRef())
                             || !presentJourneys.contains(toJourneyRef.getRef())) {
+                        absent++;
                         continue;
                     }
 
                     ScheduledStopPointRefStructure atPoint = jm.getAtStopPointRef();
                     String meetingStopPlace = atPoint != null ? sspToStopPlace.get(atPoint.getRef()) : null;
-                    ScheduledStopPointRefStructure fromPoint = pointFor(fromJourneyRef.getRef(), meetingStopPlace);
-                    if (fromPoint == null) fromPoint = atPoint;
-                    ScheduledStopPointRefStructure toPoint = pointFor(toJourneyRef.getRef(), meetingStopPlace);
-                    if (toPoint == null) toPoint = atPoint;
+                    List<ScheduledStopPointRefStructure> fromPts = pointsOf(fromJourneyRef.getRef());
+                    List<ScheduledStopPointRefStructure> toPts = pointsOf(toJourneyRef.getRef());
+                    int fromIdx = callAt(fromPts, meetingStopPlace, true);
+                    int toIdx = callAt(toPts, meetingStopPlace, false);
+                    if (fromIdx < 0 || toIdx < 0) unresolved++;
+                    if (fromIdx >= 0 && fromIdx != callAt(fromPts, meetingStopPlace, false)) movedFrom++;
+
+                    ScheduledStopPointRefStructure fromPoint =
+                            fromIdx < 0 ? atPoint : pointRef(fromPts.get(fromIdx));
+                    ScheduledStopPointRefStructure toPoint =
+                            toIdx < 0 ? atPoint : pointRef(toPts.get(toIdx));
 
                     Map<String, Object> overrides = new HashMap<>();   // null values allowed
                     overrides.put("fromPointRef", fromPoint);
@@ -271,6 +293,11 @@ public final class EpipInterchange {
                             NetexUtils.project(jm, ServiceJourneyInterchange.class, overrides);
                     // A meeting maps a through-service constraint, so the constraint flags are
                     // asserted — but not Guaranteed, which would promise a wait it does not.
+                    //
+                    // The flags are asserted, never derived from where the meeting falls in a
+                    // journey: this pass runs before the journey transform, so a feed whose stops
+                    // arrive inline on the journey has no pattern here to place the meeting in.
+                    // Only the repair, running after that transform, sees one.
                     sji.setStaySeated(Boolean.TRUE);
                     sji.setPlanned(Boolean.TRUE);
                     sji.setAdvertised(Boolean.TRUE);
@@ -289,6 +316,7 @@ public final class EpipInterchange {
                         VALIDITY_DROPPED.increment();
                     }
                     sji.getValidBetween().clear();
+                    emitted++;
                     ready = sji;
                 }
             }
@@ -301,6 +329,13 @@ public final class EpipInterchange {
                 if (ready == null && !reported) {
                     // End of the pass, and the only boundary this generator can see.
                     reported = true;
+                    Log.info("[epip] service_journey_interchange: read %,d meetings, skipped %,d on "
+                                    + "a journey not in this extract, emitted %,d (%,d with a side "
+                                    + "falling back to the meeting's own stop-point ref, which is "
+                                    + "every side on a feed whose patterns the journey transform "
+                                    + "has yet to build; %,d feeders handing over at a later call "
+                                    + "than the first they make at the station)",
+                            read, absent, emitted, unresolved, movedFrom);
                     long n = VALIDITY_DROPPED.sumThenReset();
                     if (n > 0) {
                         Log.info("[epip] %,d ServiceJourneyInterchanges had their validity "
