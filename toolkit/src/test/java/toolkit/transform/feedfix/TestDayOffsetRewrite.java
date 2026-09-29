@@ -18,6 +18,8 @@ import noi.netex.model.TimetabledPassingTime;
 import noi.netex.model.TimetabledPassingTimes_RelStructure;
 import noi.netex.time.XmlTime;
 import org.junit.jupiter.api.Test;
+import toolkit.harness.Ensemble;
+import toolkit.harness.EpipToDb;
 import toolkit.harness.InPlace;
 import toolkit.store.Store;
 import toolkit.store.Stores;
@@ -28,7 +30,10 @@ import toolkit.util.Conf;
 
 import java.math.BigInteger;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public class TestDayOffsetRewrite {
 
@@ -207,8 +212,9 @@ public class TestDayOffsetRewrite {
 
     // ---------------------------------------------------------------- the store round trip
 
-    /// The production path: `InPlace` + `DayOffsetRewrite.apply` over a real store,
-    /// then read the journey back and check the value AND the dump the gate consumes.
+    /// The standalone pass over a real store, then read the journey back and check the value AND
+    /// the dump the gate consumes. What the EPIP chain runs is
+    /// testTheRewriteComposesAsAnEnsembleOperation; both reach the same rewriteJourney.
     @Test
     void testInPlaceRewriteOverAStore(TestStore db) throws Exception {
         Path dbFile = db.buildDbFile("""
@@ -315,6 +321,75 @@ public class TestDayOffsetRewrite {
                 "and the sibling DayOffset element with it");
         Check.that(xml.indexOf("<ArrivalTime>") < xml.indexOf("<ArrivalDayOffset>"),
                 "in TimetabledPassingTimeGroup's declared order");
+    }
+
+    /// How the EPIP chain runs it: an operation of phase C's ensemble, sharing the pass with
+    /// another operation on the same class rather than owning a transaction and a corpus decode.
+    /// That sharing is the only thing folding the phase in can break, and it breaks two ways —
+    /// a journey both operations changed must be written ONCE carrying both changes, and a journey
+    /// only the other operation changed must still be written. `Ensemble` yields an object iff any
+    /// of its operations changed it, so both follow from it, and this pins them.
+    @Test
+    void testTheRewriteComposesAsAnEnsembleOperation(TestStore db) throws Exception {
+        db.loadNetex("""
+            <TimetableFrame id="TF:1" version="1">
+              <vehicleJourneys>
+                <ServiceJourney id="SJ:1" version="1">
+                  <passingTimes>
+                    <TimetabledPassingTime id="TPT:1" version="1">
+                      <ArrivalTime>24:20:00</ArrivalTime>
+                    </TimetabledPassingTime>
+                  </passingTimes>
+                </ServiceJourney>
+                <ServiceJourney id="SJ:2" version="1">
+                  <passingTimes>
+                    <TimetabledPassingTime id="TPT:9" version="1">
+                      <ArrivalTime>08:00:00</ArrivalTime>
+                    </TimetabledPassingTime>
+                  </passingTimes>
+                </ServiceJourney>
+              </vehicleJourneys>
+            </TimetableFrame>
+            """);
+        DayOffsetRewrite.Stats stats = new DayOffsetRewrite.Stats();
+        try (DayOffsetRewrite.Sink sink = DayOffsetRewrite.Sink.open(null);
+             Txn txn = db.store.rwTxn()) {
+            Map<Class<?>, List<Ensemble.Operation>> ops = new LinkedHashMap<>();
+            // Stands in for the profile backfills that share the pass: it changes every journey,
+            // and it writes a legal time, so the rewrite registered after it reads that and leaves
+            // it alone.
+            List<Ensemble.Operation> backfill = new ArrayList<>();
+            backfill.add(obj -> {
+                ((ServiceJourney) obj).setDepartureTime(XmlTime.parse("05:00:00"));
+                return true;
+            });
+            ops.put(ServiceJourney.class, backfill);
+            // The chain's own registration, not a copy of it.
+            EpipToDb.registerDayOffsetRewrite(db.store, txn, ops, stats, sink);
+            db.store.insertAnyObjects(txn, Ensemble.applyOperations(db.store, txn, ops));
+            txn.commit();
+        }
+        Check.equals(1L, stats.valuesRewritten, "exactly the one after-midnight value moved");
+        Check.equals(2L, stats.objectsScanned, "the registration counts every journey it visits");
+        Check.equals(1L, stats.objectsChanged, "and only the one it rewrote as changed");
+
+        try (Txn tx = db.store.roTxn()) {
+            ServiceJourney one = (ServiceJourney) db.store.loadObjectByFullKey(
+                    tx, db.store.lookupFullKey(tx, "SJ:1", "1", ServiceJourney.class));
+            TimetabledPassingTime t = one.getPassingTimes().getTimetabledPassingTime().get(0);
+            Check.equals("00:20:00", t.getArrivalTime().toXmlFormat(), "the rewrite landed");
+            Check.equals(BigInteger.ONE, t.getArrivalDayOffset(), "with its offset");
+            Check.equals("05:00:00", one.getDepartureTime().toXmlFormat(),
+                    "and the other operation's change is in the SAME stored object, not overwritten");
+
+            ServiceJourney two = (ServiceJourney) db.store.loadObjectByFullKey(
+                    tx, db.store.lookupFullKey(tx, "SJ:2", "1", ServiceJourney.class));
+            Check.equals("05:00:00", two.getDepartureTime().toXmlFormat(),
+                    "a journey the rewrite did not touch is still written by the other operation");
+            Check.equals("08:00:00",
+                    two.getPassingTimes().getTimetabledPassingTime().get(0).getArrivalTime().toXmlFormat(),
+                    "and its legal time is untouched");
+        }
     }
 
     private static ServiceJourney journeyOf(TimetabledPassingTime... tpts) {

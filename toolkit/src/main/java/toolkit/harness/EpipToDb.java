@@ -12,7 +12,9 @@ package toolkit.harness;
 //       only the feeds' own calendar objects, never the journey transform's generated DayTypes.
 //   C.  repair interchange points against the patterns consumers will see, then one streaming
 //       ensemble pass fusing reprojection, the ServiceJourneyPattern direction inference (its
-//       synthesized Directions drain AFTER the pass) and the profile backfills.
+//       synthesized Directions drain AFTER the pass), the profile backfills and — only under
+//       -Dtoolkit.epip.dayOffsetRewrite=on — the after-midnight re-encoding, which is an operation
+//       of this pass rather than a phase because it reads journeys this pass already decodes.
 //   C2. strip orphan LevelRefs — a LevelRef whose target is not a Level its own Site defines is
 //       cleared, on both shapes the corpus carries. EPIP's Level_KeyRef requires an emitted
 //       LevelRef to resolve in the same document; LevelRef is minOccurs="0", so absence is
@@ -39,6 +41,7 @@ import noi.netex.model.EntityStructure;
 import noi.netex.model.ServiceCalendar;
 import noi.netex.model.ServiceJourney;
 import noi.netex.model.ServiceJourneyPattern;
+import noi.netex.model.ServiceJourney_VersionStructure;
 import noi.netex.model.ServiceLink;
 import noi.netex.model.StopPlace;
 import noi.netex.model.VehicleType;
@@ -61,6 +64,7 @@ import toolkit.transform.epip.EpipLocations;
 import toolkit.transform.epip.EpipSanitize;
 import toolkit.transform.epip.GeneratorDefaults;
 import toolkit.transform.feedfix.DayOffsetRewrite;
+import toolkit.util.Conf;
 import toolkit.util.Log;
 import toolkit.util.Strictness;
 
@@ -107,18 +111,6 @@ public final class EpipToDb {
         // carries its own G1-G6 guard.
         InPlace.runInPlace((db, txn) -> EpipSanitize.stripOrphanLevelRefs(db, txn),
                 database, "epip-strip-levelrefs", /*resolve=*/false);
-        // Phase D — opt-in, default off. Rewrite the illegal after-midnight xs:time encoding
-        // (24:20:00) into the only one NeTEx defines (00:20:00 + <*DayOffset>1</>). Applying it
-        // changes the encoding the feed used, so it runs only under
-        // -Dtoolkit.epip.dayOffsetRewrite=on; with the flag unset this transaction is never opened
-        // and the store is byte-identical. Last, because it is a data repair over the final journey
-        // population.
-        if (DayOffsetRewrite.ENABLED) {
-            Log.info("[epip] %s=on -- running the day-offset rewrite (re-encodes the feed's "
-                    + "after-midnight times; default is off)", DayOffsetRewrite.PROPERTY);
-            InPlace.runInPlace(DayOffsetRewrite::apply,
-                    database, "epip-day-offset-rewrite", /*resolve=*/false);
-        }
         // Phase E — wire what this stage's own generators left dangling, so the store handed on is
         // coherent. No fix function: the pair is the phase, and it runs outside a transaction of
         // its own making (resolveEmbeddings opens and commits one, so it cannot run inside
@@ -239,12 +231,44 @@ public final class EpipToDb {
         ops.computeIfAbsent(VehicleType.class, k -> new ArrayList<>()).add(Backfills::vehicleTypeShortNameOp);
         ops.computeIfAbsent(StopPlace.class, k -> new ArrayList<>()).add(Backfills::quayNameOp);
 
-        db.insertAnyObjects(txn, Ensemble.applyOperations(db, txn, ops));
+        if (DayOffsetRewrite.ENABLED) {
+            DayOffsetRewrite.Stats stats = new DayOffsetRewrite.Stats();
+            try (DayOffsetRewrite.Sink sink =
+                         DayOffsetRewrite.Sink.open(Conf.pathOf(Conf.EPIP_DAY_OFFSET_REWRITE_DUMP))) {
+                registerDayOffsetRewrite(db, txn, ops, stats, sink);
+                db.insertAnyObjects(txn, Ensemble.applyOperations(db, txn, ops));
+            }
+            Log.info("[day-offset-rewrite] %s", stats);
+        } else {
+            db.insertAnyObjects(txn, Ensemble.applyOperations(db, txn, ops));
+        }
         // Drained strictly after the pass above: populated lazily during it.
         db.insertAnyObjects(txn, directions.inferred().values().iterator());
         // Projection is an Ensemble.Operation body and owns no pass, so this is the only place that
         // knows the reprojection is finished.
         Projection.reportDropped("epip-db-to-db");
         AxisOrder.reportSwapped("epip-db-to-db");
+    }
+
+    /// Add the after-midnight re-encoding to an ensemble's operations, one per journey class.
+    ///
+    /// `journeyClasses`, not `ServiceJourney.class`: TemplateServiceJourney carries the same time
+    /// carriers. The operator backfill writes the same class, and the two set disjoint fields, so a
+    /// journey both touch is written once and the order between them does not matter.
+    ///
+    /// Public so a test drives the registration the chain uses, rather than a copy of it: the flag
+    /// that gates it is read once at class init, so no in-process test can turn it on.
+    public static void registerDayOffsetRewrite(Store db, Txn txn,
+            Map<Class<?>, List<Ensemble.Operation>> ops,
+            DayOffsetRewrite.Stats stats, DayOffsetRewrite.Sink sink) {
+        for (Class<?> journeyClazz : DayOffsetRewrite.journeyClasses(db, txn)) {
+            ops.computeIfAbsent(journeyClazz, k -> new ArrayList<>()).add(obj -> {
+                stats.objectsScanned++;
+                boolean rewritten = DayOffsetRewrite.rewriteJourney(
+                        (ServiceJourney_VersionStructure) obj, stats, sink);
+                if (rewritten) stats.objectsChanged++;
+                return rewritten;
+            });
+        }
     }
 }

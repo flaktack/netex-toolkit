@@ -17,8 +17,8 @@ package toolkit.transform.feedfix;
 // 86400 per day offset.
 //
 // Default off: applying this changes the encoding the feed used. The chain hook runs only under
-// -Dtoolkit.epip.dayOffsetRewrite=on; unset, the chain does not open the extra transaction and the
-// output is byte-identical.
+// -Dtoolkit.epip.dayOffsetRewrite=on; unset, EpipToDb registers no operation for it and the output
+// is byte-identical.
 //
 // It runs at transform time, never load time: at load time the stored fragment would stop being
 // source bytes, so the round-trip harness would report a loss, and it would land upstream of
@@ -84,7 +84,10 @@ public final class DayOffsetRewrite {
 
     // ------------------------------------------------------------------ the driver body
 
-    /// The pass body, named so tests exercise the exact production path.
+    /// The standalone pass: its own scan of the journeys, its own sink. The EPIP chain does not
+    /// run this -- there the rewrite is an operation of phase C's ensemble
+    /// ([toolkit.harness.EpipToDb#registerDayOffsetRewrite]), sharing that pass's scan. Both end in
+    /// [#rewriteJourney], which is where the rewrite itself lives.
     public static void apply(Store db, Txn txn) {
         Stats stats = new Stats();
         Path dump = Conf.pathOf(Conf.EPIP_DAY_OFFSET_REWRITE_DUMP);
