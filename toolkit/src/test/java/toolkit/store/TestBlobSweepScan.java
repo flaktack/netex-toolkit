@@ -85,14 +85,67 @@ public class TestBlobSweepScan {
     }
 
     /// The complement: a database whose blobs are all correct must come out byte-identical.
+    ///
+    /// The marker is cleared first, or there is nothing to assert: a whole clone of a swept source
+    /// inherits it, and `resolve()` would then skip the sweep and pass this vacuously.
     @Test
     void testASweepOverCorrectBlobsChangesNothing(TestStore db) throws Exception {
         db.loadNetex(FRAME);
         TestStore target = db.runDbToDb((src, stx, tgt, dtx) -> tgt.cloneFrom(src, stx, dtx, null, 0));
+        clearSweepMarker(target);
         String before = fragmentOf(target, Route.class);
         target.store.resolve();
         Check.equals(before, fragmentOf(target, Route.class),
                 "a sweep that finds nothing to repair leaves every byte alone");
+    }
+
+    /// Put a store back in the state a pre-marker jar left it in, so the sweep runs. In package
+    /// `toolkit.store`, so the marker accessors are reachable; no production path clears it.
+    private static void clearSweepMarker(TestStore db) {
+        AbstractLmdbStore s = (AbstractLmdbStore) db.store;
+        try (Txn tx = s.rwTxn()) {
+            s.putMarker(s.cast(tx), AbstractLmdbStore.Marker.BLOB_REPAIR_DONE, null);
+            tx.commit();
+        }
+    }
+
+    /// The saving the marker buys: a clone that drops NO edge reproduces the source's blobs and id
+    /// index exactly, and the sweep is a question about those two alone — so the target inherits
+    /// the marker and [ReferenceResolver]'s gate skips the sweep entirely.
+    ///
+    /// The pair with [#testTheSweepStillRepairsAMistypedBlob] is the whole contract: there the
+    /// clone skips the Line, the Route's edge to it is dropped while the Route survives, and the
+    /// marker is withheld so the sweep still runs. Here nothing is dropped and it does not.
+    @Test
+    void testAWholeCloneInheritsTheSweepMarker(TestStore db) throws Exception {
+        db.loadNetex(FRAME);
+        try (Txn tx = db.store.roTxn()) {
+            Check.that(db.store.blobRepairMarkerPresent(tx),
+                    "the loaded source was swept by its own resolve(), so it carries the marker");
+        }
+        TestStore target = db.runDbToDb((src, stx, tgt, dtx) -> tgt.cloneFrom(src, stx, dtx, null, 0));
+        try (Txn tx = target.store.roTxn()) {
+            Check.that(target.store.blobRepairMarkerPresent(tx),
+                    "a clone that drops no edge inherits the source's blob-repair marker");
+        }
+    }
+
+    /// Minimum-taking, the unsound direction: a source that was never swept cannot lend a marker it
+    /// does not hold. The unswept source here is the skipping clone from
+    /// [#testTheSweepStillRepairsAMistypedBlob], which withholds the marker by construction.
+    @Test
+    void testACloneFromAnUnsweptSourceStaysUnswept(TestStore db) throws Exception {
+        db.loadNetex(FRAME);
+        int lineIdx = db.store.classIdxInt(Line.class);
+        // runDbToDb resolves embeddings only, so this target is never swept and stays unmarked.
+        TestStore unswept = db.runDbToDb((src, stx, tgt, dtx) ->
+                tgt.cloneFrom(src, stx, dtx, fk -> NulKeyCodec.fullKeyClassIdx(fk) == lineIdx, 0));
+        TestStore target = unswept.runDbToDb(
+                (src, stx, tgt, dtx) -> tgt.cloneFrom(src, stx, dtx, null, 0));
+        try (Txn tx = target.store.roTxn()) {
+            Check.that(!target.store.blobRepairMarkerPresent(tx),
+                    "a whole clone of an unswept store is itself unswept, so it must still sweep");
+        }
     }
 
     private static RefPatcher.Occurrence only(String xml) {

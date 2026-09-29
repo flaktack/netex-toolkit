@@ -899,6 +899,14 @@ public final class V2Store extends AbstractLmdbStore {
         // a half-finished clone is still marked.
         toolkit.prov.Provenance.mergeFrom(path, src.path());
 
+        // Read before the copy, for the sweep marker below: a merge clones source after source into
+        // one target, and each of them has to be able to retract what an earlier one earned.
+        boolean targetEmpty;
+        try (CursorIterable<byte[]> ci = idIdx.iterate(tt.tx)) {
+            targetEmpty = !ci.iterator().hasNext();
+        }
+        boolean targetSwept = markerValue(tt, Marker.BLOB_REPAIR_DONE) != null;
+
         Set<Integer> validClassIdx = new HashSet<>();
         for (Class<?> c : src.dbNames(sourceTxn)) validClassIdx.add(src.classIdxInt(c));
 
@@ -936,13 +944,22 @@ public final class V2Store extends AbstractLmdbStore {
                 idIdx.put(tt.tx, kv.key(), NulKeyCodec.u64le(fk + keyOffset));
             }
         }
+        // An edge dropped while its REFERRER survives is the one loss no later pass can find: rows
+        // are copied rather than re-derived, so the reference loses its edge without gaining an
+        // unresolved row, and only the blob sweep still reaches it. Counting those is what decides
+        // whether this target may inherit the source's sweep marker below.
+        long orphanedRefs = 0;
         for (int i = 0; i < src.edgeSrc.size(); i++) {
             long k = src.edgeSrc.getLong(i);
             if (k == TOMBSTONE) continue;
             long v = src.edgeDst.getLong(i);
-            if (skipFullKeys != null && (skipFullKeys.test(k) || skipFullKeys.test(v))) continue;
-            if (!validClassIdx.contains(NulKeyCodec.fullKeyClassIdx(k))
-                    || !validClassIdx.contains(NulKeyCodec.fullKeyClassIdx(v))) continue;
+            if (skipFullKeys != null && skipFullKeys.test(k)) continue;
+            if (!validClassIdx.contains(NulKeyCodec.fullKeyClassIdx(k))) continue;
+            if ((skipFullKeys != null && skipFullKeys.test(v))
+                    || !validClassIdx.contains(NulKeyCodec.fullKeyClassIdx(v))) {
+                orphanedRefs++;
+                continue;
+            }
             putEdge(tt, k + keyOffset, v + keyOffset);
         }
         for (int i = 0; i < src.unresSrc.size(); i++) {
@@ -969,6 +986,22 @@ public final class V2Store extends AbstractLmdbStore {
             }
         } else {
             putMarker(tt, Marker.EMBEDDING_IDX_DONE, null);
+        }
+        // Blob-sweep marker, the same minimum-taking discipline as the embedding index above. The
+        // sweep asks only whether a stored blob's declared class and version miss their exact
+        // id-index key, and this clone reproduces both maps, so a target cloned whole from a swept
+        // source is swept too. Three ways to lose it, and the AND is over all of them: an unswept
+        // source; an orphaned reference, whose target this store no longer holds; and a target an
+        // earlier clone already disqualified. A caller that rewires its own orphaned referrers
+        // takes the marker back afterwards on its own argument -- MergeToDb does.
+        boolean sourceSwept = src.markerValue(st, Marker.BLOB_REPAIR_DONE) != null;
+        boolean inherit = sourceSwept && orphanedRefs == 0 && (targetEmpty || targetSwept);
+        putMarker(tt, Marker.BLOB_REPAIR_DONE, inherit ? MARKER_SET : null);
+        if (!inherit) {
+            Log.info("[clone_db] target keeps the full blob sweep (%s)",
+                    orphanedRefs > 0 ? orphanedRefs + " cloned references lost their target"
+                            : !sourceSwept ? "the source carries no blob-repair marker"
+                            : "an earlier clone into this target carried none");
         }
         long current = sequence(targetTxn, 0);
         if (maxLocal + 1 > current) sequence(targetTxn, (maxLocal + 1) - current);

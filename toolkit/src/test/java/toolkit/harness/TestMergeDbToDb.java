@@ -220,4 +220,30 @@ public class TestMergeDbToDb {
         Check.equals(List.of("a1", "a2", "a3", "b1", "b2", "b3"),
                 new ArrayList<>(lineNames(merged).keySet()), "every line survives with one blob each");
     }
+
+    // The same pair the other way round. cloneFrom carries the marker per source, so the ORDER
+    // decides whether a last-writer rule would hold: an un-swept source first, then a swept one
+    // that skips nothing, and the target must still sweep. The test above cannot see that — its
+    // un-swept source is last, so the final write withholds the marker whatever the rule is.
+    @Test
+    void testAnUnsweptFirstSourceStillCostsTheMergeASweep(TestStore db) throws Exception {
+        Path f2 = db.buildDbFile(FEED2, "f2.lmdb");
+        Path f1 = f2.getParent().resolve("f1.lmdb");
+        try (Store raw = Stores.create(f1, db.format)) { // direct inserts, no resolve(): no marker
+            try (Txn txn = raw.rwTxn()) {
+                raw.insertAnyObjects(txn, List.of(
+                        new Line().withId("a1").withVersion("1").withName(Mls.of("A1")),
+                        new Line().withId("a2").withVersion("1").withName(Mls.of("A2")),
+                        new Line().withId("a3").withVersion("1").withName(Mls.of("A3"))));
+                txn.commit();
+            }
+        }
+        Check.that(!markerPresent(f1), "precondition: first source un-swept");
+        Check.that(markerPresent(f2), "precondition: second source swept");
+        Path merged = f2.getParent().resolve("merged.lmdb");
+        Check.equals(1, mergeCountingSweeps(merged, f1, f2),
+                "the swept second source must not re-grant what the first one withheld");
+        Check.equals(List.of("a1", "a2", "a3", "b1", "b2", "b3"),
+                new ArrayList<>(lineNames(merged).keySet()), "every line survives with one blob each");
+    }
 }

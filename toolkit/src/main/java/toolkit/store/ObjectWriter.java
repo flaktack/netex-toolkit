@@ -55,5 +55,10 @@ public interface ObjectWriter {
     /// and `keyOffset` shifting of local keys (multi-source merges). Same-format sources
     /// only. Returns the largest local key written (offset applied). The copy runs below the object
     /// level, reading raw maps and the format marker.
+    ///
+    /// Carries the blob-repair marker across, minimum-taking, and withholds it when the copy drops
+    /// an edge whose referrer it kept. A caller that re-inserts those referrers itself may take the
+    /// marker back with [StoreResolve#setBlobRepairMarker]; [toolkit.harness.MergeToDb] is the
+    /// worked example.
     long cloneFrom(Store source, Txn sourceTxn, Txn targetTxn, LongPredicate skipFullKeys, long keyOffset);
 }

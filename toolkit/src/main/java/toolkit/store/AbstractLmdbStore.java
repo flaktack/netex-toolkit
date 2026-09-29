@@ -780,6 +780,11 @@ public abstract class AbstractLmdbStore implements Store {
             d.drop(t.tx, false);
             purgeIdRows(t, idx);
             purgeReferrerRows(t, idx);
+            // The one path on which the id index SHRINKS. Everywhere else its keys only grow, which
+            // is what lets a clone hand the blob-repair marker on: a reference that resolved
+            // exactly still does. Dropping rows can make a surviving blob's exact key miss, and
+            // only the sweep repairs that, so the marker goes back.
+            putMarker(t, Marker.BLOB_REPAIR_DONE, null);
         }
         insertAnyObjects(txn, objects);
     }

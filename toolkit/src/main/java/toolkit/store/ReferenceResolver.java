@@ -408,9 +408,13 @@ final class ReferenceResolver {
     /// Skipping it is not sound after a skipping clone: [ObjectWriter#cloneFrom] copies edge and
     /// unresolved rows rather than re-deriving them, so a clone that skips a target drops that
     /// target's edge without leaving an unresolved row, leaving a reference only the sweep can
-    /// repair.
+    /// repair. That case is not left to this flag: `cloneFrom` propagates the marker only when it
+    /// dropped no such edge, so a skipping clone arrives here unmarked and sweeps.
     ///
-    /// The marker is persisted, so a skip is never retried by a later stage.
+    /// The marker is persisted, so a skip is never retried by a later stage. **This flag sets it
+    /// as if the sweep had run** — it asserts, on the operator's word, that this store needed no
+    /// repair. `cloneFrom`'s propagation makes the same claim from the source's marker, which is
+    /// evidence rather than assertion; prefer it.
     private static final boolean BLOB_SWEEP =
             Conf.on(Conf.RESOLVE_BLOB_SWEEP);
 
