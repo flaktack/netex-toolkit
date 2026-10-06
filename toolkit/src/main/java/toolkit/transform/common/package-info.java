@@ -3,12 +3,13 @@
 /// on, reached through the jar, including from outside this repository.
 ///
 /// [toolkit.transform.common.ScheduledStopPoints] (ScheduledStopPoint synthesis, centroid backfill
-/// and the same-name stop-merge plan), [toolkit.transform.common.LineAuthorities] (the Line
-/// authority backfill, which synthesises an Authority from a Line's Operator where the feed
-/// publishes none) and
-/// [toolkit.transform.common.MpLoadRules] (the zip-loader dedup rules, shaped as `Store.MergeFn`
-/// policies: the `MergeFn` machinery is toolkit mechanism, and the rules themselves are policy that
-/// no single loader owns).
+/// and the same-name stop-merge plan), [toolkit.transform.common.TransportModes] (which mode a
+/// station takes when a merge folds several publishers' copies of it into one, for the merge above
+/// and for a pipeline's own), [toolkit.transform.common.LineAuthorities] (the Line authority
+/// backfill, which synthesises an Authority from a Line's Operator where the feed publishes none)
+/// and [toolkit.transform.common.MpLoadRules] (the zip-loader dedup rules, shaped as
+/// `Store.MergeFn` policies: the `MergeFn` machinery is toolkit mechanism, and the rules themselves
+/// are policy that no single loader owns).
 ///
 /// [toolkit.transform.common.TrainNumbers] is the exception: it encodes one country's policy, which
 /// by the rule above belongs with the pipeline, and is compiled anyway because a source-launched

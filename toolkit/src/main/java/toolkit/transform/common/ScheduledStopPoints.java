@@ -7,7 +7,8 @@ package toolkit.transform.common;
 //   backfillStopplaceCentroidsFromQuays lift a child Quay's Location onto a centroid-less
 //                                       StopPlace, so OTP does not see a station without
 //                                       coordinates
-//   planStopplaceMerge                  merge co-located same-name duplicate StopPlaces
+//   planStopplaceMerge                  merge co-located same-name duplicate StopPlaces, the
+//                                       survivor typed by the heaviest mode in its cluster
 
 import noi.netex.model.EntityInVersionStructure;
 import noi.netex.model.LocationStructure;
@@ -547,6 +548,7 @@ public final class ScheduledStopPoints {
         Map<String, String> spToSurvivor = new HashMap<>();
         Map<String, String> quayToSurvivor = new HashMap<>(); // folded quay id -> surviving quay id
         long mergedClusters = 0;
+        long modesPromoted = 0;
         for (List<StopPlace> members : clusters.values()) {
             if (members.size() < 2) continue;
             mergedClusters++;
@@ -556,6 +558,7 @@ public final class ScheduledStopPoints {
                 int cq = nQuays(m) - nQuays(survivor);
                 if (cq > 0 || (cq == 0 && m.getId().compareTo(survivor.getId()) > 0)) survivor = m;
             }
+            if (TransportModes.adoptHeaviestMode(survivor, members)) modesPromoted++;
             // The survivor takes the union of the cluster's quays, deduped by id. Without the dedup
             // the same quay accumulates a copy per tier the merge runs at, and once PSAs carry
             // QuayRefs a duplicated quay id means two embedding-index rows for one id whose
@@ -604,9 +607,9 @@ public final class ScheduledStopPoints {
 
         Log.info("[merge_duplicate_stopplaces] merged %d duplicate StopPlaces into "
                 + "%d survivors (same name, <= %.0f m); folded %d coincident quays (<= %.0f m); "
-                + "re-pointed %d PSAs",
+                + "re-pointed %d PSAs; %d survivors took a member's mode",
                 dropped.size(), mergedClusters, radiusM, quayToSurvivor.size(), QUAY_FOLD_RADIUS_M,
-                repointed.size());
+                repointed.size(), modesPromoted);
         return new MergePlan(kept, dropped, repointed);
     }
 
