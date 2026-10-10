@@ -11,9 +11,7 @@ package toolkit.transform.epip;
 // they act on every object of their class.
 //
 // Union-field mapping: a single-slot choice field maps to a pair of sibling getters, where setting
-// the ref also nulls the view — getOperatorRef()/getOperatorView(), getRouteRef()/getRouteView().
-// The line union is three-way: getLineRef() is a JAXBElement covering LineRef AND FlexibleLineRef,
-// against getLineView() / getFlexibleLineView().
+// the ref also nulls the view — getOperatorRef() against getOperatorView().
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.model.FlexibleLine;
@@ -21,11 +19,7 @@ import noi.netex.model.Line;
 import noi.netex.text.Mls;
 import noi.netex.model.OperatorRefStructure;
 import noi.netex.model.Quay;
-import noi.netex.model.Route;
-import noi.netex.model.RouteView;
 import noi.netex.model.ServiceJourney;
-import noi.netex.model.ServiceJourneyPattern;
-import noi.netex.model.ServiceJourneyPatternRefStructure;
 import noi.netex.model.StopPlace;
 import noi.netex.model.TransportOrganisationRefs_RelStructure;
 import noi.netex.model.TypeOfPlaceRefStructure;
@@ -34,6 +28,7 @@ import noi.netex.model.VehicleType;
 import toolkit.harness.Ensemble;
 import toolkit.store.Store;
 import toolkit.store.Txn;
+import toolkit.transform.common.JourneyLines;
 
 import java.util.HashSet;
 import java.util.HashMap;
@@ -67,9 +62,9 @@ public final class Backfills {
         return null;
     }
 
-    /// Query phase: build the line/route/pattern -&gt; operator indexes once, and return the
-    /// per-object operation (ServiceJourney -&gt; changed?). Everything the operation needs is ready
-    /// before the first object is processed.
+    /// Query phase: build the line -&gt; operator index and the journey -&gt; line hops once, and return
+    /// the per-object operation (ServiceJourney -&gt; changed?). Everything the operation needs is
+    /// ready before the first object is processed.
     ///
     /// FlexibleLines carry operators exactly like Lines, so both classes feed the same index; every
     /// lookup is via `Map.get`, so an unresolvable line/route/pattern ref leaves the journey
@@ -86,47 +81,15 @@ public final class Backfills {
             lineOperatorRef.put(fl.getId(), operatorOf(fl.getOperatorRef(),
                     fl.getAdditionalOperators()));
         }
-
-        Map<String, OperatorRefStructure> routeOperatorRef = new HashMap<>();
-        for (Object o : dbRead.iterOnlyObjects(txn, Route.class)) {
-            Route route = (Route) o;
-            if (route.getLineRef() != null) {
-                OperatorRefStructure op = lineOperatorRef.get(route.getLineRef().getValue().getRef());
-                if (op != null) routeOperatorRef.put(route.getId(), op);
-            }
-        }
-
-        Map<String, OperatorRefStructure> sjpOperatorRef = new HashMap<>();
-        for (Object o : dbRead.iterOnlyObjects(txn, ServiceJourneyPattern.class)) {
-            ServiceJourneyPattern sjp = (ServiceJourneyPattern) o;
-            OperatorRefStructure op = null;
-            if (sjp.getRouteRef() != null) {
-                op = routeOperatorRef.get(sjp.getRouteRef().getRef());
-            } else if (sjp.getRouteView() != null) {
-                RouteView view = sjp.getRouteView();
-                if (view.getLineRef() != null) {
-                    op = lineOperatorRef.get(view.getLineRef().getValue().getRef());
-                }
-            }
-            if (op != null) sjpOperatorRef.put(sjp.getId(), op);
-        }
+        JourneyLines.Index lines = JourneyLines.index(dbRead, txn);
 
         return obj -> {
             ServiceJourney sj = (ServiceJourney) obj;
             // The operator union's single slot, before the backfill: a ref wins over a view.
             Object before = sj.getOperatorRef() != null ? sj.getOperatorRef() : sj.getOperatorView();
             if (sj.getOperatorRef() == null) {
-                OperatorRefStructure op = null;
-                JAXBElement<? extends noi.netex.model.LineRefStructure> lineRef = sj.getLineRef();
-                if (lineRef != null) {
-                    op = lineOperatorRef.get(lineRef.getValue().getRef());
-                } else if (sj.getRouteRef() != null) {
-                    op = routeOperatorRef.get(sj.getRouteRef().getRef());
-                } else if (sj.getJourneyPatternRef() != null
-                        && sj.getJourneyPatternRef().getValue()
-                                instanceof ServiceJourneyPatternRefStructure jpRef) {
-                    op = sjpOperatorRef.get(jpRef.getRef());
-                }
+                String lineId = JourneyLines.lineIdOf(sj, lines);
+                OperatorRefStructure op = lineId == null ? null : lineOperatorRef.get(lineId);
                 if (op != null) {
                     sj.setOperatorRef(op);
                     sj.setOperatorView(null);
