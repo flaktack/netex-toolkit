@@ -55,6 +55,7 @@ import toolkit.store.Stores;
 import toolkit.store.Txn;
 import toolkit.transform.common.LineAuthorities;
 import toolkit.transform.epip.Backfills;
+import toolkit.transform.epip.DestinationDisplays;
 import toolkit.transform.epip.Direction;
 import toolkit.transform.feedfix.AxisOrder;
 import toolkit.transform.epip.EpipCalendar;
@@ -238,6 +239,11 @@ public final class EpipToDb {
                 .add(0, AxisOrder.axisOrderOp(db, txn));
         Direction.InferDirections directions = Direction.inferDirectionsOp(gd);
         ops.computeIfAbsent(ServiceJourneyPattern.class, k -> new ArrayList<>()).add(directions.op());
+        // A journey's headsign is the display its pattern's first stop point names, and most of the
+        // corpus names none. Here, not in phase B: the display feeds the frozen pattern-id hash.
+        DestinationDisplays.SynthesizeDisplays displays =
+                DestinationDisplays.synthesizeDisplaysOp(db, txn, gd);
+        ops.computeIfAbsent(ServiceJourneyPattern.class, k -> new ArrayList<>()).add(displays.op());
         ops.computeIfAbsent(ServiceJourney.class, k -> new ArrayList<>())
                 .add(Backfills.serviceJourneyOperatorOp(db, txn));
         ops.computeIfAbsent(VehicleType.class, k -> new ArrayList<>()).add(Backfills::vehicleTypeShortNameOp);
@@ -258,6 +264,8 @@ public final class EpipToDb {
         }
         // Drained strictly after the pass above: populated lazily during it.
         db.insertAnyObjects(txn, directions.inferred().values().iterator());
+        db.insertAnyObjects(txn, displays.minted().values().iterator());
+        Log.info("[destination-displays] %s", displays.counts());
         // Projection is an Ensemble.Operation body and owns no pass, so this is the only place that
         // knows the reprojection is finished.
         Projection.reportDropped("epip-db-to-db");
