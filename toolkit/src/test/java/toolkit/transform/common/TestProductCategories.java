@@ -164,4 +164,22 @@ public class TestProductCategories {
                 "an EC journey is not touched: its line is the one that kept the category");
     }
 
+    /// The backstop the EPIP ensemble registers, which is the profile's requirement rather than a
+    /// policy: every Line reaches an export with a Name.
+    @Test
+    void testALineWithNoNameTakesItsCode(TestStore ts) throws Exception {
+        ts.loadNetex(NETEX);
+        try (Txn txn = ts.store.roTxn()) {
+            Line noname = null;
+            for (Object o : ts.store.iterOnlyObjects(txn, Line.class)) {
+                if ("e:Line:noname".equals(((Line) o).getId())) noname = (Line) o;
+            }
+            Check.that(noname != null, "the nameless line is in the store");
+            Check.isNull(Mls.text(noname.getName()), "precondition: it carries no Name");
+            Check.that(ProductCategories.lineNameOp(noname), "the backstop fires");
+            Check.equals("S1", Mls.text(noname.getName()), "it takes its PublicCode as its Name");
+            Check.that(!ProductCategories.lineNameOp(noname),
+                    "and does not fire a second time on a Line that now has one");
+        }
+    }
 }

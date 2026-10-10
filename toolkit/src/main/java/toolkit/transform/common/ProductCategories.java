@@ -339,6 +339,22 @@ public final class ProductCategories {
         return FACTORY.createLineRef(ref);
     }
 
+    /// Give a Line a Name where it has none: its PublicCode, else its ShortName, else the
+    /// identifier part of its id. Whether it fired.
+    ///
+    /// The profile requires the field, and OTP dereferences it without a null guard, so a Line
+    /// reaching an export without one fails a graph build.
+    public static boolean lineNameOp(Object obj) {
+        Line_VersionStructure line = (Line_VersionStructure) obj;
+        if (Mls.text(line.getName()) != null) return false;
+        String fallback = Codes.text(line.getPublicCode());
+        if (fallback == null || fallback.isBlank()) fallback = Mls.text(line.getShortName());
+        if (fallback == null || fallback.isBlank()) fallback = localPart(line.getId());
+        if (fallback == null || fallback.isBlank()) return false;
+        if (line.getName() == null) line.setName(Mls.of(null));
+        Mls.setText(line.getName(), fallback);
+        return true;
+    }
 
     /// The identifier part of `id`: everything after its class token, with a trailing `':'`
     /// dropped. A Mentz id ends on that colon, so keeping it would put two separators in a derived

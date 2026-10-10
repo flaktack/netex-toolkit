@@ -56,6 +56,7 @@ import toolkit.store.Store;
 import toolkit.store.Stores;
 import toolkit.store.Txn;
 import toolkit.transform.common.LineAuthorities;
+import toolkit.transform.common.ProductCategories;
 import toolkit.transform.epip.Backfills;
 import toolkit.transform.epip.DestinationDisplays;
 import toolkit.transform.epip.Direction;
@@ -277,10 +278,17 @@ public final class EpipToDb {
         // Directions inferred for it. Both are in the store only now -- the minted values views are
         // populated lazily during the pass above and drained after it -- so an operation registered
         // alongside them would have read an empty index.
+        //
+        // Order within the pass is load-bearing. The terminus pass declines a Line that already
+        // carries a real name, and the backstop's last resort is the identifier part of the id,
+        // which is such a name; registering the backstop first would lock every Line it touched out
+        // of a terminus name.
         TerminusNames.NameTermini termini = TerminusNames.nameTerminiOp(db, txn);
         Map<Class<?>, List<Ensemble.Operation>> lineOps = new LinkedHashMap<>();
         for (Class<?> lineClazz : List.of(Line.class, FlexibleLine.class)) {
-            lineOps.put(lineClazz, List.of(termini.op()));
+            // The profile requires Line/Name, and OTP dereferences it without a null guard, so the
+            // backstop closes whatever the terminus pass left.
+            lineOps.put(lineClazz, List.of(termini.op(), ProductCategories::lineNameOp));
         }
         db.insertAnyObjects(txn, Ensemble.applyOperations(db, txn, lineOps));
         Log.info("[terminus-names] %s", termini.counts());
