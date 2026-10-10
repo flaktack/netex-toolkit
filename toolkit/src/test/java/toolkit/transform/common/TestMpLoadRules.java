@@ -1,7 +1,8 @@
 package toolkit.transform.common;
 
-// Coverage for MpLoadRules.mergeStopPlaceQuays — the quay-union dedup — and its fragment-fidelity
-// contract on the Store.setMergePolicy insert path.
+// Coverage for the MpLoadRules merge policies — mergeStopPlaceQuays, the quay-union dedup, and
+// mergeValueSetValues, the code-list union — and the fragment-fidelity contract they share on the
+// Store.setMergePolicy insert path.
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.model.LocationStructure;
@@ -10,6 +11,10 @@ import noi.netex.model.Quay;
 import noi.netex.model.Quays_RelStructure;
 import noi.netex.model.SimplePoint_VersionStructure;
 import noi.netex.model.StopPlace;
+import noi.netex.model.TypeOfProductCategory;
+import noi.netex.model.TypeOfValue_VersionStructure;
+import noi.netex.model.TypesOfValue_RelStructure;
+import noi.netex.model.ValueSet;
 import org.junit.jupiter.api.Test;
 import toolkit.codec.FragmentCodec;
 import toolkit.store.Store;
@@ -178,7 +183,101 @@ public class TestMpLoadRules {
         }
     }
 
+    // ------------------------------------------------- mergeValueSetValues
+
+    /// Pure-function branches: union + id-sorted append + file-order independence.
+    @Test
+    void testValueSetUnionAppendsSortedAndOrderIndependent() {
+        ValueSet stored = vs("VS:1", cat("C:REX"), cat("C:EC"));
+        ValueSet incoming = vs("VS:1", cat("C:NJ"));
+        ValueSet merged = (ValueSet) MpLoadRules.mergeValueSetValues(stored, incoming);
+        Check.that(merged != null, "stored copy adds members -> non-null merge");
+        Check.equals(List.of("C:NJ", "C:EC", "C:REX"), memberIds(merged),
+                "incoming members first, stored-only members appended sorted by id");
+
+        ValueSet merged2 = (ValueSet) MpLoadRules.mergeValueSetValues(
+                vs("VS:1", cat("C:NJ")), vs("VS:1", cat("C:REX"), cat("C:EC")));
+        Check.that(merged2 != null, "reverse arrival also merges");
+        Check.equals(List.of("C:REX", "C:EC", "C:NJ"), memberIds(merged2),
+                "reverse arrival: same union, incoming-first layout");
+    }
+
+    /// A ValueSet whose members the incoming copy already carries adds nothing.
+    @Test
+    void testValueSetNoOpMergeReturnsNull() {
+        ValueSet stored = vs("VS:1", cat("C:EC"));
+        ValueSet incoming = vs("VS:1", cat("C:EC"), cat("C:NJ"));
+        Check.isNull(MpLoadRules.mergeValueSetValues(stored, incoming),
+                "stored copy adds nothing -> null (plain replace)");
+    }
+
+    /// An incoming copy that declares no members at all still collects the stored copy's.
+    @Test
+    void testValueSetWithNoValuesContainerCollectsTheStoredMembers() {
+        ValueSet stored = vs("VS:1", cat("C:EC"));
+        ValueSet incoming = vs("VS:1");
+        incoming.setValues(null);
+        ValueSet merged = (ValueSet) MpLoadRules.mergeValueSetValues(stored, incoming);
+        Check.that(merged != null, "an empty incoming copy merges");
+        Check.equals(List.of("C:EC"), memberIds(merged), "the container is created and filled");
+    }
+
+    /// The union across a third arrival, which is the shape of a Mentz archive: one id in every
+    /// member file, each file declaring the subset it uses.
+    @Test
+    void testValueSetUnionAccumulatesAcrossArrivals(TestStore db) throws Exception {
+        Store store = db.store;
+        store.setMergePolicy(ValueSet.class, MpLoadRules::mergeValueSetValues);
+        try {
+            insertAny(store, vs("VS:1", cat("C:REX")));
+            insertAny(store, vs("VS:1", cat("C:EC")));
+            insertAny(store, vs("VS:1", cat("C:NJ")));
+            try (Txn tx = store.roTxn()) {
+                ValueSet merged = (ValueSet) store.loadObjectByFullKey(tx,
+                        store.lookupFullKey(tx, "VS:1", "1", ValueSet.class));
+                List<String> ids = new ArrayList<>(memberIds(merged));
+                java.util.Collections.sort(ids);
+                Check.equals(List.of("C:EC", "C:NJ", "C:REX"), ids,
+                        "every arrival's members survive -- a reference to any of them resolves");
+            }
+        } finally {
+            store.setMergePolicy(ValueSet.class, null);
+        }
+    }
+
     // ---------------------------------------------------------------- helpers
+
+    static void insertAny(Store store, Object o) {
+        try (Txn txn = store.rwTxn()) {
+            store.insertAnyObjects(txn, List.of(o));
+            txn.commit();
+        }
+    }
+
+    static List<String> memberIds(ValueSet vs) {
+        List<String> ids = new ArrayList<>();
+        for (JAXBElement<? extends TypeOfValue_VersionStructure> el : vs.getValues().getTypeOfValue()) {
+            ids.add(el.getValue().getId());
+        }
+        return ids;
+    }
+
+    static ValueSet vs(String id, TypeOfProductCategory... members) {
+        ValueSet vs = new ValueSet();
+        vs.setId(id);
+        vs.setVersion("1");
+        TypesOfValue_RelStructure rel = new TypesOfValue_RelStructure();
+        for (TypeOfProductCategory m : members) rel.getTypeOfValue().add(FACTORY.createTypeOfProductCategory(m));
+        vs.setValues(rel);
+        return vs;
+    }
+
+    static TypeOfProductCategory cat(String id) {
+        TypeOfProductCategory c = new TypeOfProductCategory();
+        c.setId(id);
+        c.setVersion("1");
+        return c;
+    }
 
     static StopPlace loaded(Store store, Txn tx) {
         return (StopPlace) store.loadObjectByFullKey(tx,
