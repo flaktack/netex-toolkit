@@ -38,6 +38,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import noi.netex.model.EntityStructure;
+import noi.netex.model.FlexibleLine;
+import noi.netex.model.Line;
 import noi.netex.model.ServiceCalendar;
 import noi.netex.model.ServiceJourney;
 import noi.netex.model.ServiceJourneyPattern;
@@ -65,6 +67,7 @@ import toolkit.transform.epip.EpipLines;
 import toolkit.transform.epip.EpipLocations;
 import toolkit.transform.epip.EpipSanitize;
 import toolkit.transform.epip.GeneratorDefaults;
+import toolkit.transform.epip.TerminusNames;
 import toolkit.transform.feedfix.DayOffsetRewrite;
 import toolkit.util.Conf;
 import toolkit.util.Log;
@@ -247,6 +250,8 @@ public final class EpipToDb {
         ops.computeIfAbsent(ServiceJourney.class, k -> new ArrayList<>())
                 .add(Backfills.serviceJourneyOperatorOp(db, txn));
         ops.computeIfAbsent(VehicleType.class, k -> new ArrayList<>()).add(Backfills::vehicleTypeShortNameOp);
+        // Both Line operations are in the second pass below, which is the only place that can see
+        // the displays this one mints.
         ops.computeIfAbsent(StopPlace.class, k -> new ArrayList<>()).add(Backfills::quayNameOp);
         ops.computeIfAbsent(StopPlace.class, k -> new ArrayList<>())
                 .add(Backfills.stopPlaceTypeOfPlaceOp(db, txn));
@@ -266,6 +271,19 @@ public final class EpipToDb {
         db.insertAnyObjects(txn, directions.inferred().values().iterator());
         db.insertAnyObjects(txn, displays.minted().values().iterator());
         Log.info("[destination-displays] %s", displays.counts());
+
+        // A second pass, over the two line classes only, because naming a Line after its termini
+        // reads what the first pass wrote: the display a pattern's first stop point names, and the
+        // Directions inferred for it. Both are in the store only now -- the minted values views are
+        // populated lazily during the pass above and drained after it -- so an operation registered
+        // alongside them would have read an empty index.
+        TerminusNames.NameTermini termini = TerminusNames.nameTerminiOp(db, txn);
+        Map<Class<?>, List<Ensemble.Operation>> lineOps = new LinkedHashMap<>();
+        for (Class<?> lineClazz : List.of(Line.class, FlexibleLine.class)) {
+            lineOps.put(lineClazz, List.of(termini.op()));
+        }
+        db.insertAnyObjects(txn, Ensemble.applyOperations(db, txn, lineOps));
+        Log.info("[terminus-names] %s", termini.counts());
         // Projection is an Ensemble.Operation body and owns no pass, so this is the only place that
         // knows the reprojection is finished.
         Projection.reportDropped("epip-db-to-db");
