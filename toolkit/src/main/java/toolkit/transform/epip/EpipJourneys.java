@@ -74,6 +74,7 @@ import toolkit.model.NetexUtils;
 import toolkit.store.Store;
 import toolkit.store.Txn;
 import toolkit.transform.common.JourneyLines;
+import toolkit.transform.common.TypeOfValues;
 import toolkit.util.Conf;
 import toolkit.util.Log;
 import toolkit.util.Strictness;
@@ -150,6 +151,9 @@ public final class EpipJourneys {
         // --- what the pass did, where a reader wants the count ---
         /// A journey naming several train numbers; the first became its PublicCode.
         public long multipleTrainNumbers;
+        /// A journey type ref nulled for naming a TypeOfService or TypeOfProductCategory the
+        /// document defines nowhere.
+        public long unresolvedTypeRef;
 
         /// Journeys this pass deleted from the output.
         public long droppedJourneys() {
@@ -187,6 +191,10 @@ public final class EpipJourneys {
                     + "journey on them runs on zero days");
             Strictness.require(Strictness.DROPPED_OUTPUT, "droppedOutput", routeViewWithoutLine, tag,
                     "ServiceJourneyPatterns were emitted with a RouteView carrying no LineRef");
+            if (unresolvedTypeRef > 0) {
+                Log.info("[%s] %,d journey type refs were dropped for naming a TypeOfService or "
+                        + "TypeOfProductCategory the feed never defines", tag, unresolvedTypeRef);
+            }
             if (multipleTrainNumbers > 0) {
                 Log.info("[%s] %,d journeys name several train numbers; each took the first as its "
                         + "PublicCode", tag, multipleTrainNumbers);
@@ -486,6 +494,7 @@ public final class EpipJourneys {
     /// @param trainNumbers the advertised number of a TrainNumber, by TrainNumber id
     /// @param lineModes the transport mode a Line declares, by Line id
     /// @param journeyLines the hops from a journey to its Line
+    /// @param definedTypes the ids a journey's type refs may resolve against
     /// @param codeCategories the product categories whose journeys take their train number as a
     ///     PublicCode
     record Indexes(Map<String, RoutePointRefStructure> routePointProjection,
@@ -494,6 +503,7 @@ public final class EpipJourneys {
                    Map<String, String> trainNumbers,
                    Map<String, String> lineModes,
                    JourneyLines.Index journeyLines,
+                   Set<String> definedTypes,
                    Set<String> codeCategories) {}
 
     /// Pre-index what the per-journey pass reads. Patterns and time-demand types are not indexed;
@@ -547,8 +557,14 @@ public final class EpipJourneys {
         }
         return new Indexes(routePointProjection, availabilityConditions, routes,
                 trainNumbers, lineModes, JourneyLines.index(dbRead, txn),
+                TypeOfValues.definedIds(dbRead, txn, JOURNEY_TYPE_CLASSES),
                 codeCategories());
     }
+
+    /// The TypeOfValue classes a journey may name. A reference is only allowed to stay when the
+    /// document will carry what it names.
+    private static final List<String> JOURNEY_TYPE_CLASSES =
+            List.of("TypeOfService", "TypeOfProductCategory");
 
     /// The product categories [Conf#EPIP_JOURNEY_CODE_CATEGORIES] admits, as a set.
     private static Set<String> codeCategories() {
@@ -803,8 +819,13 @@ public final class EpipJourneys {
             if (groups.isEmpty()) tsj.setFrequencyGroups(null);
         }
 
-        // Before the strip: the advertised number is the journey's public code.
+        // Before the strip: the advertised number is the journey's public code, and the type refs
+        // have to resolve inside the document that publishes them.
         adoptTrainNumberAsPublicCode(ctx, sj);
+        if (!resolvesType(ctx, sj.getTypeOfServiceRef())) sj.setTypeOfServiceRef(null);
+        if (!resolvesType(ctx, sj.getTypeOfProductCategoryRef())) {
+            sj.setTypeOfProductCategoryRef(null);
+        }
 
         sj.setValidityConditions(null);
         sj.getValidBetween().clear();
@@ -861,6 +882,15 @@ public final class EpipJourneys {
         if (AllVehicleModesOfTransportEnumeration.RAIL.value().equals(mode)) return true;
         TypeOfProductCategoryRefStructure cat = sj.getTypeOfProductCategoryRef();
         return cat != null && ctx.indexes().codeCategories().contains(cat.getRef());
+    }
+
+    /// Whether a journey's type ref is absent (nothing to keep) or names a definition the document
+    /// will carry. A ref that names nothing is one the profile forbids.
+    private static boolean resolvesType(Ctx ctx, VersionOfObjectRefStructure ref) {
+        if (ref == null || ref.getRef() == null) return false;
+        if (ctx.indexes().definedTypes().contains(ref.getRef())) return true;
+        ctx.dropped().unresolvedTypeRef++;
+        return false;
     }
 
     private static void recoverLineRef(Ctx ctx, ServiceJourney_VersionStructure serviceJourney,
