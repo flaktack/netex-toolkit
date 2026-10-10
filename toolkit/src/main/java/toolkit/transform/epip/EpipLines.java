@@ -9,21 +9,18 @@ package toolkit.transform.epip;
 // AuthorityRef extend the list's bound.
 
 import jakarta.xml.bind.JAXBElement;
-import noi.netex.model.EntityStructure;
 import noi.netex.model.FlexibleLine;
 import noi.netex.model.Line;
 import noi.netex.model.Line_VersionStructure;
 import noi.netex.model.ObjectFactory;
 import noi.netex.model.TransportOrganisationRefStructure;
 import noi.netex.model.TransportOrganisationRefs_RelStructure;
-import noi.netex.model.TypeOfValue_VersionStructure;
-import noi.netex.model.ValueSet;
 import noi.netex.model.VersionOfObjectRefStructure;
 import toolkit.store.Store;
 import toolkit.store.Txn;
+import toolkit.transform.common.TypeOfValues;
 import toolkit.util.Log;
 
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Set;
 import java.util.concurrent.atomic.LongAdder;
@@ -56,31 +53,7 @@ public final class EpipLines {
         // Query phase: the ids a type ref may resolve against. A publisher that references a code
         // list it never publishes is common -- the reference is then not data the profile permits
         // but a dangling one it forbids, so the field goes and the count says how often.
-        //
-        // A definition counts wherever the document will carry it, and a code list is usually
-        // published as a ValueSet holding its members, so standalone rows of the member class are
-        // empty while every id a Line names is present. Reading only the rows drops every such
-        // reference.
-        Set<String> definedTypes = new HashSet<>();
-        for (String n : LINE_TYPE_CLASSES) {
-            Class<?> c = dbRead.classForName(n);
-            if (c == null) continue;
-            for (Object o : dbRead.iterOnlyObjects(txnRead, c)) {
-                String id = ((EntityStructure) o).getId();
-                if (id != null) definedTypes.add(id);
-            }
-        }
-        if (dbRead.classForName("ValueSet") != null) {
-            for (Object o : dbRead.iterOnlyObjects(txnRead, ValueSet.class)) {
-                ValueSet vs = (ValueSet) o;
-                if (vs.getValues() == null) continue;
-                for (JAXBElement<? extends TypeOfValue_VersionStructure> el
-                        : vs.getValues().getTypeOfValue()) {
-                    TypeOfValue_VersionStructure v = el.getValue();
-                    if (v != null && v.getId() != null) definedTypes.add(v.getId());
-                }
-            }
-        }
+        Set<String> definedTypes = TypeOfValues.definedIds(dbRead, txnRead, LINE_TYPE_CLASSES);
         // Both concrete line classes. A FlexibleLine is a Line with flexible-service fields
         // added, so it carries the same organisation CHOICE and the same refs the profile has no
         // field for; draining one class map alone leaves every FlexibleLine unprocessed.
