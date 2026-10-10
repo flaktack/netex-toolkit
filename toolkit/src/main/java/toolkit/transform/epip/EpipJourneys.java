@@ -20,9 +20,11 @@ package toolkit.transform.epip;
 
 import jakarta.xml.bind.JAXBElement;
 import noi.netex.calls.Calls;
+import noi.netex.model.AllVehicleModesOfTransportEnumeration;
 import noi.netex.model.AvailabilityCondition;
 import noi.netex.model.AvailabilityConditionRefStructure;
 import noi.netex.model.Block;
+import noi.netex.model.FlexibleLine;
 import noi.netex.model.Call_VersionedChildStructure;
 import noi.netex.model.DayType;
 import noi.netex.model.DayTypeAssignment;
@@ -33,7 +35,10 @@ import noi.netex.model.DestinationDisplayView;
 import noi.netex.model.EntityStructure;
 import noi.netex.model.HeadwayJourneyGroup;
 import noi.netex.model.JourneyPattern_VersionStructure;
+import noi.netex.model.Line;
 import noi.netex.model.LineRefStructure;
+import noi.netex.model.Line_VersionStructure;
+import noi.netex.text.Codes;
 import noi.netex.text.Mls;
 import noi.netex.model.MultilingualString;
 import noi.netex.model.NoticeAssignment;
@@ -56,6 +61,9 @@ import noi.netex.model.StopPointInJourneyPattern;
 import noi.netex.model.TimeDemandType;
 import noi.netex.model.TemplateServiceJourney;
 import noi.netex.model.TimetabledPassingTimes_RelStructure;
+import noi.netex.model.TrainNumber;
+import noi.netex.model.TrainNumberRefStructure;
+import noi.netex.model.TypeOfProductCategoryRefStructure;
 import noi.netex.model.UicOperatingPeriod;
 import noi.netex.model.ValidityConditions_RelStructure;
 import noi.netex.model.VehicleTypeRefStructure;
@@ -65,6 +73,8 @@ import toolkit.harness.GenParallel;
 import toolkit.model.NetexUtils;
 import toolkit.store.Store;
 import toolkit.store.Txn;
+import toolkit.transform.common.JourneyLines;
+import toolkit.util.Conf;
 import toolkit.util.Log;
 import toolkit.util.Strictness;
 
@@ -137,6 +147,10 @@ public final class EpipJourneys {
         /// not list; the template is emitted without it.
         public long nonHeadwayFrequencyGroup;
 
+        // --- what the pass did, where a reader wants the count ---
+        /// A journey naming several train numbers; the first became its PublicCode.
+        public long multipleTrainNumbers;
+
         /// Journeys this pass deleted from the output.
         public long droppedJourneys() {
             return unresolvedPattern + unresolvedTiming + noTiming + patternWithoutPoints;
@@ -173,6 +187,10 @@ public final class EpipJourneys {
                     + "journey on them runs on zero days");
             Strictness.require(Strictness.DROPPED_OUTPUT, "droppedOutput", routeViewWithoutLine, tag,
                     "ServiceJourneyPatterns were emitted with a RouteView carrying no LineRef");
+            if (multipleTrainNumbers > 0) {
+                Log.info("[%s] %,d journeys name several train numbers; each took the first as its "
+                        + "PublicCode", tag, multipleTrainNumbers);
+            }
         }
     }
 
@@ -460,9 +478,23 @@ public final class EpipJourneys {
     // ------------------------------------------------------------------ build_journey_indexes
 
     /// The query-phase materials of [#epipServiceJourneyGenerator].
+    ///
+    /// @param routePointProjection the ScheduledStopPoint a RoutePoint projects onto, by RoutePoint
+    ///     ref
+    /// @param availabilityConditions AvailabilityCondition by id
+    /// @param routes Route by id
+    /// @param trainNumbers the advertised number of a TrainNumber, by TrainNumber id
+    /// @param lineModes the transport mode a Line declares, by Line id
+    /// @param journeyLines the hops from a journey to its Line
+    /// @param codeCategories the product categories whose journeys take their train number as a
+    ///     PublicCode
     record Indexes(Map<String, RoutePointRefStructure> routePointProjection,
                    Map<String, AvailabilityCondition> availabilityConditions,
-                   Map<String, Route> routes) {}
+                   Map<String, Route> routes,
+                   Map<String, String> trainNumbers,
+                   Map<String, String> lineModes,
+                   JourneyLines.Index journeyLines,
+                   Set<String> codeCategories) {}
 
     /// Pre-index what the per-journey pass reads. Patterns and time-demand types are not indexed;
     /// they stay on-demand loads, guarded by the pattern dedup set.
@@ -491,7 +523,43 @@ public final class EpipJourneys {
                 routes.put(route.getId(), route);
             }
         }
-        return new Indexes(routePointProjection, availabilityConditions, routes);
+
+        // The advertised number a journey's trainNumbers reach, and the mode of the line it runs
+        // on. A Mentz journey carries no TransportMode of its own, so the line's is what decides
+        // whether its number is an advertised code.
+        Map<String, String> trainNumbers = new LinkedHashMap<>();
+        if (dbRead.dbNames(txn).contains(TrainNumber.class)) {
+            for (Object o : dbRead.iterOnlyObjects(txn, TrainNumber.class)) {
+                TrainNumber tn = (TrainNumber) o;
+                if (tn.getId() != null && tn.getForAdvertisement() != null) {
+                    trainNumbers.put(tn.getId(), tn.getForAdvertisement());
+                }
+            }
+        }
+        Map<String, String> lineModes = new LinkedHashMap<>();
+        for (Class<?> c : List.of(Line.class, FlexibleLine.class)) {
+            for (Object o : dbRead.iterOnlyObjects(txn, c)) {
+                Line_VersionStructure line = (Line_VersionStructure) o;
+                if (line.getTransportMode() != null) {
+                    lineModes.put(line.getId(), line.getTransportMode().value());
+                }
+            }
+        }
+        return new Indexes(routePointProjection, availabilityConditions, routes,
+                trainNumbers, lineModes, JourneyLines.index(dbRead, txn),
+                codeCategories());
+    }
+
+    /// The product categories [Conf#EPIP_JOURNEY_CODE_CATEGORIES] admits, as a set.
+    private static Set<String> codeCategories() {
+        String raw = Conf.strOf(Conf.EPIP_JOURNEY_CODE_CATEGORIES);
+        if (raw == null || raw.isBlank()) return Set.of();
+        Set<String> out = new HashSet<>();
+        for (String s : raw.split(",")) {
+            String t = s.strip();
+            if (!t.isEmpty()) out.add(t);
+        }
+        return out;
     }
 
     // ------------------------------------------------------- the service-journey generator
@@ -735,6 +803,9 @@ public final class EpipJourneys {
             if (groups.isEmpty()) tsj.setFrequencyGroups(null);
         }
 
+        // Before the strip: the advertised number is the journey's public code.
+        adoptTrainNumberAsPublicCode(ctx, sj);
+
         sj.setValidityConditions(null);
         sj.getValidBetween().clear();
         sj.setTimeDemandTypeRef(null);
@@ -753,6 +824,43 @@ public final class EpipJourneys {
         }
 
         out.add(sj);
+    }
+
+    /// Give `sj` the number its trainNumbers advertise as its PublicCode, where it has none of its
+    /// own and its product is one whose number the public reads.
+    ///
+    /// A journey naming several train numbers takes the first, counted under
+    /// [Dropped#multipleTrainNumbers].
+    ///
+    /// OTP maps a journey's PublicCode to a trip's short name and reads TrainNumber nowhere, so
+    /// this is what carries a train number into a graph.
+    private static void adoptTrainNumberAsPublicCode(Ctx ctx, ServiceJourney_VersionStructure sj) {
+        if (Codes.hasText(sj.getPublicCode()) || sj.getTrainNumbers() == null) return;
+        if (!advertisesItsTrainNumber(ctx, sj)) return;
+        List<TrainNumberRefStructure> refs = sj.getTrainNumbers().getTrainNumberRef();
+        if (refs.isEmpty()) return;
+        if (refs.size() > 1) ctx.dropped().multipleTrainNumbers++;
+        String number = ctx.indexes().trainNumbers().get(refs.get(0).getRef());
+        if (number != null && !number.isBlank()) sj.setPublicCode(Codes.of(number));
+    }
+
+    /// Whether `sj`'s train number is the number the public reads: a rail journey, or one whose
+    /// product category the run admits through [Conf#EPIP_JOURNEY_CODE_CATEGORIES].
+    ///
+    /// A Mentz export populates trainNumbers on funiculars, trams and plain buses too, where the
+    /// value counts courses within a day rather than naming a service.
+    ///
+    /// The journey's own TransportMode decides where it has one. Every ÖBB journey ships without
+    /// one, so its line's mode is what answers.
+    private static boolean advertisesItsTrainNumber(Ctx ctx, ServiceJourney_VersionStructure sj) {
+        String mode = sj.getTransportMode() != null ? sj.getTransportMode().value() : null;
+        if (mode == null) {
+            String lineId = JourneyLines.lineIdOf(sj, ctx.indexes().journeyLines());
+            if (lineId != null) mode = ctx.indexes().lineModes().get(lineId);
+        }
+        if (AllVehicleModesOfTransportEnumeration.RAIL.value().equals(mode)) return true;
+        TypeOfProductCategoryRefStructure cat = sj.getTypeOfProductCategoryRef();
+        return cat != null && ctx.indexes().codeCategories().contains(cat.getRef());
     }
 
     private static void recoverLineRef(Ctx ctx, ServiceJourney_VersionStructure serviceJourney,

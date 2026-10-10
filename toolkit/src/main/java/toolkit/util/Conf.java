@@ -312,6 +312,13 @@ public final class Conf {
     public static final Flag EPIP_DAY_OFFSET_REWRITE_DUMP = path("epip.dayOffsetRewrite.dump", null,
             "file the day-offset rewrite dumps every rewritten value into");
 
+    /// A rail journey takes its train number as its PublicCode without being listed. This admits
+    /// the non-rail product categories whose number is advertised too — a rail replacement runs by
+    /// bus and keeps the number of the train it stands in for.
+    public static final Flag EPIP_JOURNEY_CODE_CATEGORIES = string("epip.journeyCodeCategories", "",
+            "comma-separated TypeOfProductCategory ids whose journeys take a PublicCode from their "
+                    + "train number, besides every rail journey");
+
     // ---------------------------------------------------------------- scripts: crossborder
 
     /// Not a capability: no stored byte differs.
@@ -677,6 +684,10 @@ public final class Conf {
 
     private static Flag path(String name, Path dflt, String doc, Opt... opts) {
         return declare(name, Kind.PATH, dflt, doc, opts);
+    }
+
+    private static Flag string(String name, String dflt, String doc, Opt... opts) {
+        return declare(name, Kind.STRING, dflt, doc, opts);
     }
 
     private static Flag bootstrapPath(String name, String doc) {
