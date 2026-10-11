@@ -11,6 +11,7 @@ import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.util.StreamReaderDelegate;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -40,7 +41,8 @@ import java.util.Set;
 ///    `responsibilitySetRef` appended to every element lacking them for which a value can be
 ///    computed — see [#startElement()]. A synthesized `id` swaps the class token of the nearest
 ///    id-bearing ancestor's id, and where that id carries no token it takes that ancestor's
-///    codespace and a UUID.
+///    codespace and a UUID; it then carries a `-1`, `-2`, … sequence over the same-named children
+///    of that ancestor.
 /// 6. **Encoding.** Always UTF-8; a non-UTF-8 source is transcoded.
 /// 7. **srsName denormalisation** (PROV-CAP: srsname-depth). Under a frame
 ///    `DefaultLocationSystem`, `srsName` is synthesized
@@ -69,6 +71,12 @@ final class CopyingCapture extends StreamReaderDelegate {
 
     /// Maximum attributes this class can synthesize onto one start tag (the arms of N5 + N7).
     private static final int MAX_INJECT = 5;
+
+    /// Separates the sibling sequence arm 1 appends from the id it derived. A dash, because a colon
+    /// is the structural separator of codespace, class token and technical id, so another one would
+    /// change the id's arity -- and on a Mentz id, which ends in ':', it would leave an empty
+    /// segment.
+    private static final String SIBLING_SEP = "-";
 
     private final XMLStreamReader2 raw;
     private final NetexLoader.NameSets sets;
@@ -205,12 +213,23 @@ final class CopyingCapture extends StreamReaderDelegate {
         // "at:46:447" from several Austrian feeds -- used to leave a blind replace nothing to
         // replace, so the child wore its parent's id verbatim and one (id, version) named two
         // classes. NetexUtils#deriveChildId mints a token instead; see it for the fallback shape.
+        //
+        // The derivation reads only the ancestor's id and our element name, so same-named id-less
+        // siblings all derive one id. A sequence separates them (PROV-CAP: derived-id-sibling-seq),
+        // counted per (ancestor instance, element name) -- ancestor, not container element: a
+        // DefaultConnection holds an OperatorView under <From> and another under <To>, and neither
+        // wrapper is in the withId set. It counts syntheses, so a sibling that declares its own id
+        // takes no number.
+        //
+        // Siblings of ONE ancestor is all this separates. Two id-less elements of the same name
+        // whose ancestors carry the same id still derive the same id; the derivation keeps no path,
+        // and 521 Swiss entries declaring one CompositeFrame id are the shape that reaches it.
         if (withId) {
             String id = ownId;
             if (id == null) {
                 IdFrame top = lastIdStack.peek();
                 if (top != null && top.id != null) {
-                    id = NetexUtils.deriveChildId(top.id, ln);
+                    id = NetexUtils.deriveChildId(top.id, ln) + SIBLING_SEP + top.stamped(ln);
                     if (!GML_NS.equals(raw.getNamespaceURI())) inject(ID, id); // see GML_NS
                 }
             }
@@ -262,16 +281,49 @@ final class CopyingCapture extends StreamReaderDelegate {
         if (LOCATION.equals(ln)) locationSrsName = null;
     }
 
-    /// One open element of the withId set, and the id its id-less descendants derive from.
+    /// One open element of the withId set: the id its id-less descendants derive from, and how many
+    /// children of each element name arm 1 has stamped under it.
     ///
     /// A box rather than the bare string because [ArrayDeque] rejects null and an element whose own
     /// id arm 1 could not derive still has to push, to keep push and pop symmetric with
-    /// [#endElement()].
+    /// [#endElement()]. The counts live here, so they die with the ancestor instance and a container
+    /// element between the two is no scope of its own.
+    ///
+    /// The first counted name is held inline and the arrays carry a second and later one. Every feed
+    /// in the corpus repeats one name under an ancestor, so the arrays stay unallocated and the
+    /// frame costs what the string pair it replaced cost.
     private static final class IdFrame {
         final String id;
+        private String name0;
+        private int count0;
+        private String[] names;
+        private int[] counts;
+        private int n;
 
         IdFrame(String id) {
             this.id = id;
+        }
+
+        /// The 1-based occurrence of an id-less `ln` child stamped under this element.
+        int stamped(String ln) {
+            if (name0 == null || name0.equals(ln)) {
+                name0 = ln;
+                return ++count0;
+            }
+            for (int i = 0; i < n; i++) {
+                if (names[i].equals(ln)) return ++counts[i];
+            }
+            if (names == null) {
+                names = new String[4];
+                counts = new int[4];
+            } else if (n == names.length) {
+                names = Arrays.copyOf(names, n * 2);
+                counts = Arrays.copyOf(counts, n * 2);
+            }
+            names[n] = ln;
+            counts[n] = 1;
+            n++;
+            return 1;
         }
     }
 

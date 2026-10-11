@@ -30,6 +30,10 @@ public final class Capabilities {
                     "a synthesized id swaps the class token of the ancestor it derives from, and "
                     + "mints one where that id names no class, so a child no longer wears its "
                     + "parent's id on another class"),
+            new Cap("derived-id-sibling-seq",
+                    "a synthesized id carries a sequence over the same-named id-less children of "
+                    + "one ancestor, so two <AlternativeName> in one <alternativeNames> no longer "
+                    + "share an (id, version)"),
             new Cap("srsname-depth",
                     "srsName injected at depth as well as at the fragment root"),
             new Cap("schema-defaults",

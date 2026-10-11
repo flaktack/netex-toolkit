@@ -16,9 +16,12 @@ package toolkit.load;
 //              frame's <FrameDefaults><DefaultDataSourceRef> is set.
 //   4. responsibilitySetRef same, from <DefaultResponsibilitySetRef>.
 
+import noi.netex.model.AlternativeName;
+import noi.netex.model.DefaultConnection;
 import noi.netex.model.ServiceJourneyPattern;
 import noi.netex.model.StopPlace;
 import noi.netex.model.ValidBetween;
+import noi.netex.text.Mls;
 import org.junit.jupiter.api.Test;
 import toolkit.codec.FragmentCodec;
 import toolkit.store.RawRow;
@@ -28,6 +31,7 @@ import toolkit.test.Gen;
 import toolkit.test.TestStore;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 public class TestLoaderDenormalisation {
 
@@ -135,14 +139,14 @@ public class TestLoaderDenormalisation {
         db.loadNetex(with(NESTED));
 
         String sjp = fragmentOf(db, ServiceJourneyPattern.class);
-        Check.that(sjp.contains("<RouteView id=\"test:RouteView:1\""),
+        Check.that(sjp.contains("<RouteView id=\"test:RouteView:1-1\""),
                 "nested RouteView gets the enclosing id with its own element name substituted");
-        Check.that(sjp.contains("<StopPointInJourneyPattern order=\"1\" id=\"test:StopPointInJourneyPattern:1\""),
+        Check.that(sjp.contains("<StopPointInJourneyPattern order=\"1\" id=\"test:StopPointInJourneyPattern:1-1\""),
                 "nested StopPointInJourneyPattern gets one too, after the source attributes");
 
         // The attribute is injected into the reader, not patched onto the fragment afterwards.
         ServiceJourneyPattern bean = Gen.byId(db, ServiceJourneyPattern.class).get("test:ServiceJourneyPattern:1");
-        Check.equals("test:RouteView:1", bean.getRouteView().getId(),
+        Check.equals("test:RouteView:1-1", bean.getRouteView().getId(),
                 "the BOUND BEAN carries the synthesized nested id");
     }
 
@@ -151,9 +155,9 @@ public class TestLoaderDenormalisation {
         db.loadNetex(without(NESTED));
 
         String sjp = fragmentOf(db, ServiceJourneyPattern.class);
-        Check.that(sjp.contains("<RouteView id=\"test:RouteView:1\""),
+        Check.that(sjp.contains("<RouteView id=\"test:RouteView:1-1\""),
                 "no FrameDefaults: the id arm still fires (it is not gated on them)");
-        Check.that(sjp.contains("<StopPointInJourneyPattern order=\"1\" id=\"test:StopPointInJourneyPattern:1\" version=\"3\""),
+        Check.that(sjp.contains("<StopPointInJourneyPattern order=\"1\" id=\"test:StopPointInJourneyPattern:1-1\" version=\"3\""),
                 "no FrameDefaults: the version arm still fires too");
     }
 
@@ -176,14 +180,14 @@ public class TestLoaderDenormalisation {
             """);
 
         try (Txn tx = db.store.roTxn()) {
-            long fk = db.store.lookupFullKey(tx, "test:ValidBetween:1", "7", ValidBetween.class);
+            long fk = db.store.lookupFullKey(tx, "test:ValidBetween:1-1", "7", ValidBetween.class);
             Check.that(fk != -1, "the row is filed under the SYNTHESIZED (id, version)");
             ValidBetween vb = (ValidBetween) db.store.loadObjectByFullKey(tx, fk);
-            Check.equals("test:ValidBetween:1", vb.getId(), "and the stored object carries that id");
+            Check.equals("test:ValidBetween:1-1", vb.getId(), "and the stored object carries that id");
             Check.equals("7", vb.getVersion(), "with the enclosing frame's version");
         }
         String frag = fragmentOf(db, ValidBetween.class);
-        Check.that(frag.contains("id=\"test:ValidBetween:1\"") && frag.contains("version=\"7\""),
+        Check.that(frag.contains("id=\"test:ValidBetween:1-1\"") && frag.contains("version=\"7\""),
                 "both attributes are in the captured bytes, not only on the bean: " + frag);
     }
 
@@ -198,7 +202,7 @@ public class TestLoaderDenormalisation {
         Check.that(link.contains("<gml:LineString gml:id=\"ls1\""), "the source gml:id is preserved");
         Check.that(!link.contains("LineString gml:id=\"ls1\" id="),
                 "no plain id is synthesized onto a gml geometry");
-        Check.that(!link.contains("test:LineString:1"), "…and certainly not a derived one");
+        Check.that(!link.contains("test:LineString:"), "…and certainly not a derived one");
     }
 
     /// Arm 1 against a parent id that names no class. Several Austrian feeds give a StopPlace an id
@@ -228,6 +232,118 @@ public class TestLoaderDenormalisation {
                 "and the parent keeps the id the feed published");
     }
 
+    // ------------------------------------------------- arm 1: same-named id-less siblings
+
+    /// The STA shape: two bare <AlternativeName> in one container, carrying a long form and a short
+    /// form of the name. The derivation reads the ancestor's id and our element name and nothing
+    /// else, so without the sequence both come out on one (id, version).
+    static final String SIBLINGS = """
+        <SiteFrame id="test:SiteFrame:1" version="7">
+          __DEFAULTS__
+          <stopPlaces>
+            <StopPlace id="test:StopPlace:1" version="5">
+              <Name>Innsbruck Hbf</Name>
+              <alternativeNames>
+                <AlternativeName><Name lang="de">Innsbruck, Stazione di Innsbruck Centrale</Name></AlternativeName>
+                <AlternativeName><Name lang="de">Stazione di Innsbruck Centrale</Name></AlternativeName>
+              </alternativeNames>
+            </StopPlace>
+          </stopPlaces>
+        </SiteFrame>
+        """;
+
+    @Test
+    void testSameNamedIdlessSiblingsAreNumbered(TestStore db) throws Exception {
+        db.loadNetex(with(SIBLINGS));
+
+        String sp = fragmentOf(db, StopPlace.class);
+        Check.that(sp.contains("<AlternativeName id=\"test:AlternativeName:1-1\" version=\"5\""),
+                "the first sibling: " + sp);
+        Check.that(sp.contains("<AlternativeName id=\"test:AlternativeName:1-2\" version=\"5\""),
+                "the second takes the next number, not the first's id: " + sp);
+
+        // Injected into the reader, so the beans carry what the fragment does.
+        List<AlternativeName> names = Gen.byId(db, StopPlace.class).get("test:StopPlace:1")
+                .getAlternativeNames().getAlternativeName();
+        Check.equals("test:AlternativeName:1-1", names.get(0).getId(), "bean, first");
+        Check.equals("test:AlternativeName:1-2", names.get(1).getId(), "bean, second");
+        Check.equals("Stazione di Innsbruck Centrale",
+                Mls.text(names.get(1).getName()), "and the second name is kept, not collapsed");
+    }
+
+    /// The count runs as far as the siblings do.
+    @Test
+    void testAThirdSiblingTakesAThirdNumber(TestStore db) throws Exception {
+        db.loadNetex(with(SIBLINGS.replace("</alternativeNames>",
+                "<AlternativeName><Name lang=\"it\">Stazione</Name></AlternativeName>"
+                        + "</alternativeNames>")));
+
+        List<AlternativeName> names = Gen.byId(db, StopPlace.class).get("test:StopPlace:1")
+                .getAlternativeNames().getAlternativeName();
+        Check.equals(3, names.size(), "three siblings");
+        Check.equals("test:AlternativeName:1-3", names.get(2).getId(), "numbered in document order");
+    }
+
+    /// Syntheses are counted, not elements: a sibling that declares its own id keeps it and claims
+    /// no number, so the one synthesized id in a mixed container is still the first.
+    @Test
+    void testADeclaredSiblingIdTakesNoNumber(TestStore db) throws Exception {
+        db.loadNetex(with(SIBLINGS.replace(
+                "<AlternativeName><Name lang=\"de\">Innsbruck, Stazione di Innsbruck Centrale</Name></AlternativeName>",
+                "<AlternativeName id=\"own:AlternativeName:9\" version=\"1\">"
+                        + "<Name lang=\"de\">Innsbruck, Stazione di Innsbruck Centrale</Name></AlternativeName>")));
+
+        List<AlternativeName> names = Gen.byId(db, StopPlace.class).get("test:StopPlace:1")
+                .getAlternativeNames().getAlternativeName();
+        Check.equals("own:AlternativeName:9", names.get(0).getId(), "the declared id is untouched");
+        Check.equals("test:AlternativeName:1-1", names.get(1).getId(),
+                "and the bare one is the FIRST synthesis");
+    }
+
+    /// The count belongs to the ancestor instance, so a container element between the two is no
+    /// scope of its own: a DefaultConnection holds one OperatorView under <From> and another under
+    /// <To>, and neither wrapper is in all_with_id.
+    @Test
+    void testTwoContainersUnderOneAncestorStillSeparate(TestStore db) throws Exception {
+        db.loadNetex("""
+            <ServiceFrame id="test:ServiceFrame:1" version="7">
+              <connections>
+                <DefaultConnection id="test:DefaultConnection:1" version="5">
+                  <From><OperatorView><OperatorRef ref="test:Operator:1"/></OperatorView></From>
+                  <To><OperatorView><OperatorRef ref="test:Operator:2"/></OperatorView></To>
+                </DefaultConnection>
+              </connections>
+            </ServiceFrame>
+            """);
+
+        DefaultConnection dc = Gen.byId(db, DefaultConnection.class).get("test:DefaultConnection:1");
+        Check.equals("test:OperatorView:1-1", dc.getFrom().getOperatorView().getId(), "under <From>");
+        Check.equals("test:OperatorView:1-2", dc.getTo().getOperatorView().getId(),
+                "under <To>, and not the same id");
+    }
+
+    /// Two id-less ValidBetween under one frame each become their own row. They shared one
+    /// (id, version, class) before, so the second replaced the first and only one row survived.
+    @Test
+    void testTwoIdlessTopLevelSiblingsEachGetARow(TestStore db) throws Exception {
+        db.loadNetex("""
+            <ServiceFrame id="test:ServiceFrame:1" version="7">
+              <ValidBetween><FromDate>2026-01-01T00:00:00</FromDate></ValidBetween>
+              <ValidBetween><FromDate>2027-01-01T00:00:00</FromDate></ValidBetween>
+              <scheduledStopPoints>
+                <ScheduledStopPoint id="test:ScheduledStopPoint:1" version="5"><Name>X</Name></ScheduledStopPoint>
+              </scheduledStopPoints>
+            </ServiceFrame>
+            """);
+
+        try (Txn tx = db.store.roTxn()) {
+            for (String id : List.of("test:ValidBetween:1-1", "test:ValidBetween:1-2")) {
+                Check.that(db.store.lookupFullKey(tx, id, "7", ValidBetween.class) != -1,
+                        id + " is filed under its own key");
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ arm 2: nested version
 
     @Test
@@ -235,12 +351,12 @@ public class TestLoaderDenormalisation {
         db.loadNetex(with(NESTED));
 
         String sjp = fragmentOf(db, ServiceJourneyPattern.class);
-        Check.that(sjp.contains("<StopPointInJourneyPattern order=\"1\" id=\"test:StopPointInJourneyPattern:1\" version=\"3\""),
+        Check.that(sjp.contains("<StopPointInJourneyPattern order=\"1\" id=\"test:StopPointInJourneyPattern:1-1\" version=\"3\""),
                 "an id-bearing nested element inherits the enclosing version");
         Check.that(sjp.contains("<ScheduledStopPointRef ref=\"test:ScheduledStopPoint:1\" version=\"any\"/>"),
                 "a nested ref with no version gets version=\"any\"");
         // RouteView is in all_with_id but not in all_with_version.
-        Check.that(!sjp.contains("<RouteView id=\"test:RouteView:1\" version="),
+        Check.that(!sjp.contains("<RouteView id=\"test:RouteView:1-1\" version="),
                 "an element outside all_with_version gets no version");
     }
 
@@ -283,7 +399,7 @@ public class TestLoaderDenormalisation {
                 "responsibilitySetRef appears exactly once: on the ServiceJourneyPattern root, "
                         + "and on nothing inside it");
         Check.equals(1, sjp.split("dataSourceRef", -1).length - 1, "and dataSourceRef likewise");
-        Check.that(sjp.contains("<StopPointInJourneyPattern order=\"1\" id=\"test:StopPointInJourneyPattern:1\" version=\"3\">"),
+        Check.that(sjp.contains("<StopPointInJourneyPattern order=\"1\" id=\"test:StopPointInJourneyPattern:1-1\" version=\"3\">"),
                 "the nested StopPointInJourneyPattern got id and version and NOTHING else — it is in "
                         + "allResponsibilitySetRefs but the attribute is dropped, so none is stored");
         Check.that(sjp.contains("<ScheduledStopPointRef ref=\"test:ScheduledStopPoint:1\" version=\"any\"/>"),
