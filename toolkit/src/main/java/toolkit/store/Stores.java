@@ -37,6 +37,11 @@ public final class Stores {
     ///    type, so the parser builds a structure that is registrable and id-carrying but simply
     ///    named something else. Without the alias the index misses every id-bearing `<Entrance>`.
     ///    The bare `Entrance` entry never matches anything.
+    /// - `GroupOfLines` is a target that only ever becomes embedded. NeTEx ties a group to its
+    ///    Network by containment — a GroupOfLines carries no reference back — so a document may
+    ///    hold the group inside the Network rather than beside it. A Line's representedByGroupRef
+    ///    then names an object with no row of its own, and unlisted it resolves to nothing: the
+    ///    grouping is lost and the Network reads as referenced by nobody.
     ///
     /// Changing this set changes stored bytes: it is half of the scope tag every store records, so
     /// a widened list makes every existing index degrade to a corpus scan until the store is
@@ -45,7 +50,8 @@ public final class Stores {
             new AbstractLmdbStore.EmbeddingScope(java.util.Set.of(
                     "Quay", "StopPointInJourneyPattern", "Level",
                     "Entrance", "SiteEntrance_VersionStructure",
-                    "PointOnRoute", "BoardingPosition", "FlexibleArea", "HailAndRideArea"));
+                    "PointOnRoute", "BoardingPosition", "FlexibleArea", "HailAndRideArea",
+                    "GroupOfLines"));
 
     /// The retired format's `_class_idx[FF FF]` key-format marker values.
     static final String RETIRED_V1_MARKER = "raw-utf8-nul:";

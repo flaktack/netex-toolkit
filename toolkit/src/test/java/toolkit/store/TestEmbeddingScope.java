@@ -43,16 +43,17 @@ public class TestEmbeddingScope {
     }
 
     /// Every visible entry is an id-carrying entity, and the set is exactly the eight names plus
-    /// SiteEntrance_VersionStructure.
+    /// SiteEntrance_VersionStructure and GroupOfLines.
     @Test
     void testEveryVisibleEntryCanCarryAnId() {
         Check.equals(
                 Set.of("Quay", "StopPointInJourneyPattern", "Level",
                         "Entrance", "SiteEntrance_VersionStructure",
-                        "PointOnRoute", "BoardingPosition", "FlexibleArea", "HailAndRideArea"),
+                        "PointOnRoute", "BoardingPosition", "FlexibleArea", "HailAndRideArea",
+                        "GroupOfLines"),
                 allow(),
                 "the curated allowlist is the original nine minus RouteView "
-                        + "plus SiteEntrance_VersionStructure");
+                        + "plus SiteEntrance_VersionStructure and GroupOfLines");
         for (String name : allow()) {
             Class<?> c = ModelRegistry.classForName(name);
             if (c == null) continue;   // the Entrance label, asserted separately

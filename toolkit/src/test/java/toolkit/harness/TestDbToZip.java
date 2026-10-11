@@ -449,15 +449,7 @@ public class TestDbToZip {
         DbToZip.driverMain(EpipDbToZip.TAG, new String[] {db.toString(), out.toString()},
                 EpipDbToZip.USAGE, EpipDbToZip.flags(), EpipDbToZip::setup);
 
-        String network = null;
-        try (ZipFile zf = new ZipFile(out.toFile())) {
-            for (ZipEntry e : zf.stream().toList()) {
-                if (e.getName().equals("shared-03-network.xml")) {
-                    network = new String(zf.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8);
-                }
-            }
-        }
-        Check.that(network != null, "the network frame entry exists");
+        String network = networkFrame(out);
         Set<String> ids = new TreeSet<>();
         Matcher m = Pattern.compile("<Network\\b[^>]*\\bid=\"([^\"]*)\"").matcher(network);
         while (m.find()) ids.add(m.group(1));
@@ -474,7 +466,7 @@ public class TestDbToZip {
                 "and the container precedes lines, per the frame sequence");
     }
 
-    /// A Network that NESTS its group of lines, and no Line naming the Network at all.
+    /// A Network that NESTS its group of lines, with a Line naming the group.
     private static final String NESTING_NETWORK = """
         <ServiceFrame id="sf" version="1">
           <Network id="net1" version="1"><Name>Nesting</Name>
@@ -489,27 +481,61 @@ public class TestDbToZip {
         </ServiceFrame>
         """;
 
-    /// A Network nobody names is still emitted when it CONTAINS something, because containment is
-    /// not a reference and dropping the Network would drop what it nested.
+    /// A Line that names a NESTED group reaches the Network that holds it. The group owns no row,
+    /// so the ref resolves onto its container — which is what puts GroupOfLines in the embedding
+    /// scope. Unlisted, the ref resolved to nothing and the Network read as referenced by nobody.
     @Test
-    void testANetworkThatNestsContentIsEmittedThoughUnreferenced(TestStore ts) throws Exception {
+    void testALineNamingANestedGroupReferencesItsNetwork(TestStore ts) throws Exception {
         Path db = ts.buildDbFile(NESTING_NETWORK, "nesting.lmdb");
         Path out = ts.tempPath("nesting.zip");
         DbToZip.driverMain(EpipDbToZip.TAG, new String[] {db.toString(), out.toString()},
                 EpipDbToZip.USAGE, EpipDbToZip.flags(), EpipDbToZip::setup);
-        String network = null;
-        try (ZipFile zf = new ZipFile(out.toFile())) {
-            for (ZipEntry e : zf.stream().toList()) {
-                if (e.getName().equals("shared-03-network.xml")) {
-                    network = new String(zf.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8);
-                }
-            }
-        }
-        Check.that(network != null, "the network frame entry exists");
+        String network = networkFrame(out);
         Check.that(network.contains("id=\"net1\""),
                 "the nesting Network survives: " + network);
         Check.that(network.contains("id=\"gol1\""),
                 "and so does the group it nests");
+    }
+
+    /// The same nesting, with nothing naming the group or the Network.
+    private static final String NESTING_NETWORK_UNNAMED = """
+        <ServiceFrame id="sf" version="1">
+          <Network id="net1" version="1"><Name>Nesting</Name>
+            <groupsOfLines>
+              <GroupOfLines id="gol1" version="1"><Name>Grouped</Name></GroupOfLines>
+            </groupsOfLines>
+          </Network>
+          <lines>
+            <Line id="l1" version="1"><Name>L</Name><TransportMode>bus</TransportMode></Line>
+          </lines>
+        </ServiceFrame>
+        """;
+
+    /// A Network nobody names is still emitted when it CONTAINS something, because containment is
+    /// not a reference and dropping the Network would drop what it nested.
+    @Test
+    void testANetworkThatNestsContentIsEmittedThoughUnreferenced(TestStore ts) throws Exception {
+        Path db = ts.buildDbFile(NESTING_NETWORK_UNNAMED, "nesting-unnamed.lmdb");
+        Path out = ts.tempPath("nesting-unnamed.zip");
+        DbToZip.driverMain(EpipDbToZip.TAG, new String[] {db.toString(), out.toString()},
+                EpipDbToZip.USAGE, EpipDbToZip.flags(), EpipDbToZip::setup);
+        String network = networkFrame(out);
+        Check.that(network.contains("id=\"net1\""),
+                "the nesting Network survives on containment alone: " + network);
+        Check.that(network.contains("id=\"gol1\""),
+                "and so does the group it nests");
+    }
+
+    /// The `shared-03-network.xml` entry of an export, as text.
+    private static String networkFrame(Path zip) throws Exception {
+        try (ZipFile zf = new ZipFile(zip.toFile())) {
+            for (ZipEntry e : zf.stream().toList()) {
+                if (e.getName().equals("shared-03-network.xml")) {
+                    return new String(zf.getInputStream(e).readAllBytes(), StandardCharsets.UTF_8);
+                }
+            }
+        }
+        throw new AssertionError("the export carries no shared-03-network.xml entry");
     }
 
     /// A journey categorised by a TypeOfService the feed defines, beside a second definition the

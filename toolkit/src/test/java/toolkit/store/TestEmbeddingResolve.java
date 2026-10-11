@@ -9,6 +9,11 @@ package toolkit.store;
 // referrer to the container, because the container is the only thing addressable by a full key.
 
 import jakarta.xml.bind.JAXBElement;
+import noi.netex.model.GroupOfLines;
+import noi.netex.model.GroupOfLinesRefStructure;
+import noi.netex.model.GroupsOfLinesInFrame_RelStructure;
+import noi.netex.model.Line;
+import noi.netex.model.Network;
 import noi.netex.model.PassengerStopAssignment;
 import noi.netex.model.Quay;
 import noi.netex.model.QuayRefStructure;
@@ -93,6 +98,66 @@ public class TestEmbeddingResolve {
             Check.equals(0L, store.resolveEmbeddings(), "the second finds nothing left");
             try (Txn txn = store.roTxn()) {
                 Check.equals(1, count(store.iterEdges(txn)), "and did not duplicate the edge");
+            }
+        }
+    }
+
+    /// NET:1 holding its group of lines inline, the way NeTEx ties the two: by containment, with
+    /// no reference from the group back to the Network.
+    private static Network networkWithGroup() {
+        GroupOfLines group = new GroupOfLines();
+        group.setId("GOL:1");
+        group.setVersion("1");
+        GroupsOfLinesInFrame_RelStructure groups = new GroupsOfLinesInFrame_RelStructure();
+        groups.getGroupOfLines().add(group);
+        Network net = new Network();
+        net.setId("NET:1");
+        net.setVersion("1");
+        net.setGroupsOfLines(groups);
+        return net;
+    }
+
+    private static Line lineGroupedBy(String groupId) {
+        Line line = new Line();
+        line.setId("L:1");
+        line.setVersion("1");
+        GroupOfLinesRefStructure ref = new GroupOfLinesRefStructure();
+        ref.setRef(groupId);
+        ref.setVersion("1");
+        line.setRepresentedByGroupRef(ref);
+        return line;
+    }
+
+    /// A Line grouped by a NESTED GroupOfLines is wired to the Network holding it — the same
+    /// container rule as the Quay above, and why GroupOfLines is in the embedding scope.
+    ///
+    /// Without it the reference stayed in _unresolved, the grouping was lost, and the Network read
+    /// as referenced by nothing — which is what the EPIP export drops a Network on.
+    @Test
+    void testALineGroupedByANestedGroupIsWiredToItsNetwork(TestStore ts) throws Exception {
+        try (Store store = Stores.create(ts.tempPath("gol.lmdb"), ts.format)) {
+            try (Txn txn = store.rwTxn()) {
+                store.insertAnyObjects(txn, List.of(networkWithGroup(), lineGroupedBy("GOL:1")));
+                txn.commit();
+            }
+
+            Check.equals(0L, store.resolve(),
+                    "resolve() cannot see the group: nesting it left it without a row");
+            Check.equals(1L, store.resolveEmbeddings(), "resolveEmbeddings() is what wires it");
+
+            try (Txn txn = store.roTxn()) {
+                long netFk = store.lookupFullKey(txn, "NET:1", "1", Network.class);
+                long lineFk = store.lookupFullKey(txn, "L:1", "1", Line.class);
+                Check.that(netFk != -1 && lineFk != -1, "both top-level objects are in the id index");
+                Check.that(!store.dbNames(txn).contains(GroupOfLines.class),
+                        "the nested group has no class map of its own");
+
+                List<String> edges = new ArrayList<>();
+                for (long[] e : store.iterEdges(txn)) edges.add(e[0] + "->" + e[1]);
+                Check.equals(List.of(lineFk + "->" + netFk), edges,
+                        "the one edge runs Line -> Network, so the Network is referenced");
+                Check.equals(0, count(store.iterUnresolved(txn)),
+                        "and nothing is left waiting in _unresolved");
             }
         }
     }
