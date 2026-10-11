@@ -280,28 +280,39 @@ public final class EpipDbToZip {
         return n;
     }
 
-    /// The Networks the frame carries: those a Line names, plus any nesting content of their own.
+    /// The Networks to emit, and which arm admitted each: `referenced` for the ones something
+    /// names, `nesting` for the ones nothing names that carry groups of lines anyway. Counted
+    /// apart because they answer different questions — the first says the grouping survived, the
+    /// second says only that dropping the Network would have dropped its contents with it.
+    private record Networks(LongArrayList keys, int referenced, int nesting) {}
+
+    /// The Networks the frame carries: those something references, plus any nesting content of
+    /// their own.
     ///
     /// A Network is referenced from one place, a Line's representedByGroupRef. It may also
     /// CONTAIN groups of lines, and containment is not a reference, so the second arm is the
     /// standing condition here: dropping an unreferenced Network drops whatever it nested.
-    private LongArrayList networksToEmit() {
+    private Networks networksToEmit() {
         LongArrayList out = new LongArrayList();
+        int referenced = 0;
+        int nesting = 0;
         Class<?> c = store.classForName("Network");
-        if (c == null) return out;
+        if (c == null) return new Networks(out, referenced, nesting);
         for (RawRow r : store.iterRawObjects(tx, c)) {
             long fk = store.fullKeyOf(c, r.localKey());
             if (referenced(fk)) {
                 out.add(fk);
+                referenced++;
                 continue;
             }
             Object o = store.loadObjectByFullKey(tx, fk);
             if (o instanceof noi.netex.model.Network n && n.getGroupsOfLines() != null
                     && !n.getGroupsOfLines().getGroupOfLines().isEmpty()) {
                 out.add(fk);
+                nesting++;
             }
         }
-        return out;
+        return new Networks(out, referenced, nesting);
     }
 
     /// The full keys of a class's referenced rows, in store scan order.
@@ -449,15 +460,17 @@ public final class EpipDbToZip {
         // substitutes for the GroupOfLinesRef the field is typed on. One no Line names groups
         // nothing a consumer can act on, and the data-relevance rule asks that a document not
         // carry it.
-        LongArrayList networks = networksToEmit();
+        Networks networks = networksToEmit();
         long networkRows = countRows("Network");
-        if (!networks.isEmpty()) {
+        if (!networks.keys().isEmpty()) {
             out.write("<additionalNetworks>");
-            fw.byFullKey(networks);
+            fw.byFullKey(networks.keys());
             out.write("</additionalNetworks>");
         }
-        Log.info("[%s] %,d of %,d Networks emitted; the rest are named by no Line's "
-                + "representedByGroupRef", TAG, networks.size(), networkRows);
+        Log.info("[%s] %,d of %,d Networks emitted: %,d something references, %,d referenced by "
+                + "nothing but nesting groups of lines; the rest are referenced by nothing and "
+                + "nest nothing", TAG, networks.keys().size(), networkRows, networks.referenced(),
+                networks.nesting());
         fw.containers(NETWORK, this::keepRow);
         out.write("</ServiceFrame>");
         fw.end();
