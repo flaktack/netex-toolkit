@@ -21,6 +21,7 @@ import toolkit.model.RecursiveAttributes;
 import toolkit.store.RawRow;
 import toolkit.store.Store;
 import toolkit.store.Txn;
+import toolkit.transform.common.SiteLevels;
 import toolkit.util.Log;
 
 import java.util.ArrayList;
@@ -331,47 +332,20 @@ public final class EpipSanitize {
     private record SiteScan(List<String> refs, long nestedSites) {}
 
     /// `refs(s)` — every `LevelRef` anywhere under this Site, in walk order.
-    /// [RecursiveAttributes#walk] does the navigating; this method only says what to do with each
-    /// node it is handed. The carriers below are the complete set of places the model declares a
-    /// `LevelRefStructure` member, a list TestEpipLevelRefs pins.
-    ///
-    /// `walk` yields a reference object as a leaf and never recurses into it, so a
-    /// `LevelRefStructure` arrives via `reference()` and is ignored here — it is counted through
-    /// its holder, which is the only thing that can also remove it.
+    /// [SiteLevels#visit] enumerates the carriers, so the read side of this pass and the fold that
+    /// precedes it reach the same set; the strip below keeps its own walk, because removing a
+    /// reference needs the member that holds it rather than the reference.
     private static SiteScan siteRefs(Site_VersionStructure site) {
         List<String> refs = new ArrayList<>();
-        long[] nested = {0};
-        RecursiveAttributes.walk(site, new RecursiveAttributes.Visitor() {
-            @Override public void reference(noi.netex.model.VersionOfObjectRefStructure ref) {}
+        long[] nestedCount = {0};
+        SiteLevels.visit(site, new SiteLevels.RefVisitor() {
+            @Override public void ref(LevelRefStructure r) { refs.add(r.getRef()); }
 
-            @Override public void node(Object o) {
-                if (o instanceof Site_VersionStructure) nested[0]++;
-                if (blind(o)) return;
-                if (o instanceof SiteComponent_VersionStructure sc) {
-                    if (sc.getLevelRef() != null) refs.add(sc.getLevelRef().getRef());
-                } else if (o instanceof SitePathLink_VersionStructure pl) {
-                    if (pl.getLevelRef() != null) refs.add(pl.getLevelRef().getRef());
-                } else if (PathLinkEnds.isEnd(o)) {
-                    LevelRefStructure r = PathLinkEnds.levelRef(o);
-                    if (r != null) refs.add(r.getRef());
-                } else if (o instanceof Levels_RelStructure lv) {
-                    for (Object e : lv.getLevelRefOrLevel()) {
-                        if (e instanceof LevelRefStructure r) refs.add(r.getRef());
-                    }
-                } else if (o instanceof SiteStructure_VersionStructure ss) {
-                    // Shape (c), counted at the owner rather than at
-                    // LevelInStructure_VersionStructure itself, because the strip has to remove the
-                    // whole element and therefore needs the list.
-                    if (ss.getLevelsInStructure() != null) {
-                        for (LevelInStructure_VersionStructure lis
-                                : ss.getLevelsInStructure().getLevelInStructure()) {
-                            if (lis.getLevelRef() != null) refs.add(lis.getLevelRef().getRef());
-                        }
-                    }
-                }
-            }
+            @Override public void nestedSite(Site_VersionStructure nested) { nestedCount[0]++; }
+
+            @Override public boolean blind(Object node) { return EpipSanitize.blind(node); }
         });
-        return new SiteScan(refs, nested[0]);
+        return new SiteScan(refs, nestedCount[0]);
     }
 
     // -------------------------------------------------------- G7: the store's own population

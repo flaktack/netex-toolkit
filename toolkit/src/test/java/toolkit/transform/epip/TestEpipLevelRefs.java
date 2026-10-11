@@ -538,8 +538,8 @@ public class TestEpipLevelRefs {
 
         Check.equals(expected, carriers,
                 "the model declares a LevelRefStructure member in exactly these "
-                        + expected.size() + " places, and EpipSanitize handles exactly these "
-                        + expected.size() + ". Found: " + carriers);
+                        + expected.size() + " places, and SiteLevels.visit and EpipSanitize's strip "
+                        + "handle exactly these " + expected.size() + ". Found: " + carriers);
         Check.equals(v20Carrier, expected.size() == 5,
                 "the fifth carrier is present exactly when LevelInStructure_VersionStructure is "
                         + "(4 at 1.15.2, 5 at 2.0) — a count asserted absolutely would be true at "
