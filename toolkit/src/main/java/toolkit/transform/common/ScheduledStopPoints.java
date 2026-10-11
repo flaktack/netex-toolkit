@@ -468,8 +468,11 @@ public final class ScheduledStopPoints {
     // ---------------------------------------------------------------- 3: duplicate-stop merge
 
     /// Cluster StopPlaces that are both within the merge radius and share a normalised name, elect
-    /// one survivor per cluster (most quays, tie-broken by id), move quays in, re-point PSAs.
-    /// Returns (kept survivors that gained quays, dropped ids, repointed PSAs).
+    /// one survivor per cluster (most quays, tie-broken by id), move quays and levels in, re-point
+    /// PSAs. Returns (kept survivors that gained quays, dropped ids, repointed PSAs).
+    ///
+    /// A level re-point needs no entry in the plan: a `LevelRef` lives inside the Site the fold
+    /// rewrote, which is already a survivor in `kept`.
     public static MergePlan planStopplaceMerge(List<StopPlace> stopplacesIn,
                                                List<PassengerStopAssignment> psas) {
         return planStopplaceMerge(stopplacesIn, psas, MERGE_RADIUS_M);
@@ -549,6 +552,8 @@ public final class ScheduledStopPoints {
         Map<String, String> quayToSurvivor = new HashMap<>(); // folded quay id -> surviving quay id
         long mergedClusters = 0;
         long modesPromoted = 0;
+        long levelsMoved = 0;
+        long levelsFolded = 0;
         for (List<StopPlace> members : clusters.values()) {
             if (members.size() < 2) continue;
             mergedClusters++;
@@ -566,16 +571,30 @@ public final class ScheduledStopPoints {
             List<JAXBElement<?>> survQuays = new ArrayList<>();
             Set<String> seenQuays = new LinkedHashSet<>();
             if (survivor.getQuays() != null) addQuays(survQuays, seenQuays, survivor);
+            // And the union of their levels, deduped by id: a quay carries its LevelRef with it,
+            // and the floor it names has to come along or the EPIP strip deletes the reference.
+            List<Object> survLevels = new ArrayList<>();
+            Set<String> seenLevels = new LinkedHashSet<>();
+            SiteLevels.union(survLevels, seenLevels, survivor);
+            int ownLevels = survLevels.size();
             for (StopPlace m : members) {
                 if (m.getId().equals(survivor.getId())) continue;
                 dropped.add(m.getId());
                 spToSurvivor.put(m.getId(), survivor.getId());
                 if (m.getQuays() != null) addQuays(survQuays, seenQuays, m);
+                SiteLevels.union(survLevels, seenLevels, m);
             }
             foldCoincidentQuays(survQuays, quayToSurvivor);
+            levelsMoved += survLevels.size() - ownLevels;
+            Map<String, String> levelToSurvivor = new HashMap<>();
+            levelsFolded += SiteLevels.fold(survLevels, levelToSurvivor);
             Quays_RelStructure q = new Quays_RelStructure();
             q.getQuayRefOrQuay().addAll(survQuays);
             survivor.setQuays(q);
+            SiteLevels.install(survivor, survLevels);
+            // After the quay install, so the walk reaches the quays that survived the fold and
+            // none of the ones it removed.
+            SiteLevels.repoint(survivor, levelToSurvivor);
             kept.put(survivor.getId(), survivor);
         }
 
@@ -607,9 +626,10 @@ public final class ScheduledStopPoints {
 
         Log.info("[merge_duplicate_stopplaces] merged %d duplicate StopPlaces into "
                 + "%d survivors (same name, <= %.0f m); folded %d coincident quays (<= %.0f m); "
+                + "moved %d levels and folded %d of them to one floor; "
                 + "re-pointed %d PSAs; %d survivors took a member's mode",
                 dropped.size(), mergedClusters, radiusM, quayToSurvivor.size(), QUAY_FOLD_RADIUS_M,
-                repointed.size(), modesPromoted);
+                levelsMoved, levelsFolded, repointed.size(), modesPromoted);
         return new MergePlan(kept, dropped, repointed);
     }
 
