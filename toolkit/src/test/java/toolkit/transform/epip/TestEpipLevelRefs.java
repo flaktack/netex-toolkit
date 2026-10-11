@@ -188,6 +188,31 @@ public class TestEpipLevelRefs {
         </stopPlaces></SiteFrame>
         """;
 
+    /// One national stop id, two publishers' quays, one floor: the state a merge that unions and
+    /// folds `<levels>` hands this pass.
+    private static final String FOLDED = """
+        <SiteFrame id="site" version="1"><stopPlaces>
+          <StopPlace id="at:41:3145" version="1"><Name>Baumgarten-Schattendorf Bahnhof</Name>
+            <levels><Level id="at:obb:Level:380-0:" version="1"><Name lang="de">Erdgeschoss</Name></Level></levels>
+            <quays>
+              <Quay id="at:41:3145:1" version="1"><Name>1</Name><LevelRef ref="at:obb:Level:380-0:" version="1"/></Quay>
+              <Quay id="at:41:3145:2" version="1"><Name>Bahn</Name><LevelRef ref="at:obb:Level:380-0:" version="1"/></Quay>
+            </quays></StopPlace>
+        </stopPlaces></SiteFrame>
+        """;
+
+    /// The same stop with one publisher's `<levels>` and both publishers' quays.
+    private static final String LEVELS_OF_ONE_PUBLISHER = """
+        <SiteFrame id="site" version="1"><stopPlaces>
+          <StopPlace id="at:41:3145" version="1"><Name>Baumgarten-Schattendorf Bahnhof</Name>
+            <levels><Level id="at:vor:Level:3145-0:" version="1"><Name lang="de">Erdgeschoss</Name></Level></levels>
+            <quays>
+              <Quay id="at:41:3145:1" version="1"><Name>1</Name><LevelRef ref="at:obb:Level:380-0:" version="1"/></Quay>
+              <Quay id="at:41:3145:2" version="1"><Name>Bahn</Name><LevelRef ref="at:vor:Level:3145-0:" version="1"/></Quay>
+            </quays></StopPlace>
+        </stopPlaces></SiteFrame>
+        """;
+
     /// The Parking case G6 is not scoped to: its target is a Level, in a StopPlace.
     private static final String PARKING_POINTS_INTO_A_STOPPLACE = """
         <SiteFrame id="site" version="1"><stopPlaces>
@@ -351,6 +376,31 @@ public class TestEpipLevelRefs {
                 "and the pass REPORTS that its target is a Level held elsewhere in the store");
         Check.equals(0L, r.g6Collisions(),
                 "G6 is StopPlace-scoped, so the Parking collision does not fire it");
+    }
+
+    /// The shape a merge leaves behind once it unions and folds two publishers' levels: one floor,
+    /// and a quay from each publisher naming it. Every ref is in-Site, so the strip has nothing to
+    /// do and G6 stays unarmed.
+    ///
+    /// The counterfactual is the defect that shape replaces — a merge keeping one publisher's
+    /// `<levels>` and the other's quays leaves refs this pass deletes.
+    @Test
+    void testAFoldedSiteGivesTheStripNothingToDo(TestStore db) throws Exception {
+        db.loadNetex(FOLDED);
+        EpipSanitize.LevelRefResult r = strip(db);
+        Check.equals(0L, r.cleared(), "nothing to clear");
+        Check.equals(2L, r.intact(), "both publishers' quays keep their ref");
+        Check.equals(0L, r.g6Collisions(), "one Site defines the floor, and the same Site names it");
+    }
+
+    @Test
+    void testAnUnfoldedSiteLosesTheOtherPublishersRefs(TestStore db) throws Exception {
+        db.loadNetex(LEVELS_OF_ONE_PUBLISHER);
+        EpipSanitize.LevelRefResult r = strip(db);
+        Check.equals(1L, r.cleared(), "the quay whose publisher's Level the merge dropped");
+        Check.equals(1L, r.intact(), "the surviving publisher's quay keeps its ref");
+        Check.equals(0L, r.g6Collisions(),
+                "the target is a Level nowhere in the store, which is what licenses the strip");
     }
 
     /// G6: the moment a feed shares a Level id across two StopPlaces, the pass must refuse.

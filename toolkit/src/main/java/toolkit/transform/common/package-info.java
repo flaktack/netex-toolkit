@@ -6,8 +6,10 @@
 /// and the same-name stop-merge plan), [toolkit.transform.common.TransportModes] (which mode a
 /// station takes when a merge folds several publishers' copies of it into one, for the merge above
 /// and for a pipeline's own), [toolkit.transform.common.LineAuthorities] (the Line authority
-/// backfill, which synthesises an Authority from a Line's Operator where the feed publishes none)
-/// and [toolkit.transform.common.MpLoadRules] (the zip-loader dedup rules, shaped as
+/// backfill, which synthesises an Authority from a Line's Operator where the feed publishes none),
+/// [toolkit.transform.common.SiteLevels] (the union, the one-floor fold and the `LevelRef` walk
+/// over a Site's embedded `<levels>`, shared by every merge that folds two copies of one station
+/// into one) and [toolkit.transform.common.MpLoadRules] (the zip-loader dedup rules, shaped as
 /// `Store.MergeFn` policies: the `MergeFn` machinery is toolkit mechanism, and the rules themselves
 /// are policy that no single loader owns).
 ///

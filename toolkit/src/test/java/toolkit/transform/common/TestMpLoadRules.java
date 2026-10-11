@@ -1,10 +1,11 @@
 package toolkit.transform.common;
 
-// Coverage for the MpLoadRules merge policies — mergeStopPlaceQuays, the quay-union dedup, and
-// mergeValueSetValues, the code-list union — and the fragment-fidelity contract they share on the
-// Store.setMergePolicy insert path.
+// Coverage for the MpLoadRules merge policies — mergeStopPlaceChildren, the quay union and the
+// level union with its one-floor fold, and mergeValueSetValues, the code-list union — and the
+// fragment-fidelity contract they share on the Store.setMergePolicy insert path.
 
 import jakarta.xml.bind.JAXBElement;
+import noi.netex.model.Level;
 import noi.netex.model.LocationStructure;
 import noi.netex.model.ObjectFactory;
 import noi.netex.model.Quay;
@@ -37,13 +38,13 @@ public class TestMpLoadRules {
     void testQuayUnionAppendsSortedAndOrderIndependent() {
         StopPlace stored = sp("SP:1", quay("Q:C", null), quay("Q:A", null));
         StopPlace incoming = sp("SP:1", quay("Q:B", null));
-        StopPlace merged = (StopPlace) MpLoadRules.mergeStopPlaceQuays(stored, incoming);
+        StopPlace merged = (StopPlace) MpLoadRules.mergeStopPlaceChildren(stored, incoming);
         Check.that(merged != null, "stored copy adds quays -> non-null merge");
         Check.equals(List.of("Q:B", "Q:A", "Q:C"), quayIds(merged),
                 "incoming quays first, stored-only quays appended sorted by id");
 
         // order independence: swapping which copy arrives first yields the same quay SET
-        StopPlace merged2 = (StopPlace) MpLoadRules.mergeStopPlaceQuays(
+        StopPlace merged2 = (StopPlace) MpLoadRules.mergeStopPlaceChildren(
                 sp("SP:1", quay("Q:B", null)), sp("SP:1", quay("Q:C", null), quay("Q:A", null)));
         Check.that(merged2 != null, "reverse arrival also merges");
         Check.equals(List.of("Q:C", "Q:A", "Q:B"), quayIds(merged2),
@@ -55,7 +56,7 @@ public class TestMpLoadRules {
     void testCentroidBackfill() {
         StopPlace stored = sp("SP:1", quay("Q:A", new BigDecimal("46.5")));
         StopPlace incoming = sp("SP:1", quay("Q:A", null));
-        StopPlace merged = (StopPlace) MpLoadRules.mergeStopPlaceQuays(stored, incoming);
+        StopPlace merged = (StopPlace) MpLoadRules.mergeStopPlaceChildren(stored, incoming);
         Check.that(merged != null, "centroid adoption alone is a change");
         Quay q = (Quay) merged.getQuays().getQuayRefOrQuay().get(0).getValue();
         Check.equals(new BigDecimal("46.5"), q.getCentroid().getLocation().getLatitude(),
@@ -67,8 +68,80 @@ public class TestMpLoadRules {
     void testNoOpMergeReturnsNull() {
         StopPlace stored = sp("SP:1", quay("Q:A", new BigDecimal("46.5")));
         StopPlace incoming = sp("SP:1", quay("Q:A", new BigDecimal("46.5")), quay("Q:B", null));
-        Check.isNull(MpLoadRules.mergeStopPlaceQuays(stored, incoming),
+        Check.isNull(MpLoadRules.mergeStopPlaceChildren(stored, incoming),
                 "stored copy adds nothing -> null (plain replace)");
+    }
+
+    /// The level arm of the union, on the same three branches the quay arm has.
+    @Test
+    void testLevelUnionAppendsSortedAndOrderIndependent() {
+        StopPlace stored = withLevels(sp("SP:1"), level("L:C", "Dach"), level("L:A", "Keller"));
+        StopPlace incoming = withLevels(sp("SP:1"), level("L:B", "Erdgeschoss"));
+        StopPlace merged = (StopPlace) MpLoadRules.mergeStopPlaceChildren(stored, incoming);
+        Check.that(merged != null, "stored copy adds levels -> non-null merge");
+        Check.equals(List.of("L:B", "L:A", "L:C"), levelIds(merged),
+                "incoming levels first, stored-only levels appended sorted by id");
+
+        StopPlace merged2 = (StopPlace) MpLoadRules.mergeStopPlaceChildren(
+                withLevels(sp("SP:1"), level("L:B", "Erdgeschoss")),
+                withLevels(sp("SP:1"), level("L:C", "Dach"), level("L:A", "Keller")));
+        Check.that(merged2 != null, "reverse arrival also merges");
+        Check.equals(List.of("L:C", "L:A", "L:B"), levelIds(merged2),
+                "reverse arrival: same union, incoming-first layout");
+    }
+
+    /// Two copies agreeing on every quay and differing only in `<levels>`. Last-wins kept one
+    /// copy's levels and left the other copy's merged-in quays naming a Level the store no longer
+    /// held.
+    @Test
+    void testALevelsOnlyDifferenceIsAMerge() {
+        StopPlace stored = withLevels(sp("SP:1", quay("Q:A", null)), level("L:obb", "Erdgeschoss"));
+        StopPlace incoming = withLevels(sp("SP:1", quay("Q:A", null)), level("L:vor", "Keller"));
+        StopPlace merged = (StopPlace) MpLoadRules.mergeStopPlaceChildren(stored, incoming);
+        Check.that(merged != null, "a levels-only difference is a change");
+        Check.equals(List.of("L:vor", "L:obb"), levelIds(merged), "both floors survive");
+    }
+
+    /// The shape a national stop id described by two regional publishers takes: one floor each,
+    /// identical in every field, each publisher's quay naming its own.
+    @Test
+    void testOneFloorFromTwoPublishersFoldsAndCarriesBothQuays() {
+        StopPlace stored = withLevels(sp("SP:1", quayWithLevel("Q:obb", "at:obb:Level:380-0:")),
+                level("at:obb:Level:380-0:", "Erdgeschoss"));
+        StopPlace incoming = withLevels(sp("SP:1", quayWithLevel("Q:vor", "at:vor:Level:3145-0:")),
+                level("at:vor:Level:3145-0:", "Erdgeschoss"));
+        StopPlace merged = (StopPlace) MpLoadRules.mergeStopPlaceChildren(stored, incoming);
+
+        Check.equals(List.of("at:obb:Level:380-0:"), levelIds(merged),
+                "one floor, under the smaller of the two ids");
+        Check.equals(List.of("at:obb:Level:380-0:", "at:obb:Level:380-0:"), levelRefs(merged),
+                "both publishers' quays name it");
+    }
+
+    /// Zip members load in name order, so which copy is last is a property of the archive. The
+    /// election reads the group, so it is not a property of the result.
+    @Test
+    void testTheSurvivingFloorDoesNotDependOnArrivalOrder() {
+        List<String> codespaces = List.of("at:obb", "at:oov", "at:vor");
+        for (List<Integer> order : List.of(List.of(0, 1, 2), List.of(0, 2, 1), List.of(1, 0, 2),
+                List.of(1, 2, 0), List.of(2, 0, 1), List.of(2, 1, 0))) {
+            StopPlace acc = null;
+            for (int i : order) {
+                String cs = codespaces.get(i);
+                StopPlace next = withLevels(sp("SP:1", quayWithLevel("Q:" + cs, cs + ":Level:0:")),
+                        level(cs + ":Level:0:", "Erdgeschoss"));
+                if (acc == null) {
+                    acc = next;
+                    continue;
+                }
+                StopPlace merged = (StopPlace) MpLoadRules.mergeStopPlaceChildren(acc, next);
+                acc = merged == null ? next : merged;
+            }
+            Check.equals(List.of("at:obb:Level:0:"), levelIds(acc),
+                    "the smallest id survives, arriving in order " + order);
+            Check.equals(List.of("at:obb:Level:0:", "at:obb:Level:0:", "at:obb:Level:0:"),
+                    levelRefs(acc), "and every copy's quay names it, in order " + order);
+        }
     }
 
     /// Fragment-fidelity contract on the insert path: a null merge keeps the incoming
@@ -77,7 +150,7 @@ public class TestMpLoadRules {
     void testMergePolicyFragmentFidelity(TestStore db) throws Exception {
         Store store = db.store;
         FragmentCodec codec = new FragmentCodec();
-        store.setMergePolicy(StopPlace.class, MpLoadRules::mergeStopPlaceQuays);
+        store.setMergePolicy(StopPlace.class, MpLoadRules::mergeStopPlaceChildren);
         try {
             StopPlace first = sp("SP:1", quay("Q:A", null));
             byte[] frag1 = codec.marshalFragment(first);
@@ -110,6 +183,29 @@ public class TestMpLoadRules {
                         store.lookupFullKey(tx, "SP:1", "1", StopPlace.class));
                 Check.equals(List.of("Q:B", "Q:A"), quayIds(merged), "merged blob has the quay union");
             }
+            // a copy carrying a level, so the store holds one...
+            StopPlace levelled = withLevels(sp("SP:1", quay("Q:A", null), quay("Q:B", null)),
+                    level("L:A", "Erdgeschoss"));
+            try (Txn txn = store.rwTxn()) {
+                store.insertAnyObjects(txn, List.of(levelled));
+                txn.commit();
+            }
+            // ...and one differing from it in nothing but that level -> the same non-null path
+            StopPlace levelless = sp("SP:1", quay("Q:A", null), quay("Q:B", null));
+            byte[] frag5 = ("<!-- level marker -->" + new String(codec.marshalFragment(levelless),
+                    StandardCharsets.UTF_8)).getBytes(StandardCharsets.UTF_8);
+            try (Txn txn = store.rwTxn()) {
+                store.insertAnyObjects(txn, List.of(new WithFragment(levelless, frag5)));
+                txn.commit();
+            }
+            Check.that(!rawFragment(store, codec).contains("level marker"),
+                    "a levels-only difference re-marshals too");
+            try (Txn tx = store.roTxn()) {
+                StopPlace merged = (StopPlace) store.loadObjectByFullKey(tx,
+                        store.lookupFullKey(tx, "SP:1", "1", StopPlace.class));
+                Check.equals(List.of("L:A"), levelIds(merged),
+                        "and the level the incoming copy lacked is in the merged blob");
+            }
         } finally {
             store.setMergePolicy(StopPlace.class, null);
         }
@@ -122,7 +218,7 @@ public class TestMpLoadRules {
     @Test
     void testMergedObjectIsWhatGetsIndexed(TestStore db) throws Exception {
         Store store = db.store;
-        store.setMergePolicy(StopPlace.class, MpLoadRules::mergeStopPlaceQuays);
+        store.setMergePolicy(StopPlace.class, MpLoadRules::mergeStopPlaceChildren);
         try {
             insert(store, sp("SP:1", quayWithLevel("Q:A", "L:A")));
             insert(store, sp("SP:1", quayWithLevel("Q:B", "L:B")));
@@ -161,7 +257,7 @@ public class TestMpLoadRules {
             throws Exception {
         Store store = db.store;
         insert(store, sp("SP:1", quay("Q:A", null)));
-        store.setMergePolicy(StopPlace.class, MpLoadRules::mergeStopPlaceQuays);
+        store.setMergePolicy(StopPlace.class, MpLoadRules::mergeStopPlaceChildren);
         try {
             insert(store, sp("SP:1", quay("Q:B", null)));
             try (Txn tx = store.roTxn()) {
@@ -322,6 +418,33 @@ public class TestMpLoadRules {
             if (el.getValue() instanceof Quay q) ids.add(q.getId());
         }
         return ids;
+    }
+
+    static List<String> levelIds(StopPlace sp) {
+        List<String> ids = new ArrayList<>();
+        if (sp.getLevels() == null) return ids;
+        for (Object member : sp.getLevels().getLevelRefOrLevel()) ids.add(SiteLevels.id(member));
+        return ids;
+    }
+
+    /// Every `LevelRef` under the StopPlace, in walk order.
+    static List<String> levelRefs(StopPlace sp) {
+        List<String> refs = new ArrayList<>();
+        SiteLevels.visit(sp, r -> refs.add(r.getRef()));
+        return refs;
+    }
+
+    static StopPlace withLevels(StopPlace sp, Object... levels) {
+        SiteLevels.install(sp, java.util.Arrays.asList(levels));
+        return sp;
+    }
+
+    static Level level(String id, String name) {
+        Level l = new Level();
+        l.setId(id);
+        l.setVersion("1");
+        l.setName(noi.netex.text.Mls.of(name));
+        return l;
     }
 
     static StopPlace sp(String id, Quay... quays) {

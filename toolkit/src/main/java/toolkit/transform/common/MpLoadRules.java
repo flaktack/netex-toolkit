@@ -24,17 +24,25 @@ public final class MpLoadRules {
 
     private MpLoadRules() {}
 
-    /// Union the embedded Quays of two copies of the same StopPlace. The INCOMING copy keeps every
-    /// scalar field; quays present only in the STORED copy are appended sorted by id, and an
-    /// incoming quay missing its centroid latitude adopts the stored copy's located centroid.
-    /// Returns the merged incoming copy, or null when the stored copy adds nothing — null keeps the
-    /// plain-replace path, verbatim fragment included.
+    /// Union the embedded Quays and Levels of two copies of the same StopPlace. The INCOMING copy
+    /// keeps every scalar field; children present only in the STORED copy are appended sorted by
+    /// id, an incoming quay missing its centroid latitude adopts the stored copy's located
+    /// centroid, and Levels describing one floor collapse to the smallest of their ids with every
+    /// reference re-pointed. Returns the merged incoming copy, or null when the stored copy adds
+    /// nothing — null keeps the plain-replace path, verbatim fragment included.
     ///
     /// Why: some exports define a StopPlace in the stop registry AND in every line file that
     /// touches it, each copy embedding only the quays that file uses, so plain last-wins would
-    /// discard all other copies' quays. The serial loaders and the fix stages replace without
-    /// merging.
-    public static Object mergeStopPlaceQuays(Object existing, Object incoming) {
+    /// discard all other copies' quays. Where several regional publishers describe one national
+    /// stop id, each contributes its own levels in its own codespace, and last-wins leaves the
+    /// merged-in quays of every other publisher naming a Level the merge discarded.
+    ///
+    /// Re-pointing pairwise is sound only while each copy is self-contained — carrying a `LevelRef`
+    /// only at a `Level` the same copy defines. A copy that names a floor another copy defines
+    /// reaches here with nothing to rewrite, and its reference is left for the EPIP strip.
+    ///
+    /// The serial loaders and the fix stages replace without merging.
+    public static Object mergeStopPlaceChildren(Object existing, Object incoming) {
         StopPlace base = (StopPlace) incoming;  // the NEW copy
         StopPlace extra = (StopPlace) existing; // the STORED copy
         List<JAXBElement<?>> baseQuays = base.getQuays() == null
@@ -67,9 +75,28 @@ public final class MpLoadRules {
             String id = ((Quay) ((JAXBElement<?>) el).getValue()).getId();
             return id == null ? "" : id;
         }));
-        if (add.isEmpty() && !changed) return null;
+
+        // One id space over both arms of <levels>, so the shared `seen` set leaves addLevels
+        // holding exactly the members only the stored copy carries.
+        List<Object> levels = new ArrayList<>();
+        Set<String> seenLevels = new HashSet<>();
+        SiteLevels.union(levels, seenLevels, base);
+        List<Object> addLevels = new ArrayList<>();
+        SiteLevels.union(addLevels, seenLevels, extra);
+        addLevels.sort(Comparator.comparing(member -> {
+            String id = SiteLevels.id(member);
+            return id == null ? "" : id;
+        }));
+        levels.addAll(addLevels);
+        Map<String, String> folded = new HashMap<>();
+        int collapsed = SiteLevels.fold(levels, folded);
+
+        if (add.isEmpty() && !changed && addLevels.isEmpty() && collapsed == 0) return null;
         if (base.getQuays() == null) base.setQuays(new Quays_RelStructure());
         base.getQuays().getQuayRefOrQuay().addAll(add);
+        SiteLevels.install(base, levels);
+        // After the quay union, so the walk reaches the stored copy's merged-in components.
+        SiteLevels.repoint(base, folded);
         return base;
     }
 
