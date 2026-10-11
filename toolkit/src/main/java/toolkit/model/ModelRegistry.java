@@ -44,8 +44,17 @@ public final class ModelRegistry {
     public static final String NETEX_NS = "http://www.netex.org.uk/netex";
 
     private static List<Class<?>> classes;
-    private static Map<String, Class<?>> byName;
-    private static Map<String, Class<?>> byLowerName;
+
+    /// The two name maps, published as one value so a reader cannot see the second half-built.
+    private record NameIndex(Map<String, Class<?>> byName, Map<String, Class<?>> byLowerName) {}
+
+    /// Volatile, and read without the monitor: [#classForName] is called once per colon segment of
+    /// every id the loader derives — a few million times over a full load, from every parse thread —
+    /// and [#classes] is `synchronized`, so going through it made one lock the whole load convoyed
+    /// on. Safe to read unsynchronized because [#scan] fills both maps before assigning this and
+    /// neither is mutated afterwards.
+    private static volatile NameIndex names;
+
     private static List<Class<?>> allModelClasses;
     private static Map<Class<?>, List<Class<?>>> concreteSubclasses;
 
@@ -81,8 +90,17 @@ public final class ModelRegistry {
 
     /// name -> class ('DataManagedObject' aliased to DataManagedObjectStructure); null if unknown.
     public static Class<?> classForName(String name) {
-        classes();
-        return byName.get(name);
+        return nameIndex().byName().get(name);
+    }
+
+    /// The name maps, scanning once on first use. Takes the monitor only on that first call.
+    private static NameIndex nameIndex() {
+        NameIndex n = names;
+        if (n == null) {
+            classes();
+            n = names;
+        }
+        return n;
     }
 
     public static boolean isRegistered(String name) {
@@ -94,16 +112,17 @@ public final class ModelRegistry {
     /// `:authority:` and `:operator:`. Where two class names differ only in case the exact-case
     /// entry wins, so this never disagrees with [#classForName] on a name that one would answer.
     public static Class<?> classForNameIgnoreCase(String name) {
-        Class<?> exact = classForName(name);
+        NameIndex n = nameIndex();
+        Class<?> exact = n.byName().get(name);
         if (exact != null || name == null) return exact;
-        return byLowerName.get(name.toLowerCase(Locale.ROOT));
+        return n.byLowerName().get(name.toLowerCase(Locale.ROOT));
     }
 
     private static void scan() {
         try {
             List<Class<?>> out = new ArrayList<>(2200);
             List<Class<?>> all = new ArrayList<>(4096);
-            Map<String, Class<?>> names = new HashMap<>(4096);
+            Map<String, Class<?>> exact = new HashMap<>(4096);
             ClassLoader cl = ModelRegistry.class.getClassLoader();
             List<String> unloadable = new ArrayList<>();
             for (String n : modelClassResources()) {
@@ -124,22 +143,22 @@ public final class ModelRegistry {
                 if (n.contains("$")) continue;
                 if (!EntityStructure.class.isAssignableFrom(c)) continue;
                 out.add(c);
-                names.put(c.getSimpleName(), c);
+                exact.put(c.getSimpleName(), c);
             }
             refuseUnloadable(unloadable);
             out.sort((a, b) -> a.getSimpleName().compareTo(b.getSimpleName()));
             // DataManagedObject (the ultimate ref fallback) has no JAXB twin.
-            names.putIfAbsent("DataManagedObject",
+            exact.putIfAbsent("DataManagedObject",
                     Class.forName(MODEL_PKG + ".DataManagedObjectStructure", false, cl));
             classes = Collections.unmodifiableList(out);
-            byName = names;
             // putIfAbsent, so a name whose exact-case spelling is already indexed is not displaced
             // by another differing only in case.
-            Map<String, Class<?>> lower = new HashMap<>(names.size());
-            for (Map.Entry<String, Class<?>> e : names.entrySet()) {
+            Map<String, Class<?>> lower = new HashMap<>(exact.size());
+            for (Map.Entry<String, Class<?>> e : exact.entrySet()) {
                 lower.putIfAbsent(e.getKey().toLowerCase(Locale.ROOT), e.getValue());
             }
-            byLowerName = lower;
+            // Last, and in one write: an unsynchronized reader sees either no index or a whole one.
+            names = new NameIndex(exact, lower);
             all.sort((a, b) -> a.getName().compareTo(b.getName()));
             allModelClasses = Collections.unmodifiableList(all);
             concreteSubclasses = new HashMap<>();

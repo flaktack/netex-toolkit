@@ -138,4 +138,90 @@ public class TestNetexIds {
                         codespace("other")),
                 "the source's epd codespace is inherited, not the fallback's");
     }
+
+    // ------------------------------------------------- naming the target by element name
+
+    /// The String overload exists for the loader, which reads element names off the document. It
+    /// answers what the Class overload answers, because an element name IS the class simple name.
+    @Test
+    void testSwapClassTokenByNameMatchesTheClassOverload() {
+        Check.equals(NetexUtils.swapClassToken("at:stv:Operator:29:", Authority.class),
+                NetexUtils.swapClassToken("at:stv:Operator:29:", "Authority"),
+                "same answer either way");
+        Check.isNull(NetexUtils.swapClassToken("a:b:c", "Authority"),
+                "and the same null where there is no token");
+    }
+
+    // ------------------------------------------------- deriveChildId: the id-less child
+
+    /// The ordinary case, and the one the loader's arm 1 takes a million times per load: the parent
+    /// names its class, so the child keeps the whole grammar and swaps the token.
+    @Test
+    void testDeriveChildIdSwapsTheParentsClassToken() {
+        Check.equals("it:apb:AlternativeName:at-47-1187:",
+                NetexUtils.deriveChildId("it:apb:StopPlace:at-47-1187:", "AlternativeName"),
+                "STA's bare <AlternativeName> under a StopPlace that names its class");
+        Check.equals("at:stv:Address:29:",
+                NetexUtils.deriveChildId("at:stv:Operator:29:", "Address"),
+                "the shape the class header quotes");
+    }
+
+    /// The fallback. "at:46:447" is what several Austrian feeds give a StopPlace, and it names no
+    /// class, so the child cannot swap a token — it has to mint one. What it must NOT do is keep the
+    /// parent's id, which is what a blind String.replace of the parent's element name used to
+    /// leave: one (id, version) on both a StopPlace and its ValidBetween.
+    @Test
+    void testDeriveChildIdMintsATokenWhereTheParentHasNone() {
+        String id = NetexUtils.deriveChildId("at:46:447", "ValidBetween");
+        Check.that(!id.equals("at:46:447"), "the child does not wear its parent's id: " + id);
+        Check.that(id.startsWith("at:ValidBetween:"),
+                "the parent's codespace, then the class token, then the uuid: " + id);
+        Check.equals("at:", NetexUtils.codespacePrefix(id),
+                "and the token lands where classTokenStart reads it back");
+    }
+
+    /// A parent id with no colon at all has no codespace boundary to cut at, so all of it is the
+    /// codespace. The corpus has no such id; this pins the branch rather than leaving it to a
+    /// StringIndexOutOfBounds.
+    @Test
+    void testDeriveChildIdTreatsAColonlessParentIdAsTheCodespace() {
+        Check.that(NetexUtils.deriveChildId("auth1", "Address").startsWith("auth1:Address:"),
+                "the whole parent id becomes the codespace");
+    }
+
+    /// Name-based, not random: one input yields one id for the life of the project, which is what
+    /// keeps a store and an export byte-comparable across builds. A random UUID would re-mint every
+    /// fallback id on every run and retire the export A/B as an instrument.
+    @Test
+    void testDeriveChildIdIsDeterministic() {
+        Check.equals(NetexUtils.deriveChildId("at:46:447", "ValidBetween"),
+                NetexUtils.deriveChildId("at:46:447", "ValidBetween"),
+                "twice over the same input is the same id");
+        Check.that(!NetexUtils.deriveChildId("at:46:447", "ValidBetween")
+                        .equals(NetexUtils.deriveChildId("at:46:448", "ValidBetween")),
+                "two parents do not share a child id");
+        Check.that(!NetexUtils.deriveChildId("at:46:447", "ValidBetween")
+                        .equals(NetexUtils.deriveChildId("at:46:447", "Address")),
+                "two child names under one parent do not either");
+    }
+
+    /// Null only where there is nothing to derive from at all. The loader keeps its own guard for
+    /// this, so a withId element outside any id-bearing ancestor stays id-less rather than taking a
+    /// codespace nobody declared.
+    @Test
+    void testDeriveChildIdDeclinesWithoutAParentId() {
+        Check.isNull(NetexUtils.deriveChildId(null, "Address"), "no parent id");
+        Check.isNull(NetexUtils.deriveChildId("", "Address"), "empty parent id");
+    }
+
+    /// deriveChildId is not deriveId and must not move its counter: the fallback here mints a
+    /// unique id rather than composing over a configured codespace, so there is nothing to report.
+    @Test
+    void testDeriveChildIdDoesNotCountAnIdFallback() {
+        NetexUtils.reportIdFallbacks("test-reset");
+        NetexUtils.deriveChildId("at:46:447", "ValidBetween");
+        NetexUtils.deriveChildId("auth1", "Address");
+        Check.equals(0L, NetexUtils.reportIdFallbacks("test"),
+                "the idFallback concern is deriveId's, and stays untouched");
+    }
 }

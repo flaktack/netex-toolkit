@@ -201,6 +201,33 @@ public class TestLoaderDenormalisation {
         Check.that(!link.contains("test:LineString:1"), "…and certainly not a derived one");
     }
 
+    /// Arm 1 against a parent id that names no class. Several Austrian feeds give a StopPlace an id
+    /// like `at:46:447`, and the rule used to replace the parent's element name in it — finding
+    /// nothing, and handing the child the parent's id unchanged, so one `(id, version)` named both
+    /// the StopPlace and its ValidBetween. The token is minted now.
+    @Test
+    void testAParentIdWithNoClassTokenStillYieldsOne(TestStore db) throws Exception {
+        db.loadNetex("""
+            <SiteFrame id="test:SiteFrame:1" version="7">
+              <stopPlaces>
+                <StopPlace id="at:46:447" version="5">
+                  <Name>Puch b.Weiz Ort</Name>
+                  <ValidBetween><FromDate>1994-02-28T00:00:00</FromDate></ValidBetween>
+                </StopPlace>
+              </stopPlaces>
+            </SiteFrame>
+            """);
+
+        String sp = fragmentOf(db, StopPlace.class);
+        Check.that(!sp.contains("<ValidBetween responsibilitySetRef=\"\" id=\"at:46:447\"")
+                        && !sp.contains("<ValidBetween id=\"at:46:447\""),
+                "the child no longer wears the parent's own id: " + sp);
+        Check.that(sp.contains("<ValidBetween id=\"at:ValidBetween:"),
+                "it carries the parent's codespace and a minted class token: " + sp);
+        Check.equals("at:46:447", Gen.byId(db, StopPlace.class).get("at:46:447").getId(),
+                "and the parent keeps the id the feed published");
+    }
+
     // ------------------------------------------------------------------ arm 2: nested version
 
     @Test

@@ -26,6 +26,10 @@ public final class Capabilities {
             new Cap("denorm-depth",
                     "reference denormalisation applied at EVERY depth of a captured fragment, not "
                     + "only at its root"),
+            new Cap("derived-id-class-token",
+                    "a synthesized id swaps the class token of the ancestor it derives from, and "
+                    + "mints one where that id names no class, so a child no longer wears its "
+                    + "parent's id on another class"),
             new Cap("srsname-depth",
                     "srsName injected at depth as well as at the fragment root"),
             new Cap("schema-defaults",

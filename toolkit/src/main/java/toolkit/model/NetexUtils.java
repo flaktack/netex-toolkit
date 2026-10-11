@@ -11,12 +11,14 @@ import toolkit.util.Strictness;
 
 import java.lang.reflect.Method;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -111,11 +113,50 @@ public final class NetexUtils {
     /// The primitive. A caller that mints an object wants [#deriveId]; this is for one that needs
     /// to know the id carried no token — a lookup keyed on the part ahead of it, say.
     public static String swapClassToken(String id, Class<?> target) {
+        return swapClassToken(id, target.getSimpleName());
+    }
+
+    /// [#swapClassToken] naming the target by its element name rather than its class.
+    ///
+    /// For a caller that reads the name off the document instead of holding the class — the loader's
+    /// attribute denormalisation, which sees local names and would otherwise pay a registry lookup
+    /// per element to turn one back into a class whose only use is its simple name again. The two
+    /// agree because an object's XML element name IS its class simple name; see the file header.
+    public static String swapClassToken(String id, String targetName) {
         int start = classTokenStart(id);
         if (start < 0) return null;
         int end = id.indexOf(':', start);
-        return id.substring(0, start) + target.getSimpleName()
-                + (end < 0 ? "" : id.substring(end));
+        return id.substring(0, start) + targetName + (end < 0 ? "" : id.substring(end));
+    }
+
+    /// The id for an id-less child of `parentId` (PROV-CAP: derived-id-class-token): the parent's id
+    /// with its class token swapped for `childName`, or — where the parent carries no token to swap
+    /// — the parent's codespace, then `childName`, then a UUID. Null only where there is no parent
+    /// id to derive from at all.
+    ///
+    /// The fallback is the point. A blind `String.replace` of the parent's element name cannot fail,
+    /// so a parent id carrying no class token leaves it nothing to replace and the child ends up
+    /// wearing its parent's id on a different class — one `(id, version)` on two classes, which the
+    /// store's embedding resolver will then offer an unresolved reference as an id-prefix
+    /// near-match. Minting a token the id did not have is the repair.
+    ///
+    /// Everything before the parent's first colon becomes the codespace, because that is the one
+    /// slot a class token may not occupy: [#classTokenStart] refuses index 0, an id opening with its
+    /// class token having no codespace to carry. A parent id with no colon keeps all of itself.
+    ///
+    /// The UUID is NAME-based (RFC 4122 v3, [java.util.UUID#nameUUIDFromBytes]), not random: one
+    /// input yields one id for the life of the project, so a store and an export stay byte-comparable
+    /// across builds. A random one would re-mint every such id on every run and retire the export
+    /// A/B as an instrument.
+    public static String deriveChildId(String parentId, String childName) {
+        String swapped = swapClassToken(parentId, childName);
+        if (swapped != null) return swapped;
+        if (parentId == null || parentId.isEmpty()) return null;
+        int codespaceEnd = parentId.indexOf(':');
+        String codespace = codespaceEnd < 0 ? parentId : parentId.substring(0, codespaceEnd);
+        String uuid = UUID.nameUUIDFromBytes(
+                (parentId + '\0' + childName).getBytes(StandardCharsets.UTF_8)).toString();
+        return codespace + ":" + childName + ":" + uuid;
     }
 
     /// `sourceId`'s grammar with its class token swapped for `target` and everything after it

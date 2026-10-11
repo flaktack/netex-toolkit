@@ -3,6 +3,7 @@ package toolkit.load;
 import com.fasterxml.aalto.stax.OutputFactoryImpl;
 import org.codehaus.stax2.XMLStreamReader2;
 import org.codehaus.stax2.XMLStreamWriter2;
+import toolkit.model.NetexUtils;
 
 import javax.xml.namespace.QName;
 import javax.xml.stream.XMLStreamConstants;
@@ -37,7 +38,9 @@ import java.util.Set;
 /// 4. **Empty-element form.** Always self-closing.
 /// 5. **Attribute synthesis, at any depth.** `id`, `version`, `dataSourceRef`,
 ///    `responsibilitySetRef` appended to every element lacking them for which a value can be
-///    computed — see [#startElement()].
+///    computed — see [#startElement()]. A synthesized `id` swaps the class token of the nearest
+///    id-bearing ancestor's id, and where that id carries no token it takes that ancestor's
+///    codespace and a UUID.
 /// 6. **Encoding.** Always UTF-8; a non-UTF-8 source is transcoded.
 /// 7. **srsName denormalisation** (PROV-CAP: srsname-depth). Under a frame
 ///    `DefaultLocationSystem`, `srsName` is synthesized
@@ -77,7 +80,7 @@ final class CopyingCapture extends StreamReaderDelegate {
 
     // Kept here, not in NetexLoader's loop: that loop never sees the inside of an interesting
     // element. Every event passes through next(), including the ones the unmarshaller pulls.
-    private final ArrayDeque<String[]> lastIdStack = new ArrayDeque<>();   // (localName, id)
+    private final ArrayDeque<IdFrame> lastIdStack = new ArrayDeque<>();
     private final ArrayDeque<String> lastVersionStack = new ArrayDeque<>();
 
     // Pushed by the loader at every FrameDefaults end and frame end. All null for a feed that
@@ -194,18 +197,24 @@ final class CopyingCapture extends StreamReaderDelegate {
         scanAttrs(withId, withVersion, dmo, srs);
 
         // ---- arm 1: id. Any depth, absent-only, no FrameDefaults gate. Derived from the nearest
-        // id-bearing ancestor with its local name swapped for ours:
+        // id-bearing ancestor with its CLASS TOKEN swapped for our element name:
         // Operator "at:stv:Operator:29:" -> Address "at:stv:Address:29:".
+        //
+        // The token, not the ancestor's element name. Those read the same on an id that names its
+        // class once and differ on one that does not: a parent id carrying no class token at all --
+        // "at:46:447" from several Austrian feeds -- used to leave a blind replace nothing to
+        // replace, so the child wore its parent's id verbatim and one (id, version) named two
+        // classes. NetexUtils#deriveChildId mints a token instead; see it for the fallback shape.
         if (withId) {
             String id = ownId;
             if (id == null) {
-                String[] top = lastIdStack.peek();
-                if (top != null && top[1] != null) {
-                    id = top[1].replace(top[0], ln);
+                IdFrame top = lastIdStack.peek();
+                if (top != null && top.id != null) {
+                    id = NetexUtils.deriveChildId(top.id, ln);
                     if (!GML_NS.equals(raw.getNamespaceURI())) inject(ID, id); // see GML_NS
                 }
             }
-            lastIdStack.push(new String[] {ln, id});
+            lastIdStack.push(new IdFrame(id));
         }
 
         // ---- arm 2: version. Any depth, absent-only, no FrameDefaults gate. An id-bearing element
@@ -251,6 +260,19 @@ final class CopyingCapture extends StreamReaderDelegate {
         if (sets.withId.contains(ln) && !lastIdStack.isEmpty()) lastIdStack.pop();
         if (sets.withVersion.contains(ln) && !lastVersionStack.isEmpty()) lastVersionStack.pop();
         if (LOCATION.equals(ln)) locationSrsName = null;
+    }
+
+    /// One open element of the withId set, and the id its id-less descendants derive from.
+    ///
+    /// A box rather than the bare string because [ArrayDeque] rejects null and an element whose own
+    /// id arm 1 could not derive still has to push, to keep push and pop symmetric with
+    /// [#endElement()].
+    private static final class IdFrame {
+        final String id;
+
+        IdFrame(String id) {
+            this.id = id;
+        }
     }
 
     /// One pass, no-namespace attributes only. `getAttributeValue(null, name)` is not usable here:
