@@ -104,6 +104,7 @@ public final class DbToDb {
         Harness.reportCloned(tag, dst);
         Harness.reportInserted(tag, dst, "wrote",
                 "wrote no objects of its own — the target is the clone, unchanged");
+        Harness.reportEmbeddedDuplicates(tag, dst);
     }
 
     private static double secs(long t0) {

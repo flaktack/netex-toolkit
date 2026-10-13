@@ -82,6 +82,18 @@ public final class Strictness {
     /// is still unique. `-Dtoolkit.strict.idFallback=true` makes the number refusable.
     public static final boolean ID_FALLBACK = flag(Conf.STRICT_ID_FALLBACK);
 
+    /// Two live containers claim one embedded id, so the reference to it resolves to whichever
+    /// `resolveEmbeddings` reaches first.
+    ///
+    /// Counted off the embedding index, which sees the classes in the embedding scope -- where the
+    /// referenceable ones are. A nested value outside that scope is not counted and nothing
+    /// references one by id.
+    ///
+    /// Not fatal by default: publishers ship the shape, and a merge that qualifies colliding ids
+    /// cannot see an embedded one to qualify. On with
+    /// `-Dtoolkit.strict.embeddedDuplicates=true`.
+    public static final boolean EMBEDDED_DUPLICATES = flag(Conf.STRICT_EMBEDDED_DUPLICATES);
+
     /// The master switch, then the concern's own flag. Defaults live in [Conf].
     private static boolean flag(Conf.Flag f) {
         return ALL || Conf.on(f);
@@ -123,9 +135,10 @@ public final class Strictness {
     public static void report() {
         if (!REPORTED.compareAndSet(false, true)) return;
         Log.info("[strict] remarshal=%b emptyOutput=%b bindEvents=%b unresolvedRefs=%b "
-                 + "refFallback=%b unparsedTime=%b droppedOutput=%b%s",
+                 + "refFallback=%b unparsedTime=%b droppedOutput=%b idFallback=%b "
+                 + "embeddedDuplicates=%b%s",
                 REMARSHAL, EMPTY_OUTPUT, BIND_EVENTS, UNRESOLVED_REFS,
-                REF_FALLBACK, UNPARSED_TIME, DROPPED_OUTPUT,
+                REF_FALLBACK, UNPARSED_TIME, DROPPED_OUTPUT, ID_FALLBACK, EMBEDDED_DUPLICATES,
                 ALL ? " (-Dtoolkit.strict=true)" : "");
     }
 

@@ -36,6 +36,30 @@ final class Harness {
         Conf.checkUnknown();
     }
 
+    /// Embedded ids more than one live container claims, on a store that is still open.
+    ///
+    /// Reported per stage so the stage that introduced one is the stage that names it, rather than
+    /// once at the end of a chain.
+    ///
+    /// Silent unless the index is complete for the store's own scope: a created-but-unfed index
+    /// measures nothing, and a line claiming zero would say it had been looked for.
+    static void reportEmbeddedDuplicates(String tag, Store store) {
+        if (!(store instanceof AbstractLmdbStore lmdb)) return;
+        Store.EmbeddedDuplicates dup;
+        try (toolkit.store.Txn txn = store.roTxn()) {
+            if (!lmdb.embeddingIndexComplete(txn)) return;
+            dup = store.duplicateEmbeddedIds(txn, 3);
+        }
+        if (dup.ids() == 0) {
+            Log.info("[%s] embedded ids claimed by two containers: 0", tag);
+            return;
+        }
+        Strictness.require(Strictness.EMBEDDED_DUPLICATES, "embeddedDuplicates", dup.ids(), tag,
+                "embedded ids are each claimed by more than one live container, so the reference "
+                + "to one resolves to whichever container resolveEmbeddings reaches first (e.g. "
+                + String.join("; ", dup.examples()) + ")");
+    }
+
     /// "`<verb> N objects: Class n, Class n, …`", highest count first, or a stated no-op.
     ///
     /// Row counts cannot answer this for a stage that rewrites in place: the store's size is

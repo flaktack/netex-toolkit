@@ -86,6 +86,9 @@ public final class DbToZip {
                     objects = out.totalObjects();
                     bytes = out.totalBytes();
                 }
+                // Before the rename and inside the catch below: a refusal here must leave no zip
+                // under the final name.
+                Harness.reportEmbeddedDuplicates(tag, db);
                 Files.move(tmp, zipPath, StandardCopyOption.REPLACE_EXISTING);
             } catch (Throwable t) {
                 Files.deleteIfExists(tmp); // no stale .tmp left behind

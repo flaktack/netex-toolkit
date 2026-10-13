@@ -23,6 +23,30 @@ public interface StoreResolve {
     /// complete one, else the candidate-class corpus scan. Returns resolutions + repairs.
     long resolveEmbeddings();
 
+    /// What [#duplicateEmbeddedIds] counted: how many embedded ids more than one live container
+    /// claims, and up to the requested number of them for a message.
+    record EmbeddedDuplicates(long ids, java.util.List<String> examples) {
+        public EmbeddedDuplicates {
+            examples = java.util.List.copyOf(examples);
+        }
+    }
+
+    /// Every embedded id that more than one live container claims — the ambiguity
+    /// [#resolveEmbeddings] has to pick a winner for, counted instead of resolved.
+    ///
+    /// Keyed as that pass keys it, by id alone: one id at two versions or under two classes is one
+    /// id to the resolve, which selects containers by id prefix. Keys, not objects — naming the
+    /// containers is [ObjectReader#loadObjectByFullKey]'s job.
+    ///
+    /// Scoped: an embedded class outside the embedding scope has no row here and is not counted.
+    ///
+    /// Zero where the database carries no index, which is also what the default answers. Zero is
+    /// not "none" unless the index is also complete — ask
+    /// `AbstractLmdbStore.embeddingIndexComplete` before reporting one.
+    default EmbeddedDuplicates duplicateEmbeddedIds(Txn txn, int examples) {
+        return new EmbeddedDuplicates(0, java.util.List.of());
+    }
+
     /// Has this database's one-shot blob sweep already run?
     boolean blobRepairMarkerPresent(Txn txn);
 

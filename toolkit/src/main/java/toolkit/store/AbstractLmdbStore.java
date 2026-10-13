@@ -712,6 +712,78 @@ public abstract class AbstractLmdbStore implements Store {
         return fk == null ? -1 : NulKeyCodec.u64le(fk);
     }
 
+    /// Whether the embedding index is present AND complete for the scope this store was opened
+    /// under — the same two conditions `resolveEmbeddings` requires before it trusts the index to
+    /// find containers.
+    ///
+    /// A reader that reports on the index has to ask this first. A store always creates the index
+    /// map, and `embIndex=false` or a clone from an unmarked source leaves it created and unfed, so
+    /// `embIdx != null` is not the question. An audit over an unfed index measures nothing and must
+    /// not report a zero.
+    public final boolean embeddingIndexComplete(Txn txn) {
+        if (embIdx == null) return false;
+        String stored = markerValue(cast(txn), Marker.EMBEDDING_IDX_DONE);
+        return stored != null && stored.equals(embeddingScopeTag());
+    }
+
+    @Override
+    public EmbeddedDuplicates duplicateEmbeddedIds(Txn txn, int examples) {
+        if (embIdx == null) return new EmbeddedDuplicates(0, List.of());
+        LmdbTxn t = cast(txn);
+        long ids = 0;
+        List<String> out = new ArrayList<>();
+        // Grouped by the `id NUL` prefix rather than the whole key, because that is how
+        // resolveEmbeddings selects containers: version- and class-agnostic. One id at two
+        // versions is one id to the resolve, and so to this.
+        byte[] group = null;
+        List<Long> containers = new ArrayList<>();
+        try (Cursor<byte[]> c = embIdx.openCursor(t.tx)) {
+            if (c.first()) {
+                do {
+                    byte[] key = c.key();
+                    byte[] prefix = Arrays.copyOf(key, NulKeyCodec.idPrefixLen(key));
+                    if (group == null || !Arrays.equals(group, prefix)) {
+                        if (claimedTwice(t, containers)) {
+                            ids++;
+                            if (out.size() < examples) out.add(NulKeyCodec.idPart(group));
+                        }
+                        group = prefix;
+                        containers.clear();
+                    }
+                    long fk = NulKeyCodec.u64le(c.val());
+                    if (!containers.contains(fk)) containers.add(fk);
+                } while (c.next());
+                if (claimedTwice(t, containers)) {
+                    ids++;
+                    if (out.size() < examples) out.add(NulKeyCodec.idPart(group));
+                }
+            }
+        }
+        return new EmbeddedDuplicates(ids, out);
+    }
+
+    /// Whether at least two of `containers` are rows this store still holds.
+    ///
+    /// Nothing deletes an embedding row: `insertOne`'s replace path clears the reference rows and
+    /// leaves these, so a row may name a container that was overwritten or purged. The existence
+    /// probe is what separates a live claim from a stale one, and `resolveEmbeddings` pays it for
+    /// the same reason. Charged only to a group that looks claimed twice, so a single-container id
+    /// -- almost all of them -- costs no read at all.
+    private boolean claimedTwice(LmdbTxn t, List<Long> containers) {
+        if (containers.size() < 2) return false;
+        int live = 0;
+        for (long fk : containers) {
+            Class<?> clazz = classForIdx(NulKeyCodec.fullKeyClassIdx(fk));
+            if (clazz == null) continue;
+            Dbi<byte[]> d = classDbi(t, NulKeyCodec.fullKeyClassIdx(fk), false);
+            if (d == null) continue;
+            if (d.get(t.tx, NulKeyCodec.u32le(NulKeyCodec.fullKeyLocal(fk))) != null && ++live == 2) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // ---------------------------------------------------------------- format-specific hooks
 
     /// Add one resolved reference edge (referrer -&gt; target); duplicate pairs collapse.
