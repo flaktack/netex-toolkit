@@ -215,25 +215,35 @@ final class CopyingCapture extends StreamReaderDelegate {
         // classes. NetexUtils#deriveChildId mints a token instead; see it for the fallback shape.
         //
         // The derivation reads only the ancestor's id and our element name, so same-named id-less
-        // siblings all derive one id. A sequence separates them (PROV-CAP: derived-id-sibling-seq),
-        // counted per (ancestor instance, element name) -- ancestor, not container element: a
-        // DefaultConnection holds an OperatorView under <From> and another under <To>, and neither
-        // wrapper is in the withId set. It counts syntheses, so a sibling that declares its own id
-        // takes no number.
+        // siblings all derive one id. The ancestor's own element name and a sequence over its
+        // same-named id-less children separate them (PROV-CAP: derived-id-sibling-seq):
+        // "...:ValidBetween:941-TariffZone-1".
         //
-        // Siblings of ONE ancestor is all this separates. Two id-less elements of the same name
-        // whose ancestors carry the same id still derive the same id; the derivation keeps no path,
-        // and 521 Swiss entries declaring one CompositeFrame id are the shape that reaches it.
+        // The ancestor's element name, because the swap drops its class: a ScheduledStopPoint and
+        // a TariffZone sharing the technical id "START-FC:941" each hold a bare <ValidBetween>, and
+        // both derive "...:ValidBetween:START-FC:941" from it. Emilia-Romagna and Puglia publish
+        // that shape across several classes, within one archive entry.
+        //
+        // The sequence is counted per (ancestor instance, element name) -- ancestor, not container
+        // element: a DefaultConnection holds an OperatorView under <From> and another under <To>,
+        // and neither wrapper is in the withId set. It counts syntheses, so a sibling that declares
+        // its own id takes no number.
+        //
+        // One ancestor's descendants is all this separates. Two id-less elements of the same name
+        // whose ancestors share both an id and an element name still derive the same id; the
+        // derivation keeps no path, and 521 Swiss entries declaring one CompositeFrame id are the
+        // shape that reaches it.
         if (withId) {
             String id = ownId;
             if (id == null) {
                 IdFrame top = lastIdStack.peek();
                 if (top != null && top.id != null) {
-                    id = NetexUtils.deriveChildId(top.id, ln) + SIBLING_SEP + top.stamped(ln);
+                    id = NetexUtils.deriveChildId(top.id, ln)
+                            + SIBLING_SEP + top.name + SIBLING_SEP + top.stamped(ln);
                     if (!GML_NS.equals(raw.getNamespaceURI())) inject(ID, id); // see GML_NS
                 }
             }
-            lastIdStack.push(new IdFrame(id));
+            lastIdStack.push(new IdFrame(id, ln));
         }
 
         // ---- arm 2: version. Any depth, absent-only, no FrameDefaults gate. An id-bearing element
@@ -281,8 +291,8 @@ final class CopyingCapture extends StreamReaderDelegate {
         if (LOCATION.equals(ln)) locationSrsName = null;
     }
 
-    /// One open element of the withId set: the id its id-less descendants derive from, and how many
-    /// children of each element name arm 1 has stamped under it.
+    /// One open element of the withId set: the id its id-less descendants derive from, its own
+    /// element name, and how many children of each element name arm 1 has stamped under it.
     ///
     /// A box rather than the bare string because [ArrayDeque] rejects null and an element whose own
     /// id arm 1 could not derive still has to push, to keep push and pop symmetric with
@@ -294,14 +304,17 @@ final class CopyingCapture extends StreamReaderDelegate {
     /// frame costs what the string pair it replaced cost.
     private static final class IdFrame {
         final String id;
+        /// This element's own local name, which arm 1 puts in its descendants' derived ids.
+        final String name;
         private String name0;
         private int count0;
         private String[] names;
         private int[] counts;
         private int n;
 
-        IdFrame(String id) {
+        IdFrame(String id, String name) {
             this.id = id;
+            this.name = name;
         }
 
         /// The 1-based occurrence of an id-less `ln` child stamped under this element.
